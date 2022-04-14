@@ -5,6 +5,43 @@ Wed Apr 6 2022
 """
 import torch  # Tensors and Dynamic neural networks in Python with strong GPU acceleration
 
+# TODO
+# add unit tests to confirm correctness
+# optimize cw-loss
+# optimize identity loss forward
+
+
+class CrossEntropyLoss(torch.nn.CrossEntropyLoss):
+    """
+    This class is identical to the CrossEntropyLoss class in PyTorch, with the
+    exception that two additional attributes are added: max_obj (set as True)
+    and req_x (set as False). We add these attributes to let optimizers know
+    the direction to step in to produce adversarial examples, as well as to
+    notify Attack objects to avoid copying original inputs, as they are not
+    needed to compute this loss.
+
+    :func:`__init__` instantiates a CrossEntropyLoss class
+    """
+
+    def __init__(self, **kwargs):
+        """
+        This method instantiates a CrossEntropyLoss object. It accepts keyword
+        arguments for the PyTorch parent class described in:
+        https://pytorch.org/docs/stable/generated/torch.nn.CrossEntropyLoss.html
+        We note that we explicitly pass reduction="none", as this can cause
+        gradients to underflow when computing adversarail examples for large
+        batch sizes.
+
+        :param kwargs: keyword arguemtns for torch.nn.CrossEntropyLoss
+        :type kwargs: dict
+        :return: Cross Entropy loss
+        :rtype: CrossEntropyLoss object
+        """
+        super().__init(reduction="none", **kwargs)
+        self.max_obj = True
+        self.req_x = False
+        return None
+
 
 class CWLoss(torch.nn.Module):
     """
@@ -30,12 +67,13 @@ class CWLoss(torch.nn.Module):
 
     def __init__(self, norm=2, c=1, k=0):
         """
-        This method instantiates a cwloss object. It accepts three arguments:
+        This method instantiates a CWLoss object. It accepts three arguments:
         (1) p, the lp-norm to use, (2) c, which emphasizes optimizing
         adversarial goals over the introduced distortion, and (3) k, which
         controls how far adversarial examples are pushed across the decision
         boundary (as measured through the difference between the initial and
         current predictions).
+
         :param norm: lp-space to project gradients into
         :type norm: int; one of: 0, 2, or float("inf")
         :param c: encourages misclassification over imperceptability
@@ -46,6 +84,8 @@ class CWLoss(torch.nn.Module):
         :rtype: CWLoss object
         """
         super().__init__()
+        self.max_obj = False
+        self.req_x = True
         self.norm = norm
         self.c = c
         self.k = k
@@ -57,7 +97,7 @@ class CWLoss(torch.nn.Module):
         computes the sum of: (1) the lp-norm of the perturbation, and (2) the
         difference between the logits component corresponding to the initial
         prediction and the maximum logits component not equal to the initial
-        prediction. Importantly, this definition  can expand the l2-norm vector
+        prediction. Importantly, this definition can expand the l2-norm vector
         by a factor of c (where is the number of classes),  depending on if the
         attack parameters require a full Jacobian to be computed (i.e., if a
         saliency map is used), by repeating the inputs by a factor of c as
@@ -107,7 +147,7 @@ class IdentityLoss(torch.nn.Module):
     :func:`forward`: returns the yth logit component for a batch of imputs
     """
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self):
         """
         This method instantiates an identityloss object. It accepts no
         arguments.
@@ -116,6 +156,8 @@ class IdentityLoss(torch.nn.Module):
         :rtype: IdentityLoss object
         """
         super().__init__()
+        self.max_obj = False
+        self.req_x = False
         return None
 
     def forward(self, logits, y):
@@ -133,96 +175,6 @@ class IdentityLoss(torch.nn.Module):
         return logits.gather(1, y.view(-1, 1)).flatten()
 
 
-def Loss(loss, max_obj, x_req, *args, **kwargs):
-    """
-    This class extends loss definitions, through dynamic inheritence (for
-    losses that subclass _Loss in torch.nn.modules.loss) to contain two
-    additional attributes: (1) whether the objective function is to be
-    maximized (which requires the signs of the gradients to be flipped, as
-    PyTorch optimizers are defined to minimize objecitve functions), and (2)
-    whether the loss function requires the original inputs (which is typically
-    used for losses that compute lp-norms from the current adversarial
-    examples, such as Carlini-Wagner loss). Specifically, (2) is realized by
-    setting a copy of the original input, as well as a pointer to the input (to
-    be later attached to an optimizer), as attributes, so that norms can be
-    readily measured throughout the crafting process.
-
-    :param loss: loss object to inherit from
-    :type loss: either a subclass of _Loss or torch.nn.Module
-    :param applies_norm: whether loss applies a norm
-    :type applies_norm: boolean
-    :param args: any arguments for loss
-    :type args: list
-    :param kwargs: any keyword arguments for loss
-    :type kwargs: dictionary
-    :return: a Loss object
-    :rtype: Loss
-    """
-
-    class Loss(loss):
-        """
-        This class serves a generic loss class that adds any custom attributes
-        to the parent class of the object argument.
-
-        :func:`__init__` inherits from loss and instantiates a Loss object
-        """
-
-        def __init__(self, max_obj, x_req, *args, **kwargs):
-            """
-            This method inherits from loss and instantiates a Loss object
-
-            :param max_obj: whether the objective is to maximize
-            :type max_obj: boolean
-            :param x_req: whether the loss requires the original x
-            :type x_req: boolean
-            :param args: any arguments for loss
-            :type args: list
-            :param kwargs: any keyword arguments for loss
-            :type kwargs: dictionary
-            :return: a Loss object
-            :rtype: Loss
-            """
-            super().__init__(*args, **kwargs)
-            self.max_obj = max_obj
-            self.x_req = x_req
-            self.__name__ = self.__class__.__bases__[0].__name__
-            return None
-
-        def __repr__(self):
-            """
-            Since the Loss class simply attaches an attribute to the parent
-            class, we also return the class name of the parent.
-
-            :return: parent class name and arguments
-            :rtype: string
-            """
-            return f"Loss({self.__name__})"
-
-        def attach(self, x):
-            """
-            As described above, loss functions that applie norms typically
-            measure distance between an original input and the resultant
-            adversarial example. To this end, this method serves to attach the
-            orginal input at craf-time to facilitiate norm computation.
-            Specifically, the input x is first cloned and then a reference to x
-            is saved (which should eventually be attached to an optimizer); in
-            this way, we can compute arbitrary lp-norm as the optimizer
-            perturbs x, without explicitly passing x into this loss at runtime.
-
-            :param x: the input to clone and attach
-            :type x: n x m tensor
-            :return: None
-            :rtype: NoneType
-            """
-            self.original_x = x.clone()
-            self.x = x
-            return None
-
-    return Loss(max_obj, x_req, *args, **kwargs)
-
-
 if __name__ == "__main__":
-    """
-    Example usage from [paper_url].
-    """
+    """ """
     raise SystemExit(0)
