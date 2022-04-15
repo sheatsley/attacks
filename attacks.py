@@ -188,16 +188,7 @@ def attack_builder(
     saliency_maps=("identity", "jsma", "deepfool"),
     norms=(0, 2, float("inf")),
     jacobians=("model",),
-    losses=(
-        loss.Loss(loss.IdentityLoss, max_obj=False, x_req=False),
-        loss.Loss(
-            torch.nn.CrossEntropyLoss,
-            max_obj=True,
-            x_req=False,
-            reduction="none",
-        ),
-        loss.Loss(loss.CWLoss, max_obj=False, x_req=True),
-    ),
+    losses=(loss.IdentityLoss, loss.CrossEntropyLoss, loss.CWLoss),
 ):
     """
     As shown in [paper_url], seminal attacks in machine learning can be cast
@@ -207,7 +198,7 @@ def attack_builder(
     AML community, such as random restart and change of variables. The
     combinations of supported components are shown below:
 
-        optimizers: Adam, Gradient Descent, and Line Search
+        optimizers: Adam and Stochastic Gradient Descent
         random restart: True or False
         change of variables: True or False
         saliency map: Identity, JSMA, or DeepFool
