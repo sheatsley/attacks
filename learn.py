@@ -14,6 +14,7 @@ from utilities import print  # Use timestamped print
 # consider better debugging when field in architectures is not specified (eg adv_train)
 # remove attack object instantiation when Attacks module is updated
 # reconsider inheritence structure (all args must be passed to each class atm)
+# use kwargs for inheritence structure problem described above
 
 
 class LinearClassifier(torch.nn.Module):
