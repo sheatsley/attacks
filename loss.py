@@ -176,5 +176,7 @@ class IdentityLoss(torch.nn.Module):
 
 
 if __name__ == "__main__":
-    """ """
+    """
+    Instantiates loss objects and passes random values.
+    """
     raise SystemExit(0)
