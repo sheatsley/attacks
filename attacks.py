@@ -5,7 +5,6 @@ Mon Apr 18 2022
 """
 import itertools  # Functions creating iterators for efficietn looping
 import loss  # PyTorch-based custom loss functions
-import more_itertools  # More routines for operating on iterables, beyond itertools
 import saliency  # Gradient manipulation heuristics to achieve adversarial goals
 import surface  # Classes for rapidly building cost surfaces
 import torch  # Tensors and Dynamic neural networks in Python with strong GPU acceleration
