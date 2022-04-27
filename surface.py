@@ -9,6 +9,7 @@ import torch  # Tensors and Dynamic neural networks in Python with strong GPU ac
 # TODO
 # implement BPDA
 # track classes and other metadata on initilization of craft?
+# add support for one-hot encoding
 
 
 class Surface:
