@@ -20,11 +20,11 @@ from utilities import print  # Use timestamped print
 
 class Attack:
     """
-    The attack class serves as a binder between Traveler and Surface objects
+    The Attack class serves as a binder between Traveler and Surface objects
     with a high-level interface. Detailed in [paper_url], attacks are built
     from a differentiable function (i.e., a surface) and routines to manipulate
-    inputs (i.e., a traveler). Upon instantiation, the `craft` method serves
-    as the main entry point in crafting adversarial examples.
+    inputs (i.e., a traveler). Upon instantiation, the `craft` method serves as
+    the main entry point in crafting adversarial examples.
 
     :func:`__init__`: instantiates Attack objects
     :func:`__repr__`: returns the attack name (based on the components)
@@ -49,7 +49,7 @@ class Attack:
         traveler_closure=(),
     ):
         """
-        This method instantiates an attack object with a variety of parameters
+        This method instantiates an Attack object with a variety of parameters
         necessary for building and coupling Traveler and Surface objects. The
         following parameters define high-level bookkeeping parameters across
         attacks:
@@ -182,6 +182,7 @@ class Attack:
                 print(f"On epoch {epoch}... ({epoch/self.epochs:.1%})")
                 self.surface(xb, yb)
                 self.traveler(xb)
+                x.clamp_(self.clip)
         return x
 
 
