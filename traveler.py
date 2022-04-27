@@ -1,7 +1,7 @@
 """
 This module defines the travler class referenced in [paper_url].
 Authors: Ryan Sheatsley & Blaine Hoak
-Wed Jul 21 2021
+Wed Apr 27 2022
 """
 import torch  # Tensors and Dynamic neural networks in Python with strong GPU acceleration
 
@@ -12,27 +12,37 @@ import torch  # Tensors and Dynamic neural networks in Python with strong GPU ac
 
 class Traveler:
     """
-    This traveler class serves as a wrapper to support custom and COTS
-    PyTorch-based optimizers for arbitrary surfaces (as described in the
-    surface module). The methods defined within the class are desinged to
-    facilitate crafting adversarial examples.
+    The Traveler class handles consuming gradient information from inputs and
+    applying perturbations appropriately, as shown in [paper_url]. Under the
+    hood, Traveler objects serve as intelligent wrappers for PyTorch optimizers
+    and the methods defined within this class are designed to facilitate
+    crafting adversarial examples.
 
     :func:`__init__`: instantiates Traveler objects
-    :func:`craft`: returns a batch of adversarial examples
-    :func:`tanh_gradient`: returns the gradient of tanh-mapped tensors
+    :func:`__call__`: performs one step of input manipulation
+    :func:`__repr__`: returns Traveler parameter values
+    :func:`initialize`: prepares Traveler objects to operate over inputs
     :func:`tanh_map`: maps a tensor into (and out of) tanh-space
     """
 
     def __init__(
-        self,
-        epochs,
-        optimizer,
-        alpha=0.01,
-        random_alpha=0,
-        change_of_variables=False,
-        x_range=(0, 1),
+        self, alpha, change_of_variables, optimizer, random_restart, closure=()
     ):
         """
+        This method instantiates Traveler objects with a variety of attributes
+        necessary for the remaining methods in this class. Conceptually,
+        Travelers are responsible for applying a perturbation to an input based
+        on some gradient information, and thus the following attributes are
+        collected: (1) the learning rate α, (2) whether change of variables is
+        applied (i.e., mapping into and out of the hyperbolic tangent space),
+        (3) an PyTorch-based optimizer class from the optimizer module, (4) the
+        minimum and maximum values to initialize inputs (i.e., random restart,
+        often sampled between -ε and ε ), and (5) a tuple of callables to run
+        on the input passed in to __call__.
+
+        Specifically, the
+        following attributes are collected
+
         This method instantiates a traveler object with a variety of attributes
         necessary for the remaining methods in this class. Specifically, the
         following attributes are collected: (1) the number of optimizer steps
