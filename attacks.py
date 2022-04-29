@@ -130,7 +130,7 @@ class Attack:
             set("S", "r̶", "v̶", "Id", "j", "0"): "JSMA",
         }
         self.name = name_map.get(name, "-".join(name))
-        self.params = {"α": str(alpha), "ε": str(epsilon), "epochs": str(epochs)}
+        self.params = {"α": alpha, "ε": epsilon, "epochs": epochs}
 
         # instantiate traveler and surface
         self.traveler = traveler.Traveler(
@@ -178,6 +178,7 @@ class Attack:
             print(f"Crafting {len(x)} adversarial examples with {self}... {b/chunks}")
             self.surface.initialize(xb)
             self.traveler.initialize(xb)
+            x.clamp_(self.clip)
             for epoch in range(self.epochs):
                 print(f"On epoch {epoch}... ({epoch/self.epochs:.1%})")
                 self.surface(xb, yb)
