@@ -22,7 +22,7 @@ class Traveler:
     :func:`__call__`: performs one step of input manipulation
     :func:`__repr__`: returns Traveler parameter values
     :func:`initialize`: prepares Traveler objects to operate over inputs
-    :func:`tanh_map`: maps a tensor into (and out of) tanh-space
+    :func:`tanh_space`: maps a tensor into (and out of) tanh-space
     """
 
     def __init__(
@@ -40,47 +40,40 @@ class Traveler:
         often sampled between -ε and ε ), and (5) a tuple of callables to run
         on the input passed in to __call__.
 
-        Specifically, the
-        following attributes are collected
-
-        This method instantiates a traveler object with a variety of attributes
-        necessary for the remaining methods in this class. Specifically, the
-        following attributes are collected: (1) the number of optimizer steps
-        before returning, (2) a PyTorch Optimizer object, (3) if necessary, the
-        learning rate applied to the opitmizer (i.e., alpha), (4) the magnitude
-        of a random perturbation to the input before crafting, (5) whether the
-        input should be transformed into the tanh-space, and (6) the
-        permissible feature ranges. Moreover, to avoid mapping features to
-        negative or positive infinity (i.e., when mapping to tanh-space),
-        features are mapped between (0, 1) (non-inclusive) via the
-        tanh_smoother attribute. Finally, an initialization flag is set to
-        inform attack objects preprocessing steps have been completed when
-        repeatedly calling craft.
-
-        :param epochs: number of optimization steps to perform
-        :type epochs: integer
-        :param optimizer: optimization algorithm to use
-        :type optimizer: PyTorch Optimizer class
         :param alpha: learning rate of the optimizer
         :type alpha: float
-        :param random_alpha: magnitude of a random perturbation
-        :type random_alpha: scalar
+        :param random_restart: magnitude of a random perturbation
+        :type random_restart: scalar
         :param change_of_variables: whether to map inputs to tanh-space
         :type change_of_variables: boolean
-        :param x_range: specifies minimum and maximum feature values
-        :type x_range: tuple of floats
+        :param optimizer: optimization algorithm to use
+        :type optimizer: PyTorch-based optimizer class
+        :param closure: subroutines to run at the end of __call__
+        :type closure: tuple of callables
         :return: a traveler
         :rtype: Traveler object
         """
-        self.epochs = epochs
-        self.optimizer = optimizer
         self.alpha = alpha
-        self.random_alpha = random_alpha
+        self.optimizer = optimizer
+        self.random_restart = random_restart
         self.change_of_variables = change_of_variables
-        self.x_range = x_range
-        self.tanh_smoother = 0.999999
-        self.init_req = True
+        self.params = {
+            "α": alpha,
+            "CoV": change_of_variables,
+            "opt": optimizer.__name__,
+            "RR": (-random_restart, random_restart),
+        }
         return None
+
+    def __repr__(self):
+        """
+        This method returns a concise string representation of traveler
+        components.
+
+        :return: the traveler components
+        :rtype: str
+        """
+        return f"Traveler({self.params})"
 
     def craft(self, x, y, surface):
         """
@@ -89,9 +82,9 @@ class Traveler:
         made accessible by Surface objects.
 
         :param x: the batch of inputs to produce adversarial examples from
-        :type x: n x m tensor
+        :type x: PyTorch FloatTensor object (n, m)
         :param y: the labels (or initial predictions) of x
-        :type y: n-length vector
+        :type x: PyTorch FloatTensor object (n,)
         :param surface: surface containing the parameters to optimize over
         :type surface: Surface object
         :param x_min: minimum value for x
@@ -112,82 +105,66 @@ class Traveler:
             x.clamp_(*self.x_range)
         return x
 
-    def initialize(self, x, surface):
+    def initialize(self, x):
         """
         This method performs any preprocessing and initialization steps prior
         to crafting adversarial examples. Specifically, some attacks (1)
-        initialize x via a random perturbation (e.g., PGD), (2) require the
-        original x in loss functions (e.g., CW), or (3) embed perturbations
-        magnitudes directly in gradients (e.g., l2-based attacks). This method
-        performs such preprocessing subroutines, as well as attaches x to the
-        associated optimizer.
+        initialize x via a random perturbation (e.g., PGD), or (2) apply change
+        of variables (e.g. CW) which requires inputs whose maximum value to be
+        less than the minimum value mapped to infinity by arctanh (which is
+        datatype-specific). Finally, x is attached to the optimizer.
 
         :param x: the batch of inputs to produce adversarial examples from
-        :type x: n x m tensor
-        :param surface: surface containing the parameters to optimize over
-        :type surface: Surface object
+        :type x: PyTorch FloatTensor object (n, m)
         :return: None
         :rtype: NoneType
         """
 
-        # apply random restart
+        # subroutine (1): random restart
+        print(f"Applying random restart {self.parmas['RR']} to {len(x)} samples...")
         x.add_(
-            (
-                torch.distributions.uniform.Uniform(
-                    -self.random_alpha, self.random_alpha
-                ).sample(x.size())
-            )
-            if self.random_alpha
-            else 0
+            torch.distributions.uniform.Uniform(
+                -self.random_restart, self.random_restart
+            ).sample(x.size())
         ).clamp_(*self.x_range)
 
-        # override alpha for l2 attacks, and attach x to loss & optimizer
-        self.alpha = (
-            1.0
-            if surface.norm == 2 and self.optimizer == torch.optim.SGD
-            else self.alpha
-        )
-        surface.loss.attach(x) if surface.loss.x_req else None
         # if CoV is true, transform x to w
         # x = (
         #     x.mul_(2).sub_(1).mul_(self.tanh_smoother).arctanh_()
         #     if self.change_of_variables is True
         #     else x
         # )
+
+        # final subroutine: attach x to the optimizer
         self.opt = self.optimizer([x], lr=self.alpha)
-        self.init_req = False
         return None
 
-    def tanh_map(self, x, into=True):
+    def tanh_space(self, x, inverse=False):
         """
-        This method  maps x into the tanh-space, as shown in
+        This method maps x into the tanh-space, as shown in
         https://arxiv.org/pdf/1608.04644.pdf. Specifically, the transformation
         is defined as follows:
 
                             Δ = 1/2 * (Tanh(w) + 1) - x
 
         where w is the variable being optimized over, x is the original input,
-        and  Δ is the resultant perturbation to be added to x to produce the
+        and Δ is the resultant perturbation to be added to x to produce the
         adversarial example. To perform such a transformation, we do this in
-        two steps: (1) x is first mapped into the ArcTanh-space, and (2) when
-        optimizing for w, w + x is mapped into the Tanh-space (i.e., Δ). Since
-        step (2) is done during the optimization step, this function defines an
-        "into" mode that maps into the ArcTanh-space when true, and maps back
-        out (via Tanh) when false. Importantly, this method operates in-place,
-        as x often needs to be attached to the optimizer.
+        two steps: (1) x is first mapped into the inverse tanh-space (i.e.,
+        arctanh), and (2) when optimizing for w, w + x is mapped into the
+        tanh-space (i.e., Δ). Since step (2) is done during the optimization
+        step, this function defines an inverse that maps out of the tanh-space
+        when true, and maps back out when false. Importantly, this method
+        operates in-place, as x often needs to be attached to the optimizer.
 
         :param x: the batch of inputs to map into tanh-space
-        :type x: n x m tensor
+        :type x: PyTorch FloatTensor object (n, m)
         :param into: whether to map into (or out of) the arctanh-space
         :type into: boolean
         :return: x mapped into (or back out of) tanh-space
-        :rtype: n x m tensor
+        :rtype: PyTorch FloatTensor object (n, m)
         """
-        return (
-            x.mul_(2).sub_(1).mul_(self.tanh_smoother).arctanh_()
-            if into
-            else x.tanh_().add_(1).div_(2)
-        )
+        return x.mul_(2).sub_(1).arctanh_() if inverse else x.tanh_().add_(1).div_(2)
 
 
 if __name__ == "__main__":
