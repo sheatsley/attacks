@@ -111,8 +111,8 @@ class Traveler:
         to crafting adversarial examples. Specifically, some attacks (1)
         initialize x via a random perturbation (e.g., PGD), or (2) apply change
         of variables (e.g. CW) which requires inputs whose maximum value to be
-        less than the minimum value mapped to infinity by arctanh (which is
-        datatype-specific). Finally, x is attached to the optimizer.
+        less than the minimum value mapped to infinity by arctanh (i.e.,
+        1-machine epsilon). Finally, x is attached to the optimizer.
 
         :param x: the batch of inputs to produce adversarial examples from
         :type x: PyTorch FloatTensor object (n, m)
@@ -121,12 +121,17 @@ class Traveler:
         """
 
         # subroutine (1): random restart
-        print(f"Applying random restart {self.parmas['RR']} to {len(x)} samples...")
+        print(f"Applying random restart {self.params['RR']} to {len(x)} samples...")
         x.add_(
             torch.distributions.uniform.Uniform(
                 -self.random_restart, self.random_restart
             ).sample(x.size())
         ).clamp_(*self.x_range)
+
+        # subroutine (2): change of variables
+        print(
+            f"Applying change of variables to {len(x)} samples..."
+        ) if self.change_of_variables else None
 
         # if CoV is true, transform x to w
         # x = (
