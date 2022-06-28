@@ -5,6 +5,7 @@ Mon Apr 18 2022
 """
 import itertools  # Functions creating iterators for efficietn looping
 import loss  # PyTorch-based custom loss functions
+import optimizers  # PyTorch-based custom optimizers
 import saliency  # Gradient manipulation heuristics to achieve adversarial goals
 import surface  # Classes for rapidly building cost surfaces
 import torch  # Tensors and Dynamic neural networks in Python with strong GPU acceleration
@@ -70,7 +71,7 @@ class Attack:
         :param change_of_variables: whether to map inputs to tanh-space
         :type change_of_variables: bool
         :param optimizer: optimization algorithm to use
-        :type optimizer: PyTorch Optimizer object
+        :type optimizer: optimizer module class
         :param random_restart: whether to randomly perturb inputs
         :type random_restart: bool
         :param traveler_closure: subroutines after each perturbation
@@ -79,7 +80,7 @@ class Attack:
         Finally, the following parameters define Surface objects:
 
         :param loss: objective function to differentiate
-        :type loss: PyTorch Module-inherited object
+        :type loss: loss module class
         :param norm: lp-space to project gradients into
         :type norm: surface module callable
         :param model: neural network
@@ -172,7 +173,7 @@ class Attack:
         :return: a batch of adversarial examples
         :rtype: PyTorch FloatTensor object (n, m)
         """
-        x = x.clone()
+        x = x.detatch().clone()
         chunks = len(x) if self.batch_size == -1 else -(-len(x) // self.batch_size)
         for b, (xb, yb) in enumerate(zip(x.chunk(chunks), y.chunk(chunks)), start=1):
             print(f"Crafting {len(x)} adversarial examples with {self}... {b/chunks}")
@@ -193,7 +194,7 @@ def attack_builder(
     epsilon=None,
     model=None,
     change_of_variables_enabled=(False, True),
-    optimizers=(torch.optim.SGD, torch.optim.Adam),
+    optimizers=(optimizers.SGD, optimizers.Adam),
     random_restart_enabled=(False, True),
     losses=(loss.IdentityLoss, loss.CrossEntropyLoss, loss.CWLoss),
     norms=(surface.l0, surface.l2, surface.linf),
@@ -246,7 +247,7 @@ def attack_builder(
         optimizer,
         random_restart,
         change_of_variables,
-        a_loss,
+        loss_func,
         saliency_map,
         norm,
         jacobian,
@@ -266,7 +267,7 @@ def attack_builder(
             change_of_variables=change_of_variables,
             model=model,
             saliency_map=saliency_map,
-            loss=a_loss,
+            loss=loss_func,
             norm=norm,
         )
 
