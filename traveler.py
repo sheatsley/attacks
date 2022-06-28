@@ -47,7 +47,7 @@ class Traveler:
         :param change_of_variables: whether to map inputs to tanh-space
         :type change_of_variables: boolean
         :param optimizer: optimization algorithm to use
-        :type optimizer: PyTorch-based optimizer class
+        :type optimizer: optimizer module class
         :param closure: subroutines to run at the end of __call__
         :type closure: tuple of callables
         :return: a traveler
@@ -60,7 +60,7 @@ class Traveler:
         self.params = {
             "α": alpha,
             "CoV": change_of_variables,
-            "opt": optimizer.__name__,
+            "optim": optimizer.__name__,
             "RR": (-random_restart, random_restart),
         }
         return None
@@ -129,47 +129,50 @@ class Traveler:
         ).clamp_(*self.x_range)
 
         # subroutine (2): change of variables
-        print(
-            f"Applying change of variables to {len(x)} samples..."
-        ) if self.change_of_variables else None
-
-        # if CoV is true, transform x to w
-        # x = (
-        #     x.mul_(2).sub_(1).mul_(self.tanh_smoother).arctanh_()
-        #     if self.change_of_variables is True
-        #     else x
-        # )
+        if self.change_of_variables:
+            print(f"Applying change of variables to {len(x)} samples...")
+            self.tanh_space(x, True)
 
         # final subroutine: attach x to the optimizer
-        self.opt = self.optimizer([x], lr=self.alpha)
+        print(f"Attaching the perturbation vector to {self.optmizer.__name__}...")
+        self.optim = self.optimizer(x, lr=self.alpha)
         return None
 
-    def tanh_space(self, x, inverse=False):
+    def tanh_space(self, x, into=False):
         """
         This method maps x into the tanh-space, as shown in
         https://arxiv.org/pdf/1608.04644.pdf. Specifically, the transformation
         is defined as follows:
 
-                            Δ = 1/2 * (Tanh(w) + 1) - x
+                            w = ArcTanh(x * 2 - 1)                     (1)
 
-        where w is the variable being optimized over, x is the original input,
-        and Δ is the resultant perturbation to be added to x to produce the
-        adversarial example. To perform such a transformation, we do this in
-        two steps: (1) x is first mapped into the inverse tanh-space (i.e.,
-        arctanh), and (2) when optimizing for w, w + x is mapped into the
-        tanh-space (i.e., Δ). Since step (2) is done during the optimization
-        step, this function defines an inverse that maps out of the tanh-space
-        when true, and maps back out when false. Importantly, this method
+        where w is x in tanh-space, x is the original input, and Δ is the
+        resultant perturbation to be added to x to produce the adversarial
+        example (i.e., the variable we optimize over). Upon initialization, we
+        first map x into the tanh space as shown in (1), and subsequently, when
+        optimizing for Δ, we map x back out of the tanh space via:
+
+                            x = (Tanh(w + Δ) + 1) / 2                      (2)
+
+        where Δ is the computed perturbation to produce an adversarail
+        examples. As described in https://arxiv.org/pdf/1608.04644.pdf, (2)
+        ensures that x is gauranteed to be within the range [0, 1] (thus
+        avoiding any clipping mechanisms). Whether (1) or (2) is applied is
+        determined by the inverse argument, and, importantly, this method
         operates in-place, as x often needs to be attached to the optimizer.
 
         :param x: the batch of inputs to map into tanh-space
         :type x: PyTorch FloatTensor object (n, m)
-        :param into: whether to map into (or out of) the arctanh-space
+        :param into: whether to map into (or out of) the tanh-space
         :type into: boolean
         :return: x mapped into (or back out of) tanh-space
         :rtype: PyTorch FloatTensor object (n, m)
         """
-        return x.mul_(2).sub_(1).arctanh_() if inverse else x.tanh_().add_(1).div_(2)
+        return (
+            x.mul_(2).sub_(1).arctanh_(1 - torch.finfo(x.dtype).eps)
+            if into
+            else x.tanh_().add_(1).div_(2)
+        )
 
 
 if __name__ == "__main__":
