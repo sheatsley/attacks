@@ -20,8 +20,11 @@ class CrossEntropyLoss(torch.nn.CrossEntropyLoss):
     notify Attack objects to avoid copying original inputs, as they are not
     needed to compute this loss.
 
-    :func:`__init__` instantiates a CrossEntropyLoss class
+    :func:`__init__` instantiates a CrossEntropyLoss object
     """
+
+    max_obj = True
+    req_x = False
 
     def __init__(self, **kwargs):
         """
@@ -29,17 +32,15 @@ class CrossEntropyLoss(torch.nn.CrossEntropyLoss):
         arguments for the PyTorch parent class described in:
         https://pytorch.org/docs/stable/generated/torch.nn.CrossEntropyLoss.html
         We note that we explicitly pass reduction="none", as this can cause
-        gradients to underflow when computing adversarail examples for large
+        gradients to underflow when computing adversarial examples for large
         batch sizes.
 
-        :param kwargs: keyword arguemtns for torch.nn.CrossEntropyLoss
+        :param kwargs: keyword arguments for torch.nn.CrossEntropyLoss
         :type kwargs: dict
         :return: Cross Entropy loss
         :rtype: CrossEntropyLoss object
         """
         super().__init(reduction="none", **kwargs)
-        self.max_obj = True
-        self.req_x = False
         return None
 
 
@@ -61,9 +62,12 @@ class CWLoss(torch.nn.Module):
     examples), that is a separate component from this loss (see the surface
     module for further details).
 
-    :func:`__init__`: instantiates a cwloss object
+    :func:`__init__`: instantiates a CWLoss object
     :func:`forward`: returns the loss for a given batch of inputs
     """
+
+    max_obj = True
+    req_x = False
 
     def __init__(self, norm=2, c=1, k=0):
         """
@@ -84,8 +88,6 @@ class CWLoss(torch.nn.Module):
         :rtype: CWLoss object
         """
         super().__init__()
-        self.max_obj = False
-        self.req_x = True
         self.norm = norm
         self.c = c
         self.k = k
@@ -147,6 +149,9 @@ class IdentityLoss(torch.nn.Module):
     :func:`forward`: returns the yth logit component for a batch of imputs
     """
 
+    max_obj = False
+    req_x = True
+
     def __init__(self):
         """
         This method instantiates an identityloss object. It accepts no
@@ -156,8 +161,6 @@ class IdentityLoss(torch.nn.Module):
         :rtype: IdentityLoss object
         """
         super().__init__()
-        self.max_obj = False
-        self.req_x = False
         return None
 
     def forward(self, logits, y):
