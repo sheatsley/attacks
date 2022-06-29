@@ -133,7 +133,13 @@ class Attack:
         self.name = name_map.get(name, "-".join(name))
         self.params = {"α": alpha, "ε": epsilon, "epochs": epochs}
 
-        # instantiate traveler and surface
+        # instantiate traveler, surface, and necessary subcomponents
+        loss = loss()
+        optimizer = optimizer(
+            lr=alpha,
+            model_acc=model.accuracy if optimizer.req_acc else None,
+            atk_loss=loss if optimizer.req_loss else None,
+        )
         self.traveler = traveler.Traveler(
             alpha, change_of_variables, optimizer, random_restart, traveler_closure
         )
