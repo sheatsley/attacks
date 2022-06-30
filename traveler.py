@@ -47,7 +47,7 @@ class Traveler:
         :param change_of_variables: whether to map inputs to tanh-space
         :type change_of_variables: boolean
         :param optimizer: optimization algorithm to use
-        :type optimizer: optimizer module class
+        :type optimizer: optimizer module object
         :param closure: subroutines to run at the end of __call__
         :type closure: tuple of callables
         :return: a traveler
@@ -144,7 +144,7 @@ class Traveler:
         https://arxiv.org/pdf/1608.04644.pdf. Specifically, the transformation
         is defined as follows:
 
-                            w = ArcTanh(x * 2 - 1)                     (1)
+                            w = ArcTanh(x * 2 - 1)                          (1)
 
         where w is x in tanh-space, x is the original input, and Δ is the
         resultant perturbation to be added to x to produce the adversarial
@@ -152,7 +152,7 @@ class Traveler:
         first map x into the tanh space as shown in (1), and subsequently, when
         optimizing for Δ, we map x back out of the tanh space via:
 
-                            x = (Tanh(w + Δ) + 1) / 2                      (2)
+                            x = (Tanh(w + Δ) + 1) / 2                       (2)
 
         where Δ is the computed perturbation to produce an adversarail
         examples. As described in https://arxiv.org/pdf/1608.04644.pdf, (2)
