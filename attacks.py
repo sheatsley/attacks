@@ -61,7 +61,7 @@ class Attack:
         :param epochs: number of optimization steps to perform
         :type epochs: int
         :param clip: range of allowable values for the domain
-        :type clip: tuple (ie min & max) or matrix (ie sample×feature clips)
+        :type clip: tuple (ie min & max) or PyTorch FloatTensor (samples, features)
         :param epsilon: lp-norm ball threat model
         :type epsilon: float
 
@@ -72,7 +72,7 @@ class Attack:
         :param change_of_variables: whether to map inputs to tanh-space
         :type change_of_variables: bool
         :param optimizer: optimization algorithm to use
-        :type optimizer: optimizer module class
+        :type optimizer: optimizer module object
         :param random_restart: whether to randomly perturb inputs
         :type random_restart: bool
         :param traveler_closure: subroutines after each perturbation
@@ -81,7 +81,7 @@ class Attack:
         Finally, the following parameters define Surface objects:
 
         :param loss: objective function to differentiate
-        :type loss: loss module class
+        :type loss: loss module object
         :param norm: lp-space to project gradients into
         :type norm: surface module callable
         :param model: neural network
@@ -142,7 +142,7 @@ class Attack:
             atk_loss=loss if optimizer.req_loss else None,
         )
         self.traveler = traveler.Traveler(
-            alpha, change_of_variables, optimizer, random_restart, traveler_closure
+            change_of_variables, optimizer, random_restart, traveler_closure
         )
         self.surface = surface.Surface(model, saliency, loss, norm, surface_closure)
         return None
@@ -181,18 +181,21 @@ class Attack:
         :rtype: PyTorch FloatTensor object (n, m)
         """
         x = x.detatch().clone()
+        p = x.new_zeros(x.size())
         chunks = len(x) if self.batch_size == -1 else -(-len(x) // self.batch_size)
-        for b, (xb, yb) in enumerate(zip(x.chunk(chunks), y.chunk(chunks)), start=1):
+        for b, (xb, yb, pb) in enumerate(
+            zip(x.chunk(chunks), y.chunk(chunks), p.chunk(chunks)), start=1
+        ):
             print(f"Crafting {len(x)} adversarial examples with {self}... {b/chunks}")
-            self.surface.initialize(xb)
-            self.traveler.initialize(xb)
+            self.surface.initialize(xb, pb)
+            self.traveler.initialize(xb, pb, self.clip)
             x.clamp_(self.clip)
             for epoch in range(self.epochs):
                 print(f"On epoch {epoch}... ({epoch/self.epochs:.1%})")
-                self.surface(xb, yb)
-                self.traveler(xb)
-                x.clamp_(self.clip)
-        return x
+                self.surface(xb, yb, pb)
+                self.traveler()
+                x.clamp_(*self.clip)
+        return x + p
 
 
 def attack_builder(
@@ -280,8 +283,5 @@ def attack_builder(
 
 
 if __name__ == "__main__":
-    """
-    Runs all attacks (i.e., all possible combinations in the framework) on
-    synthetic data, as shown in [paper_url].
-    """
+    """ """
     raise SystemExit(0)
