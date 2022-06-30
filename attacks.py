@@ -17,6 +17,7 @@ from utilities import print  # Use timestamped print
 # add shortcuts for auto-building known attacks (assist architectures.py)
 # check if tuple passed as clip needs to be cast as matrix
 # add early termination support
+# organize argument orders
 
 
 class Attack:
