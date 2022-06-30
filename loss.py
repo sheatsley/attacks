@@ -7,7 +7,6 @@ import torch  # Tensors and Dynamic neural networks in Python with strong GPU ac
 
 # TODO
 # add unit tests to confirm correctness
-# optimize cw-loss
 
 
 class CrossEntropyLoss(torch.nn.CrossEntropyLoss):
@@ -16,9 +15,8 @@ class CrossEntropyLoss(torch.nn.CrossEntropyLoss):
     exception that: (1) the most recently computed loss is stored in curr_loss
     (to faciliate optimizers who require it) and (2) two additional attributes
     are added: del_req (set to False) and max_obj (set as True). We add these
-    attributes to let optimizers know the direction to step in to produce
-    adversarial examples, as well as to notify Attack objects that a reference
-    to the current perturbation vector is not needed by this class.
+    attributes to state that optimizers should maximize this function and that
+    a reference to perturbation vectors is not needed by this class.
 
     :func:`__init__` instantiates a CrossEntropyLoss object
     """
@@ -51,7 +49,7 @@ class CrossEntropyLoss(torch.nn.CrossEntropyLoss):
         optimizers who require it (e.g., BWSGD).
 
         :param logits: the model logits
-        :type logits: PyTorch FloatTensor objecet (n, c)
+        :type logits: PyTorch FloatTensor object (n, c)
         :param y: the labels (or initial predictions) of the inputs (e.g., x)
         :type y: PyTorch Tensor object (n,)
         :return: the current loss
@@ -76,9 +74,13 @@ class CWLoss(torch.nn.Module):
     difference between the next closest class & the original class (i.e., how
     deep adversarial examples are pushed across the decision boundary), and c,
     the second hyperparameter, parameterizes the tradeoff between
-    imperceptibility and misclassification.
+    imperceptibility and misclassification. Moreover, like other losses, we
+    store the last computed loss, and expose attributes to state that
+    optimizers should minimize this function and Surface objects should provide
+    a reference to the perturbation vector.
 
     :func:`__init__`: instantiates a CWLoss object
+    :func:`attach`: sets the perturbation vector as an object attribute
     :func:`forward`: returns the loss for a given batch of inputs
     """
 
@@ -91,14 +93,14 @@ class CWLoss(torch.nn.Module):
         (1) norm, the lp-norm to use, (2) c, which emphasizes optimizing
         adversarial goals over the introduced distortion, and (3) k, which
         controls how far adversarial examples are pushed across the decision
-        boundary (as measured through the difference between the initial and
-        current predictions).
+        boundary (as measured through the logit differences of the yth logit
+        and the next largest logit).
 
         :param norm: lp-space to project gradients into
-        :type norm:
-        :param c: encourages misclassification over imperceptability
+        :type norm: supported ord arguments in PyTorch linalg.vector_norm function
+        :param c: importance of misclassification over imperceptability
         :type c: float
-        :param k: encourages "deep" adversarial examples
+        :param k: desired minimum logit difference between true and current classes
         :type k: float
         :return: Carlini-Wagner loss
         :rtype: CWLoss object
@@ -109,45 +111,53 @@ class CWLoss(torch.nn.Module):
         self.k = k
         return None
 
+    def attach(self, delta):
+        """
+        This method serves as a setter for attaching a reference to the
+        perturbation vector to CWLoss objects as an attribute (as the attribute
+        is subsequently referenced in the forward pass).
+
+        :param perturbation: perturbation vector
+        :type perturbation: PyTorch FloatTensor object (n, m)
+        :return: None
+        :rtype: NoneType
+        """
+        self.delta = delta
+        return None
+
     def forward(self, logits, y):
         """
         This method computes the loss described above. Specifically, it
         computes the sum of: (1) the lp-norm of the perturbation, and (2) the
-        difference between the logits component corresponding to the initial
-        prediction and the maximum logits component not equal to the initial
-        prediction. Importantly, this definition can expand the l2-norm vector
-        by a factor of c (where is the number of classes),  depending on if the
-        attack parameters require a full Jacobian to be computed (i.e., if a
-        saliency map is used), by repeating the inputs by a factor of c as
-        well.
+        logit difference between the true class and the maximum logit not equal
+        to the true class. Moreover, if attack parameters require a saliency
+        map (detected via a shape mismatch between the pertrubation vector and
+        the model logts), the l2-norm vector is expanded by a factor c (where c
+        is the number of classes).
 
-        :param logits: the model logits, evaluated at advx
-        :type logits: n x c tensor (where c is the number of classes)
-        :param y: the labels (or initial predictions) of x
-        :type y: n-length vector
-        :return: loss values
-        :rtype: n-length vector
+        :param logits: the model logits
+        :type logits: PyTorch FloatTensor object (n, c)
+        :param y: the labels (or initial predictions) of the inputs (e.g., x)
+        :type y: PyTorch Tensor object (n,)
+        :return: the current loss
+        :rtype: PyTorch FloatTensor (n,)
         """
-        lp = torch.linalg.norm(
-            self.x - self.original_x, ord=self.norm, dim=1
-        ).repeat_interleave(1 if self.x.size(0) == logits.size(0) else logits.size(1))
 
-        # compute misclassification term
-        misclass = (
-            logits.gather(1, y.view(-1, 1))
-            .flatten()
-            .sub(
-                logits.masked_select(
-                    torch.ones(logits.shape, dtype=torch.bool).scatter(
-                        1, y.view(-1, 1), 0
-                    )
-                )
-                .view(-1, logits.size(1) - 1)
-                .max(1)[0]
-            )
-            + self.k
-        )
-        return lp + self.c * misclass
+        # compute lp-norm of perturbation vector
+        lp = torch.linalg.vector_norm(
+            self.delta, ord=self.norm, dim=1
+        ).repeat_interleave(logits.size(0) // self.delta.size(0))
+
+        # compute logit differences
+        y_hot = torch.nn.functional.one_hot(y).bool()
+        yth_logit = logits.masked_select(y_hot)
+        max_logit, _ = logits.masked_select(~y_hot).view(-1, logits.size(1) - 1).max(1)
+        logdiff = torch.clamp(yth_logit - max_logit, min=-self.k)
+
+        # save current loss for optimizers later
+        curr_loss = lp + self.c * logdiff
+        self.curr_loss = curr_loss.detatch()
+        return curr_loss
 
 
 class IdentityLoss(torch.nn.Module):
@@ -160,15 +170,15 @@ class IdentityLoss(torch.nn.Module):
     model logits. Thus, when x is duplicated c times (where c is the number of
     classes) backpropogating the gradients from this loss function will return
     a model Jacobian. Moreover, like other losses, we store the last computed
-    loss, and expose attributes to state whether optimizers should maximize
-    this function and whether it requires a copy of the original input.
+    loss, and expose attributes so that optimizers should minimize this
+    function and a reference to the perturbation vector is not needed.
 
     :func:`__init__`: instantiates an IdentityLoss object
     :func:`forward`: returns the yth logit component for a batch of imputs
     """
 
+    del_req = False
     max_obj = False
-    req_x = False
 
     def __init__(self):
         """
@@ -187,13 +197,13 @@ class IdentityLoss(torch.nn.Module):
         the yth-component of the logits.
 
         :param logits: the model logits
-        :type logits: PyTorch FloatTensor objecet (n, c)
+        :type logits: PyTorch FloatTensor object (n, c)
         :param y: the labels (or initial predictions) of the inputs (e.g., x)
         :type y: PyTorch Tensor object (n,)
         :return: the current loss
         :rtype: PyTorch FloatTensor (n,)
         """
-        curr_loss = logits.take(y)
+        curr_loss = logits.gather(1, y.unsqueeze(1)).flatten()
         self.curr_loss = curr_loss.detatch()
         return curr_loss
 
