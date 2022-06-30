@@ -1,15 +1,13 @@
 """
 This module defines the surface class referenced in [paper_url].
 Authors: Ryan Sheatsley & Blaine Hoak
-Wed Jul 21 2021
+Thu June 30 2022
 """
-import loss  # PyTorch-based custom loss functions
 import torch  # Tensors and Dynamic neural networks in Python with strong GPU acceleration
 
 # TODO
 # implement BPDA
 # track classes and other metadata on initilization of craft?
-# add support for one-hot encoding
 
 
 class Surface:
@@ -23,8 +21,9 @@ class Surface:
     module).
 
     :func:`__init__`: instantiates Surface objects
-    :func:`backwards`: returns the gradient of the current tensor
-    :func:`norm`: returns a vector projected into an lp-norm space
+    :func:`__call__`: performs a single forwards & backwards pass
+    :func:`__repr__`: returns Surface parameter values
+    :func:`initialize`: prepares Surface objects to operate over inputs
     """
 
     def __init__(
@@ -161,21 +160,22 @@ class Surface:
         )
         return None
 
-    def linf(self, gradient, x):
-        """
-        This method projects a gradient into the l∞-norm space. The projection
-        is simple in that the sign of the gradient is returned. In this way,
-        the magnitude of the perturbation is then directly controlled by the
-        learning rate of the attached optimizer.
 
-        :param gradient: batch of gradients to project
-        :type gradient: n x m tensor
-        :param x: current input associated with the gradient
-        :type x: n x m tensor
-        :return: gradients projected into l-infinity-norm space
-        :rtype: n x m tensor
-        """
-        return torch.sign(gradient)
+def linf(gradient, x):
+    """
+    This function projects a gradient into the l∞-norm space. The projection is
+    simple in that the sign of the gradient is returned. In this way, the
+    magnitude of the perturbation is then directly controlled by the learning
+    rate of the attached optimizer.
+
+    :param gradient: batch of gradients to project
+    :type gradient: n x m tensor
+    :param x: current input associated with the gradient
+    :type x: n x m tensor
+    :return: gradients projected into l-infinity-norm space
+    :rtype: n x m tensor
+    """
+    return torch.sign(gradient)
 
     def ltop(self, gradient, x):
         """
@@ -289,7 +289,5 @@ class Surface:
 
 
 if __name__ == "__main__":
-    """
-    Example usage from [paper_url].
-    """
+    """ """
     raise SystemExit(0)
