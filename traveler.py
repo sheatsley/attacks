@@ -7,7 +7,6 @@ import torch  # Tensors and Dynamic neural networks in Python with strong GPU ac
 
 # TODO
 # add unit tests
-# add Line Search
 
 
 class Traveler:
@@ -25,40 +24,36 @@ class Traveler:
     :func:`tanh_space`: maps a tensor into (and out of) tanh-space
     """
 
-    def __init__(
-        self, alpha, change_of_variables, optimizer, random_restart, closure=()
-    ):
+    def __init__(self, change_of_variables, optimizer, random_restart, closure=()):
         """
         This method instantiates Traveler objects with a variety of attributes
         necessary for the remaining methods in this class. Conceptually,
         Travelers are responsible for applying a perturbation to an input based
         on some gradient information, and thus the following attributes are
-        collected: (1) the learning rate α, (2) whether change of variables is
-        applied (i.e., mapping into and out of the hyperbolic tangent space),
-        (3) an PyTorch-based optimizer class from the optimizer module, (4) the
-        minimum and maximum values to initialize inputs (i.e., random restart,
-        often sampled between -ε and ε ), and (5) a tuple of callables to run
-        on the input passed in to __call__.
+        collected: (1) whether change of variables is applied (i.e., mapping
+        into and out of the hyperbolic tangent space), (2) an PyTorch-based
+        optimizer object from the optimizer module (which is initialized with
+        α, the learning rate), (3) the minimum and maximum values to initialize
+        inputs (i.e., random restart, often sampled between -ε and ε ), and (5)
+        a tuple of callables to run on the input passed in to __call__.
 
-        :param alpha: learning rate of the optimizer
-        :type alpha: float
-        :param random_restart: magnitude of a random perturbation
-        :type random_restart: scalar
         :param change_of_variables: whether to map inputs to tanh-space
         :type change_of_variables: boolean
         :param optimizer: optimization algorithm to use
         :type optimizer: optimizer module object
+        :param random_restart: magnitude of a random perturbation
+        :type random_restart: scalar
         :param closure: subroutines to run at the end of __call__
         :type closure: tuple of callables
         :return: a traveler
         :rtype: Traveler object
         """
-        self.alpha = alpha
+        self.change_of_variables = change_of_variables
         self.optimizer = optimizer
         self.random_restart = random_restart
-        self.change_of_variables = change_of_variables
+        self.closure = closure
         self.params = {
-            "α": alpha,
+            "α": optimizer.lr,
             "CoV": change_of_variables,
             "optim": optimizer.__name__,
             "RR": (-random_restart, random_restart),
@@ -75,67 +70,57 @@ class Traveler:
         """
         return f"Traveler({self.params})"
 
-    def craft(self, x, y, surface):
+    def __call__(self):
         """
-        This method crafts adversarial examples by applying epochs number of
-        optimization steps to x. The gradient information used by optimizers is
-        made accessible by Surface objects.
+        This method is the heart of Traveler objects. It performs two
+        functions: (1) to perform a single optimization step (via Optimizer
+        objects), and (2) calls closure subroutines before returning. Notably,
+        this method assumes that the gradients associated with leaf variables
+        attached to optimizers is populated.
 
-        :param x: the batch of inputs to produce adversarial examples from
-        :type x: PyTorch FloatTensor object (n, m)
-        :param y: the labels (or initial predictions) of x
-        :type x: PyTorch FloatTensor object (n,)
-        :param surface: surface containing the parameters to optimize over
-        :type surface: Surface object
-        :param x_min: minimum value for x
-        :type x_min: scalar or n x m tensor
-        :param x_max: maximum value for x
-        :type x_max: scalar or n x m tensor
-        :return: a batch of adversarial examples
-        :rtype: n x m tensor
+        :return: None
+        :rtype: NoneType
         """
-        for epoch in range(self.epochs):
-            surface.backward(x, y, cov=self.change_of_variables)
-            if self.change_of_variables:
-                self.tanh_map(x, into=True)
-            self.opt.step()
-            self.opt.zero_grad(set_to_none=True)
-            if self.change_of_variables:
-                self.tanh_map(x, into=False)
-            x.clamp_(*self.x_range)
-        return x
+        self.optimizer.step()
+        [f() for f in self.closure]
+        return None
 
-    def initialize(self, x):
+    def initialize(self, x, p, clip):
         """
         This method performs any preprocessing and initialization steps prior
         to crafting adversarial examples. Specifically, some attacks (1)
-        initialize x via a random perturbation (e.g., PGD), or (2) apply change
-        of variables (e.g. CW) which requires inputs whose maximum value to be
-        less than the minimum value mapped to infinity by arctanh (i.e.,
-        1-machine epsilon). Finally, x is attached to the optimizer.
+        initialize perturbation vectors via a random perturbation (e.g., PGD),
+        or (2) apply change of variables (e.g. CW) to the original inputs which
+        requires that maximum values be less than the minimum value mapped to
+        infinity by arctanh (i.e., 1-machine epsilon). Finally, x is attached
+        to the optimizer.
 
         :param x: the batch of inputs to produce adversarial examples from
         :type x: PyTorch FloatTensor object (n, m)
+        :param p: the perturbation vectors used to craft adversarial examples
+        :type p: PyTorch FloatTensor object (n, m)
+        :param clip: range of allowable values for the domain
+        :type clip: PyTorch FloatTensor object (n, m)
         :return: None
         :rtype: NoneType
         """
 
         # subroutine (1): random restart
-        print(f"Applying random restart {self.params['RR']} to {len(x)} samples...")
-        x.add_(
+        print(f"Applying random restart {self.params['RR']} to {len(p)} vectors...")
+        p.add_(
             torch.distributions.uniform.Uniform(
                 -self.random_restart, self.random_restart
-            ).sample(x.size())
-        ).clamp_(*self.x_range)
+            ).sample(p.size())
+        ).clamp_(*(self.clip - x))
 
         # subroutine (2): change of variables
         if self.change_of_variables:
             print(f"Applying change of variables to {len(x)} samples...")
             self.tanh_space(x, True)
 
-        # final subroutine: attach x to the optimizer
+        # final subroutine: attach p to the optimizer
         print(f"Attaching the perturbation vector to {self.optmizer.__name__}...")
-        self.optim = self.optimizer(x, lr=self.alpha)
+        self.optimizer.add_param_group({"params": p})
         return None
 
     def tanh_space(self, x, into=False):
@@ -176,7 +161,5 @@ class Traveler:
 
 
 if __name__ == "__main__":
-    """
-    Example usage from [paper_url].
-    """
+    """ """
     raise SystemExit(0)
