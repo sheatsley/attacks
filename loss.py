@@ -8,23 +8,23 @@ import torch  # Tensors and Dynamic neural networks in Python with strong GPU ac
 # TODO
 # add unit tests to confirm correctness
 # optimize cw-loss
-# optimize identity loss forward
 
 
 class CrossEntropyLoss(torch.nn.CrossEntropyLoss):
     """
     This class is identical to the CrossEntropyLoss class in PyTorch, with the
-    exception that two additional attributes are added: max_obj (set as True)
-    and req_x (set as False). We add these attributes to let optimizers know
-    the direction to step in to produce adversarial examples, as well as to
-    notify Attack objects to avoid copying original inputs, as they are not
-    needed to compute this loss.
+    exception that: (1) the most recently computed loss is stored in curr_loss
+    (to faciliate optimizers who require it) and (2) two additional attributes
+    are added: del_req (set to False) and max_obj (set as True). We add these
+    attributes to let optimizers know the direction to step in to produce
+    adversarial examples, as well as to notify Attack objects that a reference
+    to the current perturbation vector is not needed by this class.
 
     :func:`__init__` instantiates a CrossEntropyLoss object
     """
 
+    del_req = False
     max_obj = True
-    req_x = False
 
     def __init__(self, **kwargs):
         """
@@ -43,43 +43,59 @@ class CrossEntropyLoss(torch.nn.CrossEntropyLoss):
         super().__init(reduction="none", **kwargs)
         return None
 
+    def forwad(self, logits, y):
+        """
+        This method serves as a wrapper for the PyTorch CrossEntropyLoss
+        forward method. We provide this wrapper to expose the most recently
+        computed loss (detatched from the current graph) to be used later by
+        optimizers who require it (e.g., BWSGD).
+
+        :param logits: the model logits
+        :type logits: PyTorch FloatTensor objecet (n, c)
+        :param y: the labels (or initial predictions) of the inputs (e.g., x)
+        :type y: PyTorch Tensor object (n,)
+        :return: the current loss
+        :rtype: PyTorch FloatTensor (n,)
+        """
+        curr_loss = super().forward(logits, y)
+        self.curr_loss = curr_loss.detatch()
+        return curr_loss
+
 
 class CWLoss(torch.nn.Module):
     """
     This class implements the Carlini-Wagner loss, as shown in
     https://arxiv.org/pdf/1608.04644.pdf. Specifically, the loss is defined as:
 
-            lp(advx, x) + c * max(max(model(x)_i:i≠y) - model(x)_y, -k)
+            lp(Δ) + c * max(max(f(x + Δ)_i:i ≠ y) - f(x + Δ)_y, -k)
 
-    where x is the original input, advx is the resultant adversarial example, y
-    is the predicted class of x and i is the next closest class (as measured
-    through the model logits), lp computes the p-norm of the differecne between
-    advx and x, while k and c serve as hyperparameters. k controls how deep
-    adversarial examples are pushed across the decision boundary, while c
-    parameterizes the tradeoff between imperceptibility and misclassification.
-    Note that while the original Carlini-Wagner objective function applies a
-    change of variables to x (so that it is easier to find adversarial
-    examples), that is a separate component from this loss (see the surface
-    module for further details).
+    where Δ is the current perturbation vector to produce adversarial examples,
+    x is the original input, y contains the labels of x, i is the next closest
+    class (as measured through the model logits, returned by f), lp computes
+    the p-norm of Δ, while k, the first hyperparameter, controls the minimum
+    difference between the next closest class & the original class (i.e., how
+    deep adversarial examples are pushed across the decision boundary), and c,
+    the second hyperparameter, parameterizes the tradeoff between
+    imperceptibility and misclassification.
 
     :func:`__init__`: instantiates a CWLoss object
     :func:`forward`: returns the loss for a given batch of inputs
     """
 
-    max_obj = True
-    req_x = False
+    del_req = True
+    max_obj = False
 
     def __init__(self, norm=2, c=1, k=0):
         """
         This method instantiates a CWLoss object. It accepts three arguments:
-        (1) p, the lp-norm to use, (2) c, which emphasizes optimizing
+        (1) norm, the lp-norm to use, (2) c, which emphasizes optimizing
         adversarial goals over the introduced distortion, and (3) k, which
         controls how far adversarial examples are pushed across the decision
         boundary (as measured through the difference between the initial and
         current predictions).
 
         :param norm: lp-space to project gradients into
-        :type norm: int; one of: 0, 2, or float("inf")
+        :type norm:
         :param c: encourages misclassification over imperceptability
         :type c: float
         :param k: encourages "deep" adversarial examples
@@ -141,20 +157,22 @@ class IdentityLoss(torch.nn.Module):
     model Jacobian to apply perturbations coupled with the fact that PyTorch
     cannot compute Jacobians directly, this loss function seeks to emulate
     computing the model Jacobian by simply returning the yth-component of the
-    model logits. Thus, when x is duplicated c times, where c is the number of
-    classes, backpropogating the gradients from this loss function will return
-    a model Jacobian.
+    model logits. Thus, when x is duplicated c times (where c is the number of
+    classes) backpropogating the gradients from this loss function will return
+    a model Jacobian. Moreover, like other losses, we store the last computed
+    loss, and expose attributes to state whether optimizers should maximize
+    this function and whether it requires a copy of the original input.
 
-    :func:`__init__`: instantiates an identityloss object
+    :func:`__init__`: instantiates an IdentityLoss object
     :func:`forward`: returns the yth logit component for a batch of imputs
     """
 
     max_obj = False
-    req_x = True
+    req_x = False
 
     def __init__(self):
         """
-        This method instantiates an identityloss object. It accepts no
+        This method instantiates an IdentityLoss object. It accepts no
         arguments.
 
         :return: Identity loss
@@ -168,18 +186,18 @@ class IdentityLoss(torch.nn.Module):
         This method computes the loss described above. Specifically, it returns
         the yth-component of the logits.
 
-        :param logits: the model logits, evaluated at advx
-        :type logits: n x c tensor (where c is the number of classes)
-        :param y: the labels (or initial predictions) of x
-        :type y: n-length vector
-        :return: loss values
-        :rtype: n-length vector
+        :param logits: the model logits
+        :type logits: PyTorch FloatTensor objecet (n, c)
+        :param y: the labels (or initial predictions) of the inputs (e.g., x)
+        :type y: PyTorch Tensor object (n,)
+        :return: the current loss
+        :rtype: PyTorch FloatTensor (n,)
         """
-        return logits.gather(1, y.view(-1, 1)).flatten()
+        curr_loss = logits.take(y)
+        self.curr_loss = curr_loss.detatch()
+        return curr_loss
 
 
 if __name__ == "__main__":
-    """
-    Instantiates loss objects and passes random values.
-    """
+    """ """
     raise SystemExit(0)
