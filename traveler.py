@@ -85,7 +85,7 @@ class Traveler:
         [f() for f in self.closure]
         return None
 
-    def initialize(self, x, p, clip):
+    def initialize(self, x, p):
         """
         This method performs any preprocessing and initialization steps prior
         to crafting adversarial examples. Specifically, some attacks (1)
@@ -99,8 +99,6 @@ class Traveler:
         :type x: PyTorch FloatTensor object (n, m)
         :param p: the perturbation vectors used to craft adversarial examples
         :type p: PyTorch FloatTensor object (n, m)
-        :param clip: range of allowable values for the domain
-        :type clip: PyTorch FloatTensor object (n, m)
         :return: None
         :rtype: NoneType
         """
@@ -111,7 +109,7 @@ class Traveler:
             torch.distributions.uniform.Uniform(
                 -self.random_restart, self.random_restart
             ).sample(p.size())
-        ).clamp_(*(self.clip - x))
+        )
 
         # subroutine (2): change of variables
         if self.change_of_variables:
