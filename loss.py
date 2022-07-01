@@ -144,9 +144,9 @@ class CWLoss(torch.nn.Module):
         """
 
         # compute lp-norm of perturbation vector
-        lp = torch.linalg.vector_norm(
-            self.delta, ord=self.norm, dim=1
-        ).repeat_interleave(logits.size(0) // self.delta.size(0))
+        lp = self.delta.norm(ord=self.norm, dim=1).repeat_interleave(
+            logits.size(0) // self.delta.size(0)
+        )
 
         # compute logit differences
         y_hot = torch.nn.functional.one_hot(y).bool()
