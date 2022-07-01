@@ -61,7 +61,7 @@ class Attack:
         :param epochs: number of optimization steps to perform
         :type epochs: int
         :param clip: range of allowable values for the domain
-        :type clip: tuple (ie min & max) or PyTorch FloatTensor (samples, features)
+        :type clip: tuple of integers or PyTorch FloatTensor objects (samples, features)
         :param epsilon: lp-norm ball threat model
         :type epsilon: float
 
@@ -187,14 +187,17 @@ class Attack:
             zip(x.chunk(chunks), y.chunk(chunks), p.chunk(chunks)), start=1
         ):
             print(f"Crafting {len(x)} adversarial examples with {self}... {b/chunks}")
-            self.surface.initialize(xb, pb)
-            self.traveler.initialize(xb, pb, self.clip)
-            x.clamp_(self.clip)
+            min_p, max_p = (
+                (clip - xb).clamp(-self.epsilon, self.epsilon) for clip in self.clip
+            )
+            self.surface.initialize(xb, pb, (min_p, max_p))
+            self.traveler.initialize(xb, pb)
+            p.clamp_(min_p, max_p)
             for epoch in range(self.epochs):
                 print(f"On epoch {epoch}... ({epoch/self.epochs:.1%})")
                 self.surface(xb, yb, pb)
                 self.traveler()
-                x.clamp_(*self.clip)
+                p.clamp_(min_p, max_p)
         return x + p
 
 
