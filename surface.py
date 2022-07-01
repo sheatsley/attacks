@@ -161,131 +161,61 @@ class Surface:
         return None
 
 
-def linf(gradient, x):
+def linf(p):
     """
-    This function projects a gradient into the l∞-norm space. The projection is
-    simple in that the sign of the gradient is returned. In this way, the
-    magnitude of the perturbation is then directly controlled by the learning
-    rate of the attached optimizer.
+    This function projects gradients into the l∞-norm space. Specifically, this
+    is defined as taking the sign of the gradients.
 
-    :param gradient: batch of gradients to project
-    :type gradient: n x m tensor
-    :param x: current input associated with the gradient
-    :type x: n x m tensor
-    :return: gradients projected into l-infinity-norm space
-    :rtype: n x m tensor
+    :param p: the perturbation vector with gradients
+    :type p: PyTorch FloatTensor object (n, m)
+    :return: gradients projected into the l∞-norm space
+    :rtype: PyTorch FloatTensor object (n, m)
     """
-    return torch.sign(gradient)
+    return p.grad.sign_()
 
-    def ltop(self, gradient, x):
-        """
-        This method projects a gradient into a blend of the l0- and l∞-norm
-        spaces.  We observe that the conservative nature of l0-targetted
-        attacks aids in finding adversarial examples with minimal budget,
-        however, the associated computational complexity can be
-        cost-prohibitive for datasets of even moderate dimensionality.
-        Conversely, l∞-targeted attacks find adversarial examples relatively
-        fast, at the cost of exhausting l0-budgets (and having relatively high
-        l2-budgets). This projection aims to achieve the best of both worlds,
-        by perturbing the top n features, as measured by the gradients, much
-        like the Constrained Saliency Projection (CSP) shown in
-        https://arxiv.org/pdf/2105.08619.pdf.
 
-        The same mechanisms to address l0-based optimization limitations are
-        included in this projection as well.
+def l0(p, clip, max_obj=True):
+    """
+    This function projects gradients into the l0-norm space. Specifically, this
+    is defined as taking the sign of the gradient component with the largest
+    magnitude (or top 1% of components, if there are more than 100 features)
+    and setting all other component gradients to zero. In addition, this
+    function zeroes any component whose direction would result in a
+    perturbation that exceeds the valid feature range defined by the clip
+    argument (otherwise optimizers would indefinitely perturb the same
+    feature).
 
-        :param gradient: batch of gradients to project
-        :type gradient: n x m tensor
-        :param x: current input associated with the gradient
-        :type x: n x m tensor
-        :param n: number of features to perturb
-        :type n: integer in [0, m]
-        :return: gradients projected into l0-norm space
-        :rtype: n x m tensor
-        """
+    :param p: the perturbation vector with gradients
+    :type p: PyTorch FloatTensor object (n, m)
+    :param clip: the range of allowable values for the perturbation vector
+    :type clip: tuple of PyTorch FloatTensor objects (samples, features)
+    :param max_obj: whether the used loss function is to be maximized
+    :type max_obj: boolean
+    :return: gradients projected into the l0-norm space
+    :rtype: PyTorch FloatTensor object (n, m)
+    """
+    valid_components = torch.logical_and(
+        *((p != c) or (p.grad.sign() != c.sign() * 1 if max_obj else -1) for c in clip)
+    )
+    bottom_k = p.grad.mul(valid_components).topk(
+        int(p.size(1) * 0.99), dim=1, largest=False
+    )
+    return p.grad.scatter_(dim=1, index=bottom_k.indices, src=0.0).sign_()
 
-        # address clipping deficiency
-        zeros_map = (x < 1) * (gradient < 0)
-        ones_map = (x > 0) * (gradient > 0)
-        top_n = torch.topk(torch.abs(gradient) * (zeros_map + ones_map), self.n, dim=1)
-        grad_map = (
-            torch.scatter(
-                torch.zeros_like(gradient),
-                dim=1,
-                index=top_n.indices,
-                src=top_n.values,
-            )
-            * gradient.sign()
-        )
 
-        return torch.sign(grad_map)
+def l2(p, minimum=torch.tensor(1e-8)):
+    """
+    This function projects gradients into the l2-norm space. Specifically, this
+    is defined as normalizing the gradients by thier l2-norm. The minimum
+    optional argument can be used to mitigate underflow.
 
-    def l0(self, gradient, x):
-        """
-        This method projects a gradient into the l0-norm space. Ostenisibly,
-        this projection serves as a "filter", where the component with the
-        largest magnitude is set to the sign of the component times one, while
-        all other components are set to zero. The implication being that an
-        optimizer who steps in the direction of this gradient will perturb one
-        and only one feautre, which is compliant with algorithms that optimize
-        over the l0-norm.
 
-        Moreover, l0-based optimization can face a "clipping" deficiency where
-        the optimal perturbation aims to go in a direction for a feature whose
-        value is already at the maximal or minimal clipping value. Thus,
-        post-clip, the feature value remains the same and the optimization
-        algorithm fails to move the input further. To address this limitation,
-        we ensure that features that are already at the edge of a clip by
-        zeroing out the gradients associated with such features (since PyTorch
-        optimizers apply perturbations via subtraction, features whose values
-        are zero and gradients are positive or values are one and gradients
-        negative have their gradients set to zero).
-
-        :param gradient: batch of gradients to project
-        :type gradient: n x m tensor
-        :param x: current input associated with the gradient
-        :type x: n x m tensor
-        :return: gradients projected into l0-norm space
-        :rtype: n x m tensor
-        """
-
-        # address clipping deficiency
-        zeros_map = (x < 1) * (gradient < 0)
-        ones_map = (x > 0) * (gradient > 0)
-        max_map = torch.max(torch.abs(gradient) * (zeros_map + ones_map), dim=1)
-        grad_map = (
-            torch.scatter(
-                torch.zeros_like(gradient),
-                dim=1,
-                index=max_map.indices.unsqueeze(1),
-                src=max_map.values.unsqueeze(1),
-            )
-            * gradient.sign()
-        )
-
-        return torch.sign(grad_map)
-
-    def l2(self, gradient, x, min_l2=torch.tensor(1e-8)):
-        """
-        This method projects a gradient into the l2-norm space. This projection
-        follows the direct definition of computing the l2-norm of a vector.
-        Importantly, unlike l0 and l-infinity, the l2-norm encodes magntidue
-        directly, and thus, it is sensible for the learning rate of the
-        attached optimizer to always be one when perturbing based on the
-        l2-norm.
-
-        :param gradient: batch of gradients to project
-        :type gradient: n x m tensor
-        :param x: current input associated with the gradient
-        :type x: n x m tensor
-        :param min_l2: minimum l2-norm to scale by (prevents underflow)
-        :type min_l2: float
-        :return: gradients projected into l0-norm space
-        :rtype: n x m tensor
-        """
-        return gradient / torch.max(
-            torch.linalg.norm(gradient, 2, dim=1, keepdim=True), min_l2
-        )
+    :param p: the perturbation vector with gradients
+    :type p: PyTorch FloatTensor object (n, m)
+    :return: gradients projected into the l2-norm space
+    :rtype: PyTorch FloatTensor object (n, m)
+    """
+    return p.grad.div_(p.grad.norm(2, dim=1, keepdim=True)).clamp_(minimum)
 
 
 if __name__ == "__main__":
