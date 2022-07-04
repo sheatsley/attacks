@@ -7,9 +7,9 @@ import itertools  # Functions creating iterators for efficietn looping
 import loss  # PyTorch-based custom loss functions
 import optimizers  # PyTorch-based custom optimizers
 import saliency  # Gradient manipulation heuristics to achieve adversarial goals
-import surface  # Classes for rapidly building cost surfaces
+import surface  # PyTorch-based models for crafting adversarial examples
 import torch  # Tensors and Dynamic neural networks in Python with strong GPU acceleration
-import traveler  # Classes for rapidly building optimizers
+import traveler  # PyTorch-based optimizers for crafting adversarial examples
 from utilities import print  # Use timestamped print
 
 # TODO
@@ -87,7 +87,7 @@ class Attack:
         :param model: neural network
         :type model: PyTorch Module-inherited object
         :param saliency_map: desired saliency map heuristic
-        :type saliency_map: saliency module callable
+        :type saliency_map: saliency module object
         :param surface_closure: subroutines after each backward pass
         :type surface_closure: tuple of callables
 
