@@ -4,21 +4,19 @@ Authors: Ryan Sheatsley & Blaine Hoak
 Thu June 30 2022
 """
 import torch  # Tensors and Dynamic neural networks in Python with strong GPU acceleration
+import traveler  # PyTorch-based optimizers for crafting adversarial examples
 
-# TODO
-# implement BPDA
-# track classes and other metadata on initilization of craft?
+# TODO:
+# add unit tests
 
 
 class Surface:
     """
-    This surface class serves to support computing gradients from arbitrary
-    combinations of loss functions, saliency maps, and lp-norms. Moreover, as a
-    consequence, it exposes models themselves as attributes so that various
-    hooks can be implemented to retrieve the current model loss, etc. The
-    methods defined within the class are designed to faciliate a gradient-like
-    abstraction for PyTorch-based optimizers (as described in the traveler
-    module).
+    The Surface class handles input gradient computation and manipulation via
+    arbitrary combinations of loss functions, models, saliency maps, and
+    lp-norms. Under the hood, Surface objects serve as intelligent wrappers for
+    PyTorch models and the methods defined within this class are designed to
+    facilitate crafting adversarial examples.
 
     :func:`__init__`: instantiates Surface objects
     :func:`__call__`: performs a single forwards & backwards pass
@@ -27,154 +25,133 @@ class Surface:
     """
 
     def __init__(
-        self,
-        model,
-        saliency,
-        loss=loss.Loss(
-            torch.nn.CrossEntropyLoss,
-            max_obj=True,
-            x_req=False,
-            reduction="None",
-        ),
-        norm=float("inf"),
-        jacobian="model",
-        top_n=0.01,
+        self, loss, model, norm, saliency_map, change_of_variables=False, closure=()
     ):
         """
-        This method instantiates a surface object with a variety of attributes
-        necessary for supporting (1) arbitrary objective functions, (2) proper
-        gradient computation for optimization problems that are defined to
-        maximize or minimize objecitve functions, (3) support for arbitrary
-        gradient manipulation heuristics (i.e., saliency maps from the Saliency
-        module) and (4) casting gradients into the appropriate lp-norm space
-        (if the objective function does not explicitly rely on a norm) as to
-        abstract such behavior from arbitrary optimizers.
+        This method instantiates Surface objects with a variety of attributes
+        necessary for the remaining methods in this class. Conceputally,
+        Surfaces are responsible for producing gradients from inputs, and thus,
+        the following attributes are collected: (1) a PyTorch-based loss object
+        from the loss module, (2) a PyTorch-based model object from
+        Scikit-Torch ([sktorch_url]), (3) the lp-norm to project gradients
+        into, (4) the saliency map to apply, and (5) a tuple of callables to
+        run on the input passed in to __call__. Notably, the
+        change_of_variables argument (configured in the traveler module)
+        determines if inputs should be mapped out of the tanh-space before
+        passed into models.
 
-        :param model: neural network
-        :type model: Model object
         :param loss: objective function to differentiate
-        :type loss: Loss object
-        :param saliency: desired saliency map heuristic
-        :type saliency: Saliency object
+        :type loss: loss module object
+        :param model: feedforward differentiable neural network
+        :type model: Scikit-Torch Model-inherited object
         :param norm: lp-space to project gradients into
-        :type norm: int; one of: 0, 2, or float("inf")
-        :param jacobian: source to compute jacobian from
-        :type jacobian: string; one of "model" or "bpda"
-        :param top_n: percent perturbations per iteration for l0 attacks
-        :type top_n: float in (0,1]
+        :type norm: surface module callable
+        :param saliency_map: desired saliency map heuristic
+        :type saliency_map: saliency module object
+        :param change_of_variables: whether to map inputs out of tanh-space
+        :type change_of_variables: boolean
+        :param closure: subroutines to run at the end of __call__
+        :type closure: tuple of callables
         :return: a surface
         :rtype: Surface object
         """
-        self.model = model
-        self.saliency = saliency
         self.loss = loss
+        self.model = model
         self.norm = norm
-        self.nmap = {float("inf"): self.linf, 0: self.ltop, 2: self.l2}
-        self.jacobian = jacobian
-
-        # convert top n percentage to discrete based on dimensionality
-        self.n = -(-model.features // int(1 / top_n))
+        self.saliency_map = saliency_map
+        self.change_of_variables = (
+            traveler.tanh_space if change_of_variables else lambda x: x
+        )
+        self.params = {
+            "loss": type(loss).__name__,
+            "model": type(model).__name__,
+            "lp": norm.__name__,
+            "smap": type(saliency_map).__name__,
+        }
         return None
 
-    def backward(self, x, y, cov=False):
+    def __call__(self, x, y, p):
         """
-        This function computes the gradient of the loss, with respect to x.
-        First, we need to check if the application of the saliency map (in step
-        two) requires a Jacobian. Since PyTorch does not natively support
-        computing Jacobians, we must perform some setup so that it can be
-        properly computed efficiently. The setup involes creating n-copies of
-        the input x, where n is the number of classes, and performing
-        Specifically, it first computes:
+        This method is the heart of Surface objects. It performs four
+        functions: it (1) computes the gradient of the loss, with respect to
+        the input (e.g., a perturbation vector) while expanding the input by a
+        number-of-classes factor (largley based on
+        https://gist.github.com/sbarratt/37356c46ad1350d4c30aefbd488a4faa), (2)
+        manipulates the computed gradients as defined by a saliency map, (3)
+        projects the resulant gradients into the specified lp-space, and (4)
+        calls closure subroutines before returning. Notably, this method
+        assumes the input is attached to an optimizer that will use the
+        computed gradients.
 
-                    x.grad = self.loss(self.model(x), y).backward()
-
-        Which populates x.grad with the gradient of the loss. Then, a saliency
-        map can be applied to the gradient if so desired:
-
-                        x.grad = self.saliency.apply(x.grad)
-
-        Afterwards, if definition of loss does not already have an lp-norm,
-        x.grad is projected into the appropriate norm space, i.e.:
-
-                            x.grad = self.norm(x.grad)
-
-        At this time, when a PyTorch optimizer performs a step, the appropriate
-        perturbation is then applied to x transparently.
-
-        :param x: the batch of inputs to differentiate with respect to
-        :type x: n x m tensor
-        :param y: the batch of labels/initial predictions of x
-        :type y: n-length tensor
-        :param cov: if change of variables will be applied
-        :type cov: bool
-        :return: nothing; x.grad is populated correctly
+        :param x: the batch of inputs to produce adversarial examples from
+        :type x: PyTorch FloatTensor object (n, m)
+        :param y: the labels (or initial predictions) of x
+        :type y: PyTorch Tensor object (n,)
+        :param p: the perturbation vectors used to craft adversarial examples
+        :type p: PyTorch FloatTensor object (n, m)
+        :return: None
         return NoneType
         """
 
-        # compute model jacobian
-        if self.jacobian == "model":
-
-            # avoid full model jacobian if using identity saliency map
-            classes = self.model.model[-1].out_features
-            x_jac, y_jac, classes = (
-                (x, y, 1)
-                if self.saliency.stype == "identity"
-                else (
-                    x.repeat_interleave(classes, dim=0),
-                    torch.arange(classes).repeat(x.size(0)),
-                    classes,
-                )
+        # expand inputs if components require a full model Jacobian
+        x_j, y_j, p_j, c_j = (
+            (
+                x.repeat_interleave(c_j),
+                torch.arange(c_j).repeat(x.size(0)),
+                p.repeat_interleave(c_j),
+                c_j,
             )
-            x_jac.requires_grad = True
-            # map w back to x and track gradients
-            # x_j = x_jac.tanh().add(1).div(2) if cov is True else x_jac
-            # reattach transformed x to the loss
-            # (skip every class-row if saliency is not identity)
-            # if self.saliency.stype != "identity":
-            #     self.loss.x = x_j[::classes]
-            # else:
-            #     self.loss.x = x_j
-            logits = self.loss(self.model(x_jac), y_jac) * (
-                -1 if self.loss.max_obj else 1
-            )
-            logits.backward(torch.ones(x_jac.size(0)))
-            x_jac.requires_grad = False
-        else:
-            raise NotImplementedError(self.jacobian)
+            if (c_j := self.model.classes * self.saliency_map.jac_req)
+            else (x, y, p, 1)
+        )
 
-        if cov is True:
-            x_jac.grad *= (
-                1 - torch.tanh(torch.arctanh(0.999999 * (2 * x_jac - 1))) ** 2
-            ) / 2
-        # apply saliency map (and norm, if applicable) to the gradient
-        saliency_scores = self.saliency.map(
-            x_jac.grad.view(-1, classes, x_jac.size(1)),
-            logits.view(-1, classes),
+        # map out of tanh-space, perform forward & backward pass
+        p_j.requires_grad = True
+        loss = self.loss(self.model(self.change_of_variables(x_j + p_j)))
+        grads = torch.autograd.grad(loss, p_j, torch.ones_like(loss))
+        p_j.requires_grad = False
+
+        # apply saliency map and lp-norm filter
+        smap_grads = self.saliency_map(
+            grads.view(-1, c_j, grads.size(1)),
+            loss.view(-1, self.model.classes),
             y,
-            self.norm,
         )
-        x.grad = (
-            saliency_scores
-            if ((self.saliency.applies_norm) and (self.norm == 2))
-            else self.nmap[self.norm](saliency_scores, x)
+        final_grads = (
+            self.norm(smap_grads, self.clip, self.loss.max_obj)
+            if self.norm is l0
+            else self.norm(smap_grads)
         )
+
+        # call closure subroutines and attach grads to the perturbation vector
+        [f() for f in self.closure]
+        p.grad = final_grads
         return None
 
+    def __repr__(self):
+        """
+        This method returns a concise string representation of surface components.
 
-def linf(p):
+        :return: the surface components
+        :rtype: str
+        """
+        return f"Surface({self.params})"
+
+
+def linf(g):
     """
     This function projects gradients into the l∞-norm space. Specifically, this
     is defined as taking the sign of the gradients.
 
-    :param p: the perturbation vector with gradients
-    :type p: PyTorch FloatTensor object (n, m)
+    :param g: the gradients of the perturbation vector
+    :type g: PyTorch FloatTensor object (n, m)
     :return: gradients projected into the l∞-norm space
     :rtype: PyTorch FloatTensor object (n, m)
     """
-    return p.grad.sign_()
+    return g.grad.sign_()
 
 
-def l0(p, clip, max_obj=True):
+def l0(g, clip, max_obj):
     """
     This function projects gradients into the l0-norm space. Specifically, this
     is defined as taking the sign of the gradient component with the largest
@@ -185,8 +162,8 @@ def l0(p, clip, max_obj=True):
     argument (otherwise optimizers would indefinitely perturb the same
     feature).
 
-    :param p: the perturbation vector with gradients
-    :type p: PyTorch FloatTensor object (n, m)
+    :param g: the gradients of the perturbation vector
+    :type g: PyTorch FloatTensor object (n, m)
     :param clip: the range of allowable values for the perturbation vector
     :type clip: tuple of PyTorch FloatTensor objects (samples, features)
     :param max_obj: whether the used loss function is to be maximized
@@ -195,27 +172,27 @@ def l0(p, clip, max_obj=True):
     :rtype: PyTorch FloatTensor object (n, m)
     """
     valid_components = torch.logical_and(
-        *((p != c) or (p.grad.sign() != c.sign() * 1 if max_obj else -1) for c in clip)
+        *((g != c) or (g.grad.sign() != c.sign() * 1 if max_obj else -1) for c in clip)
     )
-    bottom_k = p.grad.mul(valid_components).topk(
-        int(p.size(1) * 0.99), dim=1, largest=False
+    bottom_k = g.grad.mul(valid_components).topk(
+        int(g.size(1) * 0.99), dim=1, largest=False
     )
-    return p.grad.scatter_(dim=1, index=bottom_k.indices, src=0.0).sign_()
+    return g.grad.scatter_(dim=1, index=bottom_k.indices, value=0).sign_()
 
 
-def l2(p, minimum=torch.tensor(1e-8)):
+def l2(g, minimum=torch.tensor(1e-8)):
     """
     This function projects gradients into the l2-norm space. Specifically, this
     is defined as normalizing the gradients by thier l2-norm. The minimum
     optional argument can be used to mitigate underflow.
 
 
-    :param p: the perturbation vector with gradients
-    :type p: PyTorch FloatTensor object (n, m)
+    :param g: the gradients of the perturbation vector
+    :type g: PyTorch FloatTensor object (n, m)
     :return: gradients projected into the l2-norm space
     :rtype: PyTorch FloatTensor object (n, m)
     """
-    return p.grad.div_(p.grad.norm(2, dim=1, keepdim=True)).clamp_(minimum)
+    return g.grad.div_(g.grad.norm(2, dim=1, keepdim=True)).clamp_(minimum)
 
 
 if __name__ == "__main__":
