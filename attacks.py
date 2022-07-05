@@ -135,6 +135,12 @@ class Attack:
         self.params = {"α": alpha, "ε": epsilon, "epochs": epochs}
 
         # instantiate traveler, surface, and necessary subcomponents
+        norm_map = {0: surface.l0, 1: surface.linf, 2: surface.l2}
+        saliency_map = (
+            saliency_map(norm_map[norm])
+            if saliency_map is saliency.DeepFoolSaliency
+            else saliency_map()
+        )
         loss = loss()
         optimizer = optimizer(
             lr=alpha,
@@ -144,7 +150,7 @@ class Attack:
         self.traveler = traveler.Traveler(
             change_of_variables, optimizer, random_restart, traveler_closure
         )
-        self.surface = surface.Surface(model, saliency, loss, norm, surface_closure)
+        self.surface = surface.Surface(model, saliency_map, loss, norm, surface_closure)
         return None
 
     def __repr__(self):
