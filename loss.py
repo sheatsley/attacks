@@ -156,10 +156,10 @@ class CWLoss(torch.nn.Module):
         y_hot = torch.nn.functional.one_hot(y).bool()
         yth_logit = logits.masked_select(y_hot)
         max_logit, _ = logits.masked_select(~y_hot).view(-1, logits.size(1) - 1).max(1)
-        logdiff = torch.clamp(yth_logit - max_logit, min=-self.k)
+        log_diff = torch.clamp(yth_logit - max_logit, min=-self.k)
 
         # save current loss for optimizers later
-        curr_loss = lp + self.c * logdiff
+        curr_loss = lp + self.c * log_diff
         self.curr_loss = curr_loss.detatch()
         return curr_loss
 
