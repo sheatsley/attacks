@@ -19,6 +19,7 @@ class CrossEntropyLoss(torch.nn.CrossEntropyLoss):
     a reference to perturbation vectors is not needed by this class.
 
     :func:`__init__` instantiates a CrossEntropyLoss object
+    :func:`forward`: returns the loss for a given batch of inputs
     """
 
     del_req = False
@@ -160,6 +161,73 @@ class CWLoss(torch.nn.Module):
 
         # save current loss for optimizers later
         curr_loss = lp + self.c * log_diff
+        self.curr_loss = curr_loss.detatch()
+        return curr_loss
+
+
+class DLRLoss(torch.nn.Module):
+    """
+    This class implements the Difference of Logits Ratio loss function, as
+    shown in https://arxiv.org/pdf/2003.01690.pdf. Specifically, the loss
+    is defined as:
+
+            -((f(x + Δ)_y - max(f(x + Δ)_i:i ≠ y)) / (π_1 - π_3))
+
+    where f returns the model logits, x is the original input, Δ is the current
+    perturbation vector to produce adversarial examples, y is the true class, i
+    is the next closest class (as measured by the moodel logits), and π defines
+    the descending order of the model logits (that is, the denominator
+    represents the difference between the largest and 3rd largest model logit).
+    Like other losses, we store the last computed loss and expose attributes so
+    that optimizers maximize this function and that a refernece to the
+    perturbation vector is not needed.
+
+    :func:`__init__`: instantiates a DLRLoss  object
+    :func:`forward`: returns the loss for a given batch of inputs
+    """
+
+    del_req = False
+    max_obj = True
+
+    def __init__(self):
+        """
+        This method instantiates an IdentityLoss object. It accepts no
+        arguments.
+
+        :return: Identity loss
+        :rtype: IdentityLoss object
+        """
+        super().__init__()
+        return None
+
+    def forward(self, logits, y, minimum=torch.tensor(1e-8)):
+        """
+        This method computes the loss described above. Specifically, it
+        computes the division of: (1) the logit difference between the yth
+        logit and largest non-yth logit, and (2) the difference between the
+        largest logit and 3rd largest logit. Notably, for binary classification
+        tasks the 2nd largest logit is returned.
+
+        :param logits: the model logits
+        :type logits: PyTorch FloatTensor object (n, c)
+        :param y: the labels (or initial predictions) of the inputs (e.g., x)
+        :type y: PyTorch Tensor object (n,)
+        :param minimum: minimum gradient value (to mitigate underflow)
+        :type minimum: PyTorch FloatTensor object (1,)
+        :return: the current loss
+        :rtype: PyTorch FloatTensor (n,)
+        """
+
+        # compute logit differences
+        y_hot = torch.nn.functional.one_hot(y).bool()
+        yth_logit = logits.masked_select(y_hot)
+        max_logit, _ = logits.masked_select(~y_hot).view(-1, logits.size(1) - 1).max(1)
+        log_diff = yth_logit - max_logit
+
+        # compute ordered logit differences
+        log_desc = logits.sort(dim=1, descending=True).values
+        pi_diff = log_desc[:, 0] - log_desc[:, min(2, logits.size(1) - 1)]
+        curr_loss = -(log_diff / pi_diff.clam_(minimum))
         self.curr_loss = curr_loss.detatch()
         return curr_loss
 
