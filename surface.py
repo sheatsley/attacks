@@ -189,6 +189,8 @@ def l2(g, minimum=torch.tensor(1e-8)):
 
     :param g: the gradients of the perturbation vector
     :type g: PyTorch FloatTensor object (n, m)
+    :param minimum: minimum gradient value (to mitigate underflow)
+    :type minimum: PyTorch FloatTensor object (1,)
     :return: gradients projected into the l2-norm space
     :rtype: PyTorch FloatTensor object (n, m)
     """
