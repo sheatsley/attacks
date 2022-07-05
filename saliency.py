@@ -12,25 +12,26 @@ import torch  # Tensors and Dynamic neural networks in Python with strong GPU ac
 class DeepFoolSaliency:
     """
     This class casts a portion of the DeepFool attack
-    (https://arxiv.org/pdf/1511.04599.pdf) as a saliency map. Specifically, DeepFool
-    adds the following perturbation to inputs:
+    (https://arxiv.org/pdf/1511.04599.pdf) as a saliency map. Specifically,
+    DeepFool adds the following perturbation to inputs:
 
-            |f_y(x + Δ) - f_i(x + Δ)| / ||∇f_y(x + ∇) - ∇f_i(x + ∇)||q
-                            * ||∇f_y(x + Δ) - ∇f_i(x + Δ)||p
+            |f(x + Δ)_y - f(x + Δ)_i| / ||∇f(x + ∇)_y - ∇f(x + ∇)_i||q
+                            * ||∇f(x + Δ)_y - ∇f(x + Δ)_i||p
 
-    where f returns the model logits, y is the true class, x is the original
-    input, Δ is the current perturbation vector to produce adversarial
-    examples, i is next closest class (as measured by the model logits), ∇ is
-    the gradient of the model with respect to Δ, q is defined as p / (p - 1),
-    and p is the desired lp-norm. Algorithmically, the DeepFool saliency map
-    computes logit- and gradient-differences, where the logit difference
-    (normalized by the q-norm of the gradient difference) serves as the
-    perturbation strength (i.e., α), while the gradient difference serves as
-    the perturbation direction. Moreover, since this saliency map requires the
-    gradient differences to be normalized, it implements a closure subroutine
-    to multiply the resultant normalized gradients by the computed normalized
-    logit differences. Finally, this class defines the jac_req attribute to
-    signal Surface objects that this class expects a full model Jacobian.
+    where f returns the model logits, x is the original input, Δ is the current
+    perturbation vector to produce adversarial examples, y is the true class, i
+    is next closest class (as measured by logit differences, divided by normed
+    gradient differences), ∇ is the gradient of the model with respect to Δ, q
+    is defined as p / (p - 1), and p is the desired lp-norm. Algorithmically,
+    the DeepFool saliency map computes logit- and gradient-differences, where
+    the logit difference (normalized by the q-norm of the gradient difference)
+    serves as the perturbation strength (i.e., α), while the gradient
+    difference serves as the perturbation direction. Moreover, since this
+    saliency map requires the gradient differences to be normalized, it
+    implements a closure subroutine to multiply the resultant normalized
+    gradients by the computed normalized logit differences. Finally, this class
+    defines the jac_req attribute to signal Surface objects that this class
+    expects a full model Jacobian.
 
     :func:`__init__`: instantiates JacobianSaliency objects.
     :func:`__call__`: computes differences and returns gradient differences
