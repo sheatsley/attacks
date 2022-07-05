@@ -93,7 +93,7 @@ class Surface:
         return NoneType
         """
 
-        # expand inputs if components require a full model Jacobian
+        # expand inputs if components require a full model jacobian
         x_j, y_j, p_j, c_j = (
             (
                 x.repeat_interleave(c_j),
@@ -114,8 +114,8 @@ class Surface:
         # apply saliency map and lp-norm filter
         smap_grads = self.saliency_map(
             grads.view(-1, c_j, grads.size(1)),
-            loss.view(-1, self.model.classes),
-            y,
+            loss=loss.view(-1, self.model.classes),
+            y=y,
         )
         final_grads = (
             self.norm(smap_grads, self.clip, self.loss.max_obj)
