@@ -1,12 +1,123 @@
 """
-This module defines the saliency class referenced in [paper_url].
-Authors: Ryan Sheatsley & Blaine Hoak
-Wed Jul 21 2021
+This module defines custom PyTorch-based saliency maps.
+Authors: Blaine Hoak & Ryan Sheatsley
+Tue Jul 25 2022
 """
 import torch  # Tensors and Dynamic neural networks in Python with strong GPU acceleration
 
 # TODO:
-# add comments for unit test
+# add unit tests
+
+
+class DeepFoolSaliency:
+    """
+    This class casts a portion of the DeepFool attack
+    (https://arxiv.org/pdf/1511.04599.pdf) as a saliency map. Specifically, DeepFool
+    applies
+    """
+
+    jac_req = True
+
+
+class IdentitySaliency:
+    """
+    This class implements an identity saliency map. Conceptually, it serves as
+    a placeholder for attacks that do not apply saliency map. As all saliency
+    maps anticipate input gradients of shape (samples, classes, features), the
+    identity saliency map simply squeezes the classes dimension (which is
+    expected to be 1, given that this saliency map does not require a full
+    model Jacobian, as defined by the jac_req attribute).
+
+    :func:`__init__`: instantiates IdentitySaliency objects.
+    :func:`__call__`: squeezes the classes dimension
+    """
+
+    jac_req = False
+
+    def __init__(self):
+        """
+        This method instantiates an IdentitySaliency object. It accepts no arguments.
+
+        :return: an identity saliency map
+        :rtype: IdentitySaliency object
+        """
+        return None
+
+    def __call__(self, g, **kwargs):
+        """
+        This method simply squeezes the classes dimension of the input gradient
+        g. To provide a single interface across all saliency maps, keyword
+        arguments are also defined.
+
+        :param g: the gradients of the perturbation vector
+        :type g: PyTorch FloatTensor object (n, c, m)
+        :param kwargs: miscellaneous keyword arguments
+        :type kwargs: dict
+        :return: squeezed gradients of the perturbation vector
+        :rtype: PyTorch FloatTensor object (n, m)
+        """
+        return g.squeeze_()
+
+
+class JacobianSaliency:
+    """
+    This class implements a similar saliency map used in the Jacobian-based
+    Saliency Map Approach (JSMA) attack, as shown in
+    https://arxiv.org/pdf/1511.07528.pdf. Specifically, the Jacobian saliency
+    map as used in [paper_url] is defined as:
+
+         |J_y| * Σ_[i ≠ y] J_i if sign(J_y) ≠ sign(Σ_[i ≠ y] J_i) else 0
+
+    where J is the model Jacobian, y is the true class, and i are all other
+    classes. Algorithmically, the Jacobian saliency map aggregates gradients in
+    each row (i.e., class) such that each column (i.e., feature) is set equal
+    to the negative of the product of the yth row and the sum of non-yth rows
+    (i.e., i) if and only if the signs of the yth row and sum of non-yth rows
+    is different. Conceptually, this prioritizes features whose gradients both:
+    (1) point away from the true class, and (2) point towards non-true classes.
+    Finally, this class defines the jac_req attribute to signal Surface objects
+    that this class expects a full model Jacobian.
+
+    :func:`__init__`: instantiates JacobianSaliency objects.
+    :func:`__call__`: applies a JSMA-like heuristic
+    """
+
+    jac_req = True
+
+    def __init__(self):
+        """
+        This method instantiates a JacobianSaliency object. It accepts no arguments.
+
+        :return: a Jacobian saliency map
+        :rtype: JacobianSaliency object
+        """
+        return None
+
+    def __call__(self, g, y, **kwargs):
+        """
+        This method applies the heuristic defined above. Specifically, this:
+        (1) computes the the sum of the gradients for non-true classes and
+        zeroes out components whose sum has the same sign as the yth row, (2)
+        computes the product of the yth row with non-yth rows, and (3) returns
+        the negative of the result. Finally, to provide a single interface
+        across all saliency maps, keyword arguments are also defined.
+
+        :param g: the gradients of the perturbation vector
+        :type g: PyTorch FloatTensor object (n, c, m)
+        :param y: the labels (or initial predictions) of x
+        :type y: PyTorch Tensor object (n,)
+        :param kwargs: miscellaneous keyword arguments
+        :type kwargs: dict
+        :return: JSMA-like manipulated gradients
+        :rtype: PyTorch FloatTensor object (n, m)
+        """
+
+        # get yth row and "gather" ith rows by subtracting yth row
+        yth_row = g[torch.arange(g.size(0)), y, :]
+        ith_row = g.sum(1) - yth_row
+
+        # zero out components whose yth and ith signs are equal and compute product
+        return -(yth_row.sign() != ith_row.sign()) * yth_row * ith_row
 
 
 class SaliencyMap:
@@ -40,32 +151,6 @@ class SaliencyMap:
         self.map = getattr(self, saliency_type)
         self.stype = saliency_type
         return None
-
-    def identity(self, gradient, *args):
-        """
-        The identity method serves as a NOP for attacks that lack a saliency
-        map construction (i.e., attacks that rely on gradient-based information
-        of cost functions to apply perturbations). As such, there are two forms
-        of implementations to support an identity saliency map: (1) if a model
-        jacobian is used as input, then return the the y-truth component, or
-        (2) if a cost gradient is used as input, then return it as-is. In this
-        implementation, we opt for (2), given that PyTorch is designed for
-        computing vector-Jacobian (or Jacobian-vector) products, and thus,
-        Jacobian computations are computationally expensive. As shown in
-        [paper_url], we measure performance characteristics of attacks, and
-        thus, unlike all other methods in this module, we expect a gradient as
-        input to this method (Note that the Surface module will still return a
-        "Jacobian-like" shape of n x 1 x m, which is why we apply a squeeze
-        operation).
-
-        :parm gradient: gradient of a cost function
-        :type gradient: n x 1 x m tensor
-        :param args: arguments to other methods (to support pipelining)
-        :type args: list
-        :return: the gradient as-is
-        :rtype: n x m matrix
-        """
-        return gradient.squeeze()
 
     def jsma(self, j, logits, true_class, p):
         """
@@ -237,18 +322,5 @@ class SaliencyMap:
 
 
 if __name__ == "__main__":
-    """"""
-    jac = torch.randn((15, 3, 5))
-    logits = torch.randn((15, 3))
-    ytrue = torch.argmax(logits, dim=1)
-
-    sm = SaliencyMap("jsma")
-    jsma = sm.map(jac, logits, ytrue, 0)
-    sm = SaliencyMap("identity")
-    ism = sm.map(jac, logits, ytrue, 1)
-
-    sm = SaliencyMap("deepfool")
-    dsm0 = sm.map(jac, logits, ytrue, 0)
-    dsm2 = sm.map(jac, logits, ytrue, 2)
-    dsminf = sm.map(jac, logits, ytrue, float("inf"))
+    """ """
     raise SystemExit(0)
