@@ -13,10 +13,103 @@ class DeepFoolSaliency:
     """
     This class casts a portion of the DeepFool attack
     (https://arxiv.org/pdf/1511.04599.pdf) as a saliency map. Specifically, DeepFool
-    applies
+    adds the following perturbation to inputs:
+
+            |f_y(x + Δ) - f_i(x + Δ)| / ||∇f_y(x + ∇) - ∇f_i(x + ∇)||q
+                            * ||∇f_y(x + Δ) - ∇f_i(x + Δ)||p
+
+    where f returns the model logits, y is the true class, x is the original
+    input, Δ is the current perturbation vector to produce adversarial
+    examples, i is next closest class (as measured by the model logits), ∇ is
+    the gradient of the model with respect to Δ, q is defined as p / (p - 1),
+    and p is the desired lp-norm. Algorithmically, the DeepFool saliency map
+    computes logit- and gradient-differences, where the logit difference
+    (normalized by the q-norm of the gradient difference) serves as the
+    perturbation strength (i.e., α), while the gradient difference serves as
+    the perturbation direction. Moreover, since this saliency map requires the
+    gradient differences to be normalized, it implements a closure subroutine
+    to multiply the resultant normalized gradients by the computed normalized
+    logit differences. Finally, this class defines the jac_req attribute to
+    signal Surface objects that this class expects a full model Jacobian.
+
+    :func:`__init__`: instantiates JacobianSaliency objects.
+    :func:`__call__`: computes differences and returns gradient differences
+    :func:`closure`: applies normalized logit differences
     """
 
     jac_req = True
+
+    def __init__(self, q):
+        """
+        This method instantiates a DeepFoolSaliency object. As described above,
+        ith class is defined as the minimum logit difference normalized by the
+        q-norm of the logit differences. Thus, upon initilization, this class
+        saves q as an attribute.
+
+        :param q: the lp-norm to apply
+        :return: a Jacobian saliency map
+        :rtype: JacobianSaliency object
+        """
+        self.q = q
+        return None
+
+    def __call__(self, g, loss, y, minimum=torch.tensor(1e-8), **kwargs):
+        """
+        This method applies the heuristic defined above. Specifically, this
+        computes the logit and gradient differences between the true class
+        and closest non-true class. It saves these differences as attributes
+        to be used later during Surface closure subroutines. Finally, it
+        returns the gradient-differences to be normalized by the appropriate
+        lp-norm function in the surface module.
+
+        :param g: the gradients of the perturbation vector
+        :type g: PyTorch FloatTensor object (n, c, m)
+        :param logits: the current loss (or logits) used to compute g
+        :type logits: PyTortch FloatTensor object (n,)
+        :param y: the labels (or initial predictions) of x
+        :type y: PyTorch Tensor object (n,)
+        :param minimum: minimum gradient value (to mitigate underflow)
+        :type minimum: PyTorch FloatTensor object (1,)
+        :param kwargs: miscellaneous keyword arguments
+        :type kwargs: dict
+        :return: gradient differences as defined by DeepFool
+        :rtype: PyTorch FloatTensor object (n, m)
+        """
+
+        # retrieve yth gradient and logit
+        y_hot = torch.nn.functional.one_hot(y).bool()
+        yth_grad = g[y_hot]
+        yth_logit = loss.masked_select(y_hot)
+
+        # retrieve all non-yth gradients and logits
+        other_grad = g[~y_hot].view(g.size(0), -1, g.size(2))
+        other_logits = loss.masked_select(~y_hot)
+
+        # compute ith class
+        grad_diffs = (other_grad - yth_grad).norm(self.q, dim=1).clamp_(minimum)
+        logit_diffs = (other_logits - yth_logit).abs_()
+        ith_logit_diff, i = (logit_diffs / grad_diffs).topk(1, dim=1, largest=False)
+
+        # save normed ith logit differences and return ith gradient differences
+        self.ith_logit_diff = ith_logit_diff
+        ith_grad_diff = grad_diffs[torch.arange(grad_diffs.size(0)), i.flatten(), :]
+        return ith_grad_diff
+
+    def closure(self, g):
+        """
+        This method applies the remaining portion of the DeepFool saliency map
+        described above. Specifically, when this method is called, gradients
+        are assumed to be normalized via the lp functions within the Surface
+        module, and thus, the remaining portion of the DeepFool saliency map is
+        to multiply by the resultant gradients by the normalized logit
+        differences computed within __call__.
+
+        :param g: the (lp-normalized) gradients of the perturbation vector
+        :type g: PyTorch FloatTensor (n, m)
+        :return: finalized gradients for optimizers to step into
+        :rtype: PyTorch FloatTensor (n, m)
+        """
+        return g.mul_(self.ith_logit_diff)
 
 
 class IdentitySaliency:
@@ -117,208 +210,8 @@ class JacobianSaliency:
         ith_row = g.sum(1) - yth_row
 
         # zero out components whose yth and ith signs are equal and compute product
-        return -(yth_row.sign() != ith_row.sign()) * yth_row * ith_row
-
-
-class SaliencyMap:
-    """
-    The SaliencyMap class serves as a generalized framework for the methods
-    implemented acrosss all saliency maps. When used on its own, this class
-    operates as an "identity" saliency map by returning an unmodified version
-    of what was passed into it. This SaliencyMap is largely for the purposes of
-    running an attack that does not inherently use a saliency map while keeping
-    a generalized framework for an attack. Moreover, it also contains logic to
-    support parameterized exponentiation on the scalar part of the saliency
-    map. For the methods defined below, we use n to be the number of samples, c
-    to be the number of classes, and m to be the number of features. This class
-    contains the following methods:
-
-    :func `__init__`: initializes bookkeeping parameters
-    :func `identity`: returns the input as-is (expects a gradient)
-    :func `jsma`: computes the saliency used in the Adapative JSMA
-    :func `deepfool`: casts the DeepFool attack as a saliency map
-    """
-
-    def __init__(self, saliency_type):
-        """
-        This function initializes the general SaliencyMap class.
-        It takes the following arguments:
-
-        :param saliency_type: the type of saliency map to use
-        :type saliency_type: string; one of "identity", "jsma", or "deepfool"
-        """
-        self.applies_norm = True if saliency_type == "deepfool" else False
-        self.map = getattr(self, saliency_type)
-        self.stype = saliency_type
-        return None
-
-    def jsma(self, j, logits, true_class, p):
-        """
-        *Insert description here*
-
-        :param j: jacobian matrix
-        :type j: n x c x m tensor
-        :param logits: model logits (or loss output)
-        :type logits: n x c matrix
-        :param true_class: class labels
-        :type true_class: n-length vector
-        :param p: the lp-norm to be applied to the saliency map
-        :type p: int
-        :return: applied AJSMA saliency map
-        :rtype: n x m matrix
-        """
-
-        # get y true row of jacobian, unsqueeze to nx1, repeat class across m
-        # features to get nxm, unsqueeze to get nx1xm
-        ytrue = true_class.unsqueeze(1).repeat(1, j.shape[-1]).unsqueeze(1)
-        ytruejac = torch.gather(j, dim=1, index=ytrue).squeeze(1)
-
-        # sum all the jacobian class rows, subtract the true class row to get
-        # the sum of all nontrue classes
-        nontruejac = torch.sum(j, dim=1) - ytruejac
-
-        # since we do not want to pertub if the ytruejac and nontrue jac are
-        # the same sign, we can zero this by multiplying by the sign
-        # differences (if they are the same, this will be zero) this will also
-        # ensure our final signage is correct for the elements we do want to
-        # perturb
-        signdiff = (torch.sign(ytruejac) - torch.sign(nontruejac)) / 2
-        salmap = signdiff * ytruejac * nontruejac
-        return -salmap
-
-    def deepfool(self, j, logits, true_class, p=2):
-        """
-        *Insert description here*
-
-        :param j: jacobian matrix
-        :type j: n x c x m tensor
-        :param logits: model logits (or loss output)
-        :type logits: n x c matrix
-        :param true_class: class labels
-        :type true_class: n-length vector
-        :param p: the lp-norm to be applied to the saliency map
-        :type p: int
-        :param λ: exponentiation parameter (original attack is λ=1.0)
-        :type λ: float
-        :param λ_op: sets the saliency map compoentns to be exponentiated
-        :type λ_op: string; one of: "scalar", "vector", or "all"
-        :return: applied DeepFool saliency map
-        :rtype: n x m matrix
-        """
-
-        # get y true row of jacobian, unsqueeze to nx1, repeat class across m
-        # features to get nxm, unsqueeze to get nx1xm
-        ytrue = true_class.unsqueeze(1).repeat(1, j.shape[-1]).unsqueeze(1)
-        ytruejac = torch.gather(j, dim=1, index=ytrue)
-
-        # get true logit row, unsqueeze to nx1 and gather
-        ytruelogit = torch.gather(logits, dim=1, index=true_class.unsqueeze(1))
-
-        # taking the difference between true and other classes jacobian and
-        # logits to determine target class
-        jdiff = j - ytruejac
-        logitdiff = logits - ytruelogit
-
-        # # taking norm based on p across features and adding small value to avoid div by zero
-        # normexp = 1 if p == float("inf") or p == 0 else p
-        # jdiffnorm = (
-        #     torch.pow(torch.pow(torch.abs(jdiff), normexp).sum(dim=2), 1 / normexp)
-        #     + 10e-8
-        # )
-
-        # # getting target class based on min distance from true class
-        # dist = torch.abs(logitdiff) / jdiffnorm
-        # distinf = dist.scatter(
-        #     dim=1,
-        #     index=true_class.unsqueeze(1),
-        #     src=torch.ones_like(dist) * float("inf"),
-        # )
-        # l = torch.argmin(distinf, dim=1)
-
-        # logitdiff_l = torch.gather(torch.abs(logitdiff), dim=1, index=l.unsqueeze(1))
-        # jdiff_l = torch.gather(
-        #     jdiff, dim=1, index=l.unsqueeze(1).repeat(1, jdiff.shape[-1]).unsqueeze(1)
-        # ).squeeze(1)
-
-        # if p == 2:
-        #     salmap = (
-        #         jdiff_l
-        #         * logitdiff_l
-        #         / ((jdiff_l ** 2).sum(dim=1, keepdim=True) + torch.tensor(10e-8))
-        #     )
-        # else:
-        #     # if not the l2 norm, then we take the norm in the surface
-        #     salmap = jdiff_l
-        # salmap = torch.nan_to_num(salmap, nan=0.0, posinf=None, neginf=None)
-        # return -salmap
-        # taking norm based on p across features and adding small value to avoid div by zero
-        jdiffnorm = (
-            torch.linalg.norm(jdiff, ord=1 if p == float("inf") else p, dim=2) + 10e-8
-        )
-
-        # getting target class based on min distance from true class
-        dist = torch.abs(logitdiff) / jdiffnorm
-        distinf = dist.scatter(
-            dim=1,
-            index=true_class.unsqueeze(1),
-            src=torch.ones_like(dist) * float("inf"),
-        )
-        l = torch.argmin(distinf, dim=1)
-
-        logitdiff_l = torch.gather(torch.abs(logitdiff), dim=1, index=l.unsqueeze(1))
-        jdiff_l = torch.gather(
-            jdiff, dim=1, index=l.unsqueeze(1).repeat(1, jdiff.shape[-1]).unsqueeze(1)
-        ).squeeze(1)
-
-        jdiff_l = torch.pow(torch.abs(jdiff_l), 1.0) * torch.sign(jdiff_l)
-
-        if p == 0:
-            # we want to apply l0 norm in the surface instead of here to
-            # support a pseudo search space
-            """
-            feat_map = (
-                torch.pow(logitdiff_l, λ if λ_op == "scalar" or "whole" else 1.0)
-                / jdiff_l
-            )
-            max_feat = torch.argmax(torch.abs(feat_map), dim=1)
-            salmap = torch.zeros_like(jdiff_l)
-            salmap = salmap.scatter(
-                dim=1,
-                index=max_feat.unsqueeze(1),
-                src=torch.max(feat_map, dim=1).values.unsqueeze(1),
-            )
-            """
-            feat_map = torch.pow(jdiff_l, 1.0)
-            salmap = feat_map
-        elif p == float("inf"):
-            # for l-inf, none of the lambda ops will matter since they will not
-            # affect the sign
-            """
-            salmap = torch.nan_to_num(
-                logitdiff_l
-                / (torch.linalg.norm(jdiff_l, ord=1, dim=1).unsqueeze(1) + 1e-8)
-                * jdiff_l,
-                nan=0.0,
-                posinf=None,
-                neginf=None,
-            )
-            """
-            salmap = torch.nan_to_num(jdiff_l)
-
-        else:
-            salmap = jdiff_l * torch.pow(
-                logitdiff_l
-                / torch.max(
-                    torch.pow(
-                        torch.linalg.norm(jdiff_l, ord=2, dim=1, keepdim=True), 2
-                    ),
-                    torch.tensor(1e-8),
-                ),
-                1.0,
-            )
-            salmap = torch.nan_to_num(salmap, nan=0.0, posinf=None, neginf=None)
-
-        return -salmap
+        smap = (yth_row.sign() != ith_row.sign()) * yth_row * ith_row
+        return -smap
 
 
 if __name__ == "__main__":
