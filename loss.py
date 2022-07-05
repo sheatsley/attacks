@@ -38,7 +38,7 @@ class CrossEntropyLoss(torch.nn.CrossEntropyLoss):
         :return: Cross Entropy loss
         :rtype: CrossEntropyLoss object
         """
-        super().__init(reduction="none", **kwargs)
+        super().__init__(reduction="none", **kwargs)
         return None
 
     def forwad(self, logits, y):
@@ -74,10 +74,11 @@ class CWLoss(torch.nn.Module):
     difference between the next closest class & the original class (i.e., how
     deep adversarial examples are pushed across the decision boundary), and c,
     the second hyperparameter, parameterizes the tradeoff between
-    imperceptibility and misclassification. Moreover, like other losses, we
-    store the last computed loss, and expose attributes to state that
-    optimizers should minimize this function and Surface objects should provide
-    a reference to the perturbation vector.
+    imperceptibility and misclassification (which can be dynamically optimized
+    for, e.g. via binary search). Moreover, like other losses, we store the
+    last computed loss, and expose attributes to state that optimizers should
+    minimize this function and Surface objects should provide a reference to
+    the perturbation vector.
 
     :func:`__init__`: instantiates a CWLoss object
     :func:`attach`: sets the perturbation vector as an object attribute
@@ -87,7 +88,7 @@ class CWLoss(torch.nn.Module):
     del_req = True
     max_obj = False
 
-    def __init__(self, norm=2, c=1, k=0):
+    def __init__(self, norm=2, c=1.0, k=0.0):
         """
         This method instantiates a CWLoss object. It accepts three arguments:
         (1) norm, the lp-norm to use, (2) c, which emphasizes optimizing
@@ -115,7 +116,9 @@ class CWLoss(torch.nn.Module):
         """
         This method serves as a setter for attaching a reference to the
         perturbation vector to CWLoss objects as an attribute (as the attribute
-        is subsequently referenced in the forward pass).
+        is subsequently referenced in the forward pass). Additionally, c is
+        expanded by the number of samples to faciliate hyperparameter
+        optimization, as done in https://arxiv.org/pdf/1608.04644.pdf.
 
         :param perturbation: perturbation vector
         :type perturbation: PyTorch FloatTensor object (n, m)
@@ -123,6 +126,7 @@ class CWLoss(torch.nn.Module):
         :rtype: NoneType
         """
         self.delta = delta
+        self.c = torch.full((delta.size(0),), self.c)
         return None
 
     def forward(self, logits, y):
