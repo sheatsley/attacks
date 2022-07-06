@@ -144,8 +144,8 @@ class Attack:
         loss = loss()
         optimizer = optimizer(
             lr=alpha,
-            model_acc=model.accuracy if optimizer.req_acc else None,
-            atk_loss=loss if optimizer.req_loss else None,
+            model_acc=model.accuracy if optimizer.acc_req else None,
+            atk_loss=loss if optimizer.loss_req else None,
         )
         self.traveler = traveler.Traveler(
             change_of_variables, optimizer, random_restart, traveler_closure
