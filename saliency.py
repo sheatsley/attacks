@@ -15,27 +15,27 @@ class DeepFoolSaliency:
     (https://arxiv.org/pdf/1511.04599.pdf) as a saliency map. Specifically,
     DeepFool adds the following perturbation to inputs:
 
-            |f(x + Δ)_y - f(x + Δ)_i| / ||∇f(x + ∇)_y - ∇f(x + ∇)_i||q
+            |f(x + Δ)_y - f(x + Δ)_i| / ||∇f(x + Δ)_y - ∇f(x + Δ)_i||q
                             * ||∇f(x + Δ)_y - ∇f(x + Δ)_i||p
 
     where f returns the model logits, x is the original input, Δ is the current
     perturbation vector to produce adversarial examples, y is the true class, i
     is next closest class (as measured by logit differences, divided by normed
-    gradient differences), ∇ is the gradient of the model with respect to Δ, q
+    gradient differences), ∇f is the gradient of the model with respect to Δ, q
     is defined as p / (p - 1), and p is the desired lp-norm. Algorithmically,
     the DeepFool saliency map computes logit- and gradient-differences, where
-    the logit difference (normalized by the q-norm of the gradient difference)
+    the logit difference (divided by the q-norm of the gradient difference)
     serves as the perturbation strength (i.e., α), while the gradient
     difference serves as the perturbation direction. Moreover, since this
     saliency map requires the gradient differences to be normalized, it
     implements a closure subroutine to multiply the resultant normalized
-    gradients by the computed normalized logit differences. Finally, this class
-    defines the jac_req attribute to signal Surface objects that this class
-    expects a full model Jacobian.
+    gradients by the scaled logit differences. Finally, this class defines the
+    jac_req attribute to signal Surface objects that this class expects a full
+    model Jacobian.
 
     :func:`__init__`: instantiates JacobianSaliency objects.
     :func:`__call__`: computes differences and returns gradient differences
-    :func:`closure`: applies normalized logit differences
+    :func:`closure`: applies scaled logit differences
     """
 
     jac_req = True
@@ -43,7 +43,7 @@ class DeepFoolSaliency:
     def __init__(self, q):
         """
         This method instantiates a DeepFoolSaliency object. As described above,
-        ith class is defined as the minimum logit difference normalized by the
+        ith class is defined as the minimum logit difference scaled by the
         q-norm of the logit differences. Thus, upon initilization, this class
         saves q as an attribute.
 
@@ -87,9 +87,9 @@ class DeepFoolSaliency:
         other_logits = loss.masked_select(~y_hot)
 
         # compute ith class
-        grad_diffs = (other_grad - yth_grad).norm(self.q, dim=1).clamp_(minimum)
-        logit_diffs = (other_logits - yth_logit).abs_()
-        ith_logit_diff, i = (logit_diffs / grad_diffs).topk(1, dim=1, largest=False)
+        grad_diffs = other_grad.sub(yth_grad).norm(self.q, dim=1).clamp_(minimum)
+        logit_diffs = other_logits.sub(yth_logit).abs_()
+        ith_logit_diff, i = logit_diffs.div(grad_diffs).topk(1, dim=1, largest=False)
 
         # save normed ith logit differences and return ith gradient differences
         self.ith_logit_diff = ith_logit_diff
@@ -102,8 +102,8 @@ class DeepFoolSaliency:
         described above. Specifically, when this method is called, gradients
         are assumed to be normalized via the lp functions within the Surface
         module, and thus, the remaining portion of the DeepFool saliency map is
-        to multiply by the resultant gradients by the normalized logit
-        differences computed within __call__.
+        to multiply by the resultant gradients by the scaled logit differences
+        computed within __call__.
 
         :param g: the (lp-normalized) gradients of the perturbation vector
         :type g: PyTorch FloatTensor (n, m)
@@ -208,10 +208,10 @@ class JacobianSaliency:
 
         # get yth row and "gather" ith rows by subtracting yth row
         yth_row = g[torch.arange(g.size(0)), y, :]
-        ith_row = g.sum(1) - yth_row
+        ith_row = g.sum(1).sub(yth_row)
 
         # zero out components whose yth and ith signs are equal and compute product
-        smap = (yth_row.sign() != ith_row.sign()) * yth_row * ith_row
+        smap = (yth_row.sign() != ith_row.sign()).mul(yth_row).mul(ith_row)
         return -smap
 
 
