@@ -15,12 +15,12 @@ class DeepFoolSaliency:
     (https://arxiv.org/pdf/1511.04599.pdf) as a saliency map. Specifically,
     DeepFool adds the following perturbation to inputs:
 
-            |f(x + Δ)_k - f(x + Δ)_y| / ||∇f(x + Δ)_k - ∇f(x + Δ)_y||_q^q
-                            * |∇f(x + Δ)_k - ∇f(x + Δ)_y|^(q-1)
-                                * sign(∇f(x + Δ)_k - ∇f(x + Δ)_y)
+            |f(x + Δ)_i - f(x + Δ)_y| / ||∇f(x + Δ)_i - ∇f(x + Δ)_y||_q^q
+                            * |∇f(x + Δ)_i - ∇f(x + Δ)_y|^(q-1)
+                                * sign(∇f(x + Δ)_i - ∇f(x + Δ)_y)
 
     where f returns the model logits, x is the original input, Δ is the current
-    perturbation vector to produce adversarial examples, y is the true class, k
+    perturbation vector to produce adversarial examples, y is the true class, i
     is next closest class (as measured by logit differences, divided by normed
     gradient differences), ∇f is the gradient of the model with respect to Δ, q
     is defined as p / (p - 1), and p is the desired lp-norm. Algorithmically,
@@ -88,12 +88,14 @@ class DeepFoolSaliency:
         other_logits = loss.masked_select(~y_hot)
 
         # compute ith class
-        grad_diffs = other_grad.sub(yth_grad).norm(self.q, dim=1).clamp_(minimum)
+        grad_diffs = other_grad.sub(yth_grad)
         logit_diffs = other_logits.sub(yth_logit).abs_()
-        ith_logit_diff, i = logit_diffs.div(grad_diffs).topk(1, dim=1, largest=False)
+        normed_ith_logit_diff, i = logit_diffs.div(
+            grad_diffs.norm(self.q, dim=1).clamp_(minimum)
+        ).topk(1, dim=1, largest=False)
 
         # save normed ith logit differences and return ith gradient differences
-        self.ith_logit_diff = ith_logit_diff
+        self.normed_ith_logit_diff = normed_ith_logit_diff
         ith_grad_diff = grad_diffs[torch.arange(grad_diffs.size(0)), i.flatten(), :]
         return ith_grad_diff
 
