@@ -142,11 +142,14 @@ class Attack:
             else saliency_map()
         )
         loss = loss()
-        optimizer = optimizer(
-            lr=alpha,
-            model_acc=model.accuracy if optimizer.acc_req else None,
-            atk_loss=loss if optimizer.loss_req else None,
-        )
+        opt_params = {
+            "atk_loss": loss,
+            "epochs": self.epochs,
+            "lr": self.alpha,
+            "maximize": loss.max_obj,
+            "model_acc": model.accuracy,
+        }
+        optimizer = optimizer(**opt_params)
         self.traveler = traveler.Traveler(
             change_of_variables, optimizer, random_restart, traveler_closure
         )
