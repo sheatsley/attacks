@@ -33,7 +33,7 @@ class Traveler:
         into and out of the hyperbolic tangent space), (2) a PyTorch-based
         optimizer object from the optimizer module (which is initialized with
         α, the learning rate), (3) the minimum and maximum values to initialize
-        inputs (i.e., random restart, often sampled between -ε and ε ), and (5)
+        inputs (i.e., random restart, often sampled between -ε and ε), and (5)
         a tuple of callables to run on the input passed in to __call__.
 
         :param change_of_variables: whether to map inputs to tanh-space
@@ -91,7 +91,7 @@ class Traveler:
         initialize perturbation vectors via a random perturbation (e.g., PGD),
         or (2) apply change of variables (e.g. CW) to the original inputs which
         requires that maximum values be less than the minimum value mapped to
-        infinity by arctanh (i.e., 1-machine epsilon). Finally, x is attached
+        infinity by arctanh (i.e., 1-machine epsilon). Finally, p is attached
         to the optimizer.
 
         :param x: the batch of inputs to produce adversarial examples from
@@ -115,9 +115,9 @@ class Traveler:
             print(f"Applying change of variables to {len(x)} samples...")
             tanh_space(x, True)
 
-        # final subroutine: attach p to the optimizer
+        # final subroutine: override the dummy parameter with p
         print(f"Attaching the perturbation vector to {self.optmizer.__name__}...")
-        self.optimizer.add_param_group({"params": p})
+        self.optimizer.param_groups[0]["params"] = p
         return None
 
 
