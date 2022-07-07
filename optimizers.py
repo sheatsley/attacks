@@ -12,31 +12,37 @@ import torch  # Tensors and Dynamic neural networks in Python with strong GPU ac
 
 class Adam(torch.optim.Adam):
     """
+    This class serves as a wrapper for the PyTorch Adam optimizer class.
     This class is identical to the Adam class in PyTorch, with the exception
     that two additional attributes are added: req_loss (set to False) and
     req_acc (set to False). Unlike Adam, some optimizers (e.g.,
     MomentumBestStart & BackwardSGD) require the adversarial loss or model
     accuracy to perform their update step, and thus, we instantiate these
-    parameters for a homogenous interface.
+    parameters for a homogeneous interface.
 
     :func:`__init__`: instantiates Adam objects
     """
 
-    acc_req = False
-    loss_req = False
-
-    def __init__(self, atk_loss=None, model_acc=None, **kwargs):
+    def __init__(self, **kwargs):
         """
         This method instantiates an Adam object. It accepts keyword arguments
         for the PyTorch parent class described in:
         https://pytorch.org/docs/stable/generated/torch.optim.Adam.html.
+        Notably, because PyTorch optimizers cannot be instantiated without the
+        parameter to optimize, a dummy tensor is supplied and expected to be
+        overriden at a later time (i.e., within Traveler objects initialize
+        method).
 
+        :param atk_loss: returns the current loss of the attack
+        :type atk_loss: Loss object
+        :param model_acc: returns the current model accuracy
+        :type model_acc: ScikitTorch Model instance method
         :param kwargs: keyword arguments for torch.optim.Adam
         :type kwargs: dict
         :return Adam optimizer
         :rtype: Adam object
         """
-        super().__init__(**kwargs)
+        super().__init__(torch.tensor([0.0]), **kwargs)
         return None
 
 
@@ -52,7 +58,7 @@ class MomentumBestStart(torch.optim.Optimizer):
     momenmtum term, defined as:
 
         δ_(k+1) = P(Δ_k + η * ∇f(x + Δ_k))
-        Δ_(k+1) = P(Δ + α * (δ_(k+1) - Δ_k) + (1 - α) * (Δ_k - Δ_(k-1))
+        Δ_(k+1) = P(Δ_k + α * (δ_(k+1) - Δ_k) + (1 - α) * (Δ_k - Δ_(k-1))
 
     where k is the current iteration, P projects inputs into the feasible set
     (i.e., an lp-norm), Δ is the current perturbation vector to produce
@@ -81,11 +87,35 @@ class MomentumBestStart(torch.optim.Optimizer):
     and consume budget only if it aids in adversarial goals. As this optimizer
     requires computing the loss, the attibute loss_req is set to True.
 
-    :func:`__init__`: instantiates SGD objects
+    :func:`__init__`: instantiates MomentumBestStart objects
+    :func:`step`: applies one optimization step
     """
 
-    acc_req = False
-    loss_req = True
+    def __init__(self, lr, atk_loss, epochs, **kwargs):
+        """
+        This method instanties a MomentumBest Start object. It requires a
+        learning rate and a reference to a Loss object (so that the most
+        recently comptued loss can be retrieved). It also accepts keyword
+        arguments to provide a homogeneous interface. Notably, because PyTorch
+        optimizers cannot be instantiated without the parameter to optimize, a
+        dummy tensor is supplied and expected to be overriden at a later time
+        (i.e., within Traveler objects initialize method).
+
+        :param lr: learning rate
+        :type lr: float
+        :param atk_loss: returns the current loss of the attack
+        :type atk_loss: Loss object
+        :return: Momemtum Best Start optimizer
+        :rtype: MomentumBestStart object
+        """
+        self.atk_loss = atk_loss
+        super().__init__(torch.tensor([0]), {"lr": lr} | kwargs)
+
+    def step():
+        """
+        This method applies one optimization step as described above.
+        """
+        return None
 
 
 class SGD(torch.optim.SGD):
@@ -95,19 +125,20 @@ class SGD(torch.optim.SGD):
     req_acc (set to False). Unlike SGD, some optimizers (e.g.,
     MomentumBestStart & BackwardSGD) can require the adversarial loss or model
     accuracy to perform their update step, and thus, we instantiate these
-    parameters for a homogenous interface.
+    parameters for a homogeneous interface.
 
     :func:`__init__`: instantiates SGD objects
     """
 
-    acc_req = False
-    loss_req = False
-
-    def __init__(self, atk_loss=None, model_acc=None, **kwargs):
+    def __init__(self, **kwargs):
         """
         This method instantiates an SGD object. It accepts keyword arguments
         for the PyTorch parent class described in:
         https://pytorch.org/docs/stable/generated/torch.optim.SGD.html.
+        Notably, because PyTorch optimizers cannot be instantiated without the
+        parameter to optimize, a dummy tensor is supplied and expected to be
+        overriden at a later time (i.e., within Traveler objects initialize
+        method).
 
         :param atk_loss: returns the current loss of the attack
         :type atk_loss: Loss object
@@ -118,5 +149,5 @@ class SGD(torch.optim.SGD):
         :return Stochastic Gradient Descent optimizer
         :rtype: SGD object
         """
-        super().__init__(**kwargs)
+        super().__init__(torch.tensor([0.0]), **kwargs)
         return None
