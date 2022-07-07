@@ -15,11 +15,12 @@ class DeepFoolSaliency:
     (https://arxiv.org/pdf/1511.04599.pdf) as a saliency map. Specifically,
     DeepFool adds the following perturbation to inputs:
 
-            |f(x + Δ)_y - f(x + Δ)_i| / ||∇f(x + Δ)_y - ∇f(x + Δ)_i||q
-                            * ||∇f(x + Δ)_y - ∇f(x + Δ)_i||p
+            |f(x + Δ)_k - f(x + Δ)_y| / ||∇f(x + Δ)_k - ∇f(x + Δ)_y||_q^q
+                            * |∇f(x + Δ)_k - ∇f(x + Δ)_y|^(q-1)
+                                * sign(∇f(x + Δ)_k - ∇f(x + Δ)_y)
 
     where f returns the model logits, x is the original input, Δ is the current
-    perturbation vector to produce adversarial examples, y is the true class, i
+    perturbation vector to produce adversarial examples, y is the true class, k
     is next closest class (as measured by logit differences, divided by normed
     gradient differences), ∇f is the gradient of the model with respect to Δ, q
     is defined as p / (p - 1), and p is the desired lp-norm. Algorithmically,
