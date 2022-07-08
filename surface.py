@@ -107,7 +107,7 @@ class Surface:
 
         # map out of tanh-space, perform forward & backward pass
         p_j.requires_grad = True
-        loss = self.loss(self.model(self.change_of_variables(x_j + p_j)))
+        loss = self.loss(self.model(self.change_of_variables(x_j + p_j)), y_j)
         grads = torch.autograd.grad(loss, p_j, torch.ones_like(loss))
         p_j.requires_grad = False
 
@@ -148,7 +148,7 @@ def linf(g):
     :return: gradients projected into the l∞-norm space
     :rtype: PyTorch FloatTensor object (n, m)
     """
-    return g.grad.sign_()
+    return g.sign_()
 
 
 def l0(g, clip, max_obj):
@@ -172,12 +172,10 @@ def l0(g, clip, max_obj):
     :rtype: PyTorch FloatTensor object (n, m)
     """
     valid_components = torch.logical_and(
-        *((g != c) or (g.grad.sign() != c.sign() * 1 if max_obj else -1) for c in clip)
+        *((g != c) or (g.sign() != c.sign() * 1 if max_obj else -1) for c in clip)
     )
-    bottom_k = g.grad.mul(valid_components).topk(
-        int(g.size(1) * 0.99), dim=1, largest=False
-    )
-    return g.grad.scatter_(dim=1, index=bottom_k.indices, value=0).sign_()
+    bottom_k = g.mul(valid_components).topk(int(g.size(1) * 0.99), dim=1, largest=False)
+    return g.scatter_(dim=1, index=bottom_k.indices, value=0).sign_()
 
 
 def l2(g, minimum=torch.tensor(1e-8)):
@@ -194,7 +192,7 @@ def l2(g, minimum=torch.tensor(1e-8)):
     :return: gradients projected into the l2-norm space
     :rtype: PyTorch FloatTensor object (n, m)
     """
-    return g.grad.div_(g.grad.norm(2, dim=1, keepdim=True)).clamp_(minimum)
+    return g.div_(g.norm(2, dim=1, keepdim=True)).clamp_(minimum)
 
 
 if __name__ == "__main__":
