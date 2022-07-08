@@ -174,7 +174,9 @@ def l0(g, clip, max_obj):
     valid_components = torch.logical_and(
         *((g != c) or (g.sign() != c.sign() * 1 if max_obj else -1) for c in clip)
     )
-    bottom_k = g.mul(valid_components).topk(int(g.size(1) * 0.99), dim=1, largest=False)
+    bottom_k = (
+        g.mul(valid_components).abs().topk(int(g.size(1) * 0.99), dim=1, largest=False)
+    )
     return g.scatter_(dim=1, index=bottom_k.indices, value=0).sign_()
 
 
