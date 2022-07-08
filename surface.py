@@ -192,7 +192,7 @@ def l2(g, minimum=torch.tensor(1e-8)):
     :return: gradients projected into the l2-norm space
     :rtype: PyTorch FloatTensor object (n, m)
     """
-    return g.div_(g.norm(2, dim=1, keepdim=True)).clamp_(minimum)
+    return g.div_(g.norm(2, dim=1, keepdim=True).clamp_(minimum))
 
 
 if __name__ == "__main__":
