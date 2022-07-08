@@ -214,8 +214,8 @@ class JacobianSaliency:
         ith_row = g.sum(1).sub(yth_row)
 
         # zero out components whose yth and ith signs are equal and compute product
-        smap = (yth_row.sign() != ith_row.sign()).mul(yth_row).mul(ith_row)
-        return -smap
+        smap = (yth_row.sign() != ith_row.sign()).mul(yth_row.abs()).mul(ith_row)
+        return smap
 
 
 if __name__ == "__main__":
