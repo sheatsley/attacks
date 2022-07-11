@@ -91,29 +91,72 @@ class MomentumBestStart(torch.optim.Optimizer):
     :func:`step`: applies one optimization step
     """
 
-    def __init__(self, lr, atk_loss, epochs, **kwargs):
+    def __init__(
+        self,
+        atk_loss,
+        epochs,
+        epsilon,
+        alpha=0.75,
+        eta=0.75,
+        pl=0.03,
+        pl_min=0.06,
+        **kwargs
+    ):
         """
-        This method instanties a MomentumBest Start object. It requires a
-        learning rate and a reference to a Loss object (so that the most
-        recently comptued loss can be retrieved). It also accepts keyword
-        arguments to provide a homogeneous interface. Notably, because PyTorch
-        optimizers cannot be instantiated without the parameter to optimize, a
-        dummy tensor is supplied and expected to be overriden at a later time
-        (i.e., within Traveler objects initialize method).
+        This method instanties a MomentumBest Start object. It requires the
+        total number of optimization iterations and a reference to a Loss
+        object (so that the most recently comptued loss can be retrieved). It
+        also accepts keyword arguments to provide a homogeneous interface.
+        Notably, because PyTorch optimizers cannot be instantiated without the
+        parameter to optimize, a dummy tensor is supplied and expected to be
+        overriden at a later time (i.e., within Traveler objects initialize
+        method).
 
-        :param lr: learning rate
-        :type lr: float
         :param atk_loss: returns the current loss of the attack
         :type atk_loss: Loss object
+        :param epochs: total number of optimization iterations
+        :type epochs: int
+        :param epsilon: lp-norm threat model
+        :type epsilon: float
+        :param alpha: momentum factor
+        :type alpha: float
+        :param eta: minimum percentage of successful updates between checkpoints
+        :type eta: float
+        :param pl: period length decay
+        :type pl: float
+        :param pl_min: minimum period length
+        :type pl_min: float
         :return: Momemtum Best Start optimizer
         :rtype: MomentumBestStart object
         """
-        self.atk_loss = atk_loss
-        super().__init__(torch.tensor([0]), {"lr": lr} | kwargs)
 
-    def step():
+        # precompute checkpoints
+        checkpoints = 
+        super().__init__(
+            torch.tensor([0.0]),
+            {
+                "atk_loss": atk_loss,
+                "epochs": epochs,
+                "epsilon": epsilon,
+                "alpha": alpha,
+                "eta": eta,
+                "pl": pl,
+                "pl_min": pl_min,
+            },
+        )
+
+    @torch.no_grad()
+    def step(self):
         """
         This method applies one optimization step as described above.
+        Specifically, this optimizer: (1) steps in the direction of gradient of
+        the loss with dynamic learning rate η, (2) applies a momentum step,
+        parameterized by α, from the last two iterates, and (3) restarts the
+        search locally and halves the learning rate if progress has stalled
+        between checkpoints.
+
+        :return: None
+        :rtype: NoneType
         """
         return None
 
