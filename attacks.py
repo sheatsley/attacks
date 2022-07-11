@@ -142,14 +142,18 @@ class Attack:
             else saliency_map()
         )
         loss = loss()
-        opt_params = {
+        custom_opt_params = {
             "atk_loss": loss,
-            "epochs": self.epochs,
-            "lr": self.alpha,
-            "maximize": loss.max_obj,
+            "epochs": epochs,
+            "epsilon": self.epsilon,
             "model_acc": model.accuracy,
         }
-        optimizer = optimizer(**opt_params)
+        torch_opt_params = {"pytorch": {"lr": self.alpha, "maximize": loss.max_obj}}
+        optimizer = optimizer(
+            (custom_opt_params | torch_opt_params)
+            if optimizer.__bases__[0] is torch.optim.Optimizer
+            else torch_opt_params
+        )
         self.traveler = traveler.Traveler(
             change_of_variables, optimizer, random_restart, traveler_closure
         )
