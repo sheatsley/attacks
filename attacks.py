@@ -5,7 +5,7 @@ Mon Apr 18 2022
 """
 import itertools  # Functions creating iterators for efficietn looping
 import loss  # PyTorch-based custom loss functions
-import optimizers  # PyTorch-based custom optimizers
+import optimizer  # PyTorch-based custom optimizers
 import saliency  # Gradient manipulation heuristics to achieve adversarial goals
 import surface  # PyTorch-based models for crafting adversarial examples
 import torch  # Tensors and Dynamic neural networks in Python with strong GPU acceleration
@@ -40,9 +40,9 @@ class Attack:
         epsilon,
         alpha,
         change_of_variables,
-        optimizer,
+        optimizer_alg,
         random_restart,
-        loss,
+        loss_func,
         norm,
         model,
         saliency_map,
@@ -71,8 +71,8 @@ class Attack:
         :type alpha: float
         :param change_of_variables: whether to map inputs to tanh-space
         :type change_of_variables: bool
-        :param optimizer: optimization algorithm to use
-        :type optimizer: optimizer module object
+        :param optimizer_alg: optimization algorithm to use
+        :type optimizer_alg: optimizer module object
         :param random_restart: whether to randomly perturb inputs
         :type random_restart: bool
         :param traveler_closure: subroutines after each perturbation
@@ -80,8 +80,8 @@ class Attack:
 
         Finally, the following parameters define Surface objects:
 
-        :param loss: objective function to differentiate
-        :type loss: loss module object
+        :param loss_func: objective function to differentiate
+        :type loss_func: loss module object
         :param norm: lp-space to project gradients into
         :type norm: surface module callable
         :param model: neural network
@@ -111,7 +111,7 @@ class Attack:
         self.components = {
             "change of variables": change_of_variables,
             "loss function": loss.__name__,
-            "optimizer": optimizer.__name__,
+            "optimizer": optimizer_alg.__name__,
             "random restart": random_restart,
             "saliency map": saliency_map.__name__,
             "target norm": "l∞" if norm == surface.linf else norm.__name__,
@@ -141,23 +141,25 @@ class Attack:
             if saliency_map is saliency.DeepFoolSaliency
             else saliency_map()
         )
-        loss = loss()
+        loss_func = loss_func()
         custom_opt_params = {
             "atk_loss": loss,
             "epochs": epochs,
             "epsilon": self.epsilon,
             "model_acc": model.accuracy,
         }
-        torch_opt_params = {"pytorch": {"lr": self.alpha, "maximize": loss.max_obj}}
-        optimizer = optimizer(
+        torch_opt_params = {"lr": self.alpha, "maximize": loss.max_obj}
+        optimizer_alg = optimizer_alg(
             (custom_opt_params | torch_opt_params)
-            if optimizer.__bases__[0] is torch.optim.Optimizer
+            if optimizer_alg.__bases__[0] is torch.optim.Optimizer
             else torch_opt_params
         )
         self.traveler = traveler.Traveler(
-            change_of_variables, optimizer, random_restart, traveler_closure
+            change_of_variables, optimizer_alg, random_restart, traveler_closure
         )
-        self.surface = surface.Surface(model, saliency_map, loss, norm, surface_closure)
+        self.surface = surface.Surface(
+            model, saliency_map, loss_func, norm, surface_closure
+        )
         return None
 
     def __repr__(self):
@@ -220,7 +222,7 @@ def attack_builder(
     epsilon=None,
     model=None,
     change_of_variables_enabled=(False, True),
-    optimizers=(optimizers.SGD, optimizers.Adam),
+    optimizers=(optimizer.SGD, optimizer.Adam),
     random_restart_enabled=(False, True),
     losses=(loss.IdentityLoss, loss.CrossEntropyLoss, loss.CWLoss),
     norms=(surface.l0, surface.l2, surface.linf),
@@ -270,7 +272,7 @@ def attack_builder(
     )
     print(f"Yielding {num_attacks} attacks...")
     for (
-        optimizer,
+        optimizer_alg,
         random_restart,
         change_of_variables,
         loss_func,
@@ -287,7 +289,7 @@ def attack_builder(
     ):
         yield Attack(
             epochs=epochs,
-            optimizer=optimizer,
+            optimizer=optimizer_alg,
             alpha=alpha,
             random_restart=random_restart,
             change_of_variables=change_of_variables,
