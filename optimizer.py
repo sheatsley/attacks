@@ -98,8 +98,8 @@ class MomentumBestStart(torch.optim.Optimizer):
         epsilon,
         alpha=0.75,
         eta=0.75,
-        period_length=0.03,
-        min_period_length=0.06,
+        pdecay=0.03,
+        min_plen=0.06,
         **kwargs
     ):
         """
@@ -122,26 +122,27 @@ class MomentumBestStart(torch.optim.Optimizer):
         :type alpha: float
         :param eta: minimum percentage of successful updates between checkpoints
         :type eta: float
-        :param period_length: period length decay
-        :type period_length: float
-        :param min_period_length: minimum period length
-        :type min_period_length: float
+        :param pdecay: period length decay
+        :type pdecay: float
+        :param min_plen: minimum period length
+        :type min_plen: float
         :return: Momemtum Best Start optimizer
         :rtype: MomentumBestStart object
         """
 
         # precompute checkpoints
-        checkpoints = 
+        pj = [0, 0.22]
+        while pj[-1] < 1:
+            pj.append(pj[-1] + max(pj[-1] - pj[-2] - pdecay, min_plen))
         super().__init__(
             torch.tensor([0.0]),
             {
                 "atk_loss": atk_loss,
+                "alpha": alpha,
                 "epochs": epochs,
                 "epsilon": epsilon,
-                "alpha": alpha,
                 "eta": eta,
-                "period_length": period_length,
-                "min_period_length": min_period_length,
+                "checkpoints": {-int(-p * epochs) for p in pj[:-1]},
             },
         )
 
@@ -158,6 +159,10 @@ class MomentumBestStart(torch.optim.Optimizer):
         :return: None
         :rtype: NoneType
         """
+        for group in self.param_groups:
+            for p in group["params"]:
+                grad = p.grad.data
+                state = self.state[p]
         return None
 
 
