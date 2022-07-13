@@ -98,8 +98,8 @@ class MomentumBestStart(torch.optim.Optimizer):
         epsilon,
         alpha=0.75,
         eta=0.75,
-        pl=0.03,
-        pl_min=0.06,
+        period_length=0.03,
+        min_period_length=0.06,
         **kwargs
     ):
         """
@@ -122,10 +122,10 @@ class MomentumBestStart(torch.optim.Optimizer):
         :type alpha: float
         :param eta: minimum percentage of successful updates between checkpoints
         :type eta: float
-        :param pl: period length decay
-        :type pl: float
-        :param pl_min: minimum period length
-        :type pl_min: float
+        :param period_length: period length decay
+        :type period_length: float
+        :param min_period_length: minimum period length
+        :type min_period_length: float
         :return: Momemtum Best Start optimizer
         :rtype: MomentumBestStart object
         """
@@ -140,8 +140,8 @@ class MomentumBestStart(torch.optim.Optimizer):
                 "epsilon": epsilon,
                 "alpha": alpha,
                 "eta": eta,
-                "pl": pl,
-                "pl_min": pl_min,
+                "period_length": period_length,
+                "min_period_length": min_period_length,
             },
         )
 
