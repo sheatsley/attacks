@@ -1,49 +1,15 @@
 """
-This module defines custom Pytorch-based optimizers.
+This module defines custom PyTorch-based optimizers.
 Authors: Blaine Hoak & Ryan Sheatsley
 Wed Jun 29 2022
 """
 import torch  # Tensors and Dynamic neural networks in Python with strong GPU acceleration
+from torch.optim import Adam  # Implements Adam: A Method for Stochasitc Optimization
+from torch.optim import SGD  # Implements stochasitc gradient descent
 
 # TODO
 # implement MomentumBestStart
 # implmenet BackwardSGD
-
-
-class Adam(torch.optim.Adam):
-    """
-    This class serves as a wrapper for the PyTorch Adam optimizer class.
-    This class is identical to the Adam class in PyTorch, with the exception
-    that two additional attributes are added: req_loss (set to False) and
-    req_acc (set to False). Unlike Adam, some optimizers (e.g.,
-    MomentumBestStart & BackwardSGD) require the adversarial loss or model
-    accuracy to perform their update step, and thus, we instantiate these
-    parameters for a homogeneous interface.
-
-    :func:`__init__`: instantiates Adam objects
-    """
-
-    def __init__(self, **kwargs):
-        """
-        This method instantiates an Adam object. It accepts keyword arguments
-        for the PyTorch parent class described in:
-        https://pytorch.org/docs/stable/generated/torch.optim.Adam.html.
-        Notably, because PyTorch optimizers cannot be instantiated without the
-        parameter to optimize, a dummy tensor is supplied and expected to be
-        overriden at a later time (i.e., within Traveler objects initialize
-        method).
-
-        :param atk_loss: returns the current loss of the attack
-        :type atk_loss: Loss object
-        :param model_acc: returns the current model accuracy
-        :type model_acc: ScikitTorch Model instance method
-        :param kwargs: keyword arguments for torch.optim.Adam
-        :type kwargs: dict
-        :return Adam optimizer
-        :rtype: Adam object
-        """
-        super().__init__(torch.tensor([0.0]), **kwargs)
-        return None
 
 
 class MomentumBestStart(torch.optim.Optimizer):
@@ -93,6 +59,7 @@ class MomentumBestStart(torch.optim.Optimizer):
 
     def __init__(
         self,
+        params,
         atk_loss,
         epochs,
         epsilon,
@@ -112,6 +79,8 @@ class MomentumBestStart(torch.optim.Optimizer):
         overriden at a later time (i.e., within Traveler objects initialize
         method).
 
+        :param params: the parameters to optimize over
+        :type params: PyTorch FloatTensor object (n, m)
         :param atk_loss: returns the current loss of the attack
         :type atk_loss: Loss object
         :param epochs: total number of optimization iterations
@@ -135,7 +104,7 @@ class MomentumBestStart(torch.optim.Optimizer):
         while pj[-1] < 1:
             pj.append(pj[-1] + max(pj[-1] - pj[-2] - pdecay, min_plen))
         super().__init__(
-            torch.tensor([0.0]),
+            [params],
             {
                 "atk_loss": atk_loss,
                 "alpha": alpha,
@@ -145,6 +114,22 @@ class MomentumBestStart(torch.optim.Optimizer):
                 "checkpoints": {-int(-p * epochs) for p in pj[:-1]},
             },
         )
+
+        # initialize state
+        for group in self.param_groups:
+            for p in group["params"]:
+                state = self.state[p]
+                state["best_p"] = p.detach().clone()
+                state["epoch"] = 0
+                state["momentum_buffer"] = p
+                state["lr"] = torch.full([p.size(0)], group["epsilon"])
+                state["max_loss"] = 0
+                state["max_loss_updated"] = torch.full(state["lr"].size(), False)
+                state["pre_loss"] = 0
+                state["lr_updated"] = torch.full(state["lr"].size(), False)
+                state["num_loss_increased"] = torch.full(state["lr"].size(), False)
+                state["step"] = 0
+        return None
 
     @torch.no_grad()
     def step(self):
@@ -163,39 +148,7 @@ class MomentumBestStart(torch.optim.Optimizer):
             for p in group["params"]:
                 grad = p.grad.data
                 state = self.state[p]
-        return None
 
+                # update max loss and best perturbations, element-wise
 
-class SGD(torch.optim.SGD):
-    """
-    This class is identical to the SGD class in PyTorch, with the exception
-    that two additional attributes are added: req_loss (set to False) and
-    req_acc (set to False). Unlike SGD, some optimizers (e.g.,
-    MomentumBestStart & BackwardSGD) can require the adversarial loss or model
-    accuracy to perform their update step, and thus, we instantiate these
-    parameters for a homogeneous interface.
-
-    :func:`__init__`: instantiates SGD objects
-    """
-
-    def __init__(self, **kwargs):
-        """
-        This method instantiates an SGD object. It accepts keyword arguments
-        for the PyTorch parent class described in:
-        https://pytorch.org/docs/stable/generated/torch.optim.SGD.html.
-        Notably, because PyTorch optimizers cannot be instantiated without the
-        parameter to optimize, a dummy tensor is supplied and expected to be
-        overriden at a later time (i.e., within Traveler objects initialize
-        method).
-
-        :param atk_loss: returns the current loss of the attack
-        :type atk_loss: Loss object
-        :param model_acc: returns the current model accuracy
-        :type model_acc: ScikitTorch Model instance method
-        :param kwargs: keyword arguments for torch.optim.SGD
-        :type kwargs: dict
-        :return Stochastic Gradient Descent optimizer
-        :rtype: SGD object
-        """
-        super().__init__(torch.tensor([0.0]), **kwargs)
         return None
