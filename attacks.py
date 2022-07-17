@@ -148,10 +148,14 @@ class Attack:
             "epsilon": self.epsilon,
             "model_acc": model.accuracy,
         }
-        torch_opt_params = {"lr": self.alpha, "maximize": loss.max_obj}
+        torch_opt_params = {
+            "lr": self.alpha,
+            "maximize": loss.max_obj,
+            "params": torch.zeros(1),
+        }
         optimizer_alg = optimizer_alg(
-            (custom_opt_params | torch_opt_params)
-            if optimizer_alg.__bases__[0] is torch.optim.Optimizer
+            **(custom_opt_params | torch_opt_params)
+            if optimizer_alg.__module__ == "optimizer"
             else torch_opt_params
         )
         self.traveler = traveler.Traveler(
