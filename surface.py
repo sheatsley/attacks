@@ -171,11 +171,8 @@ def l0(g, clip, max_obj):
     :return: gradients projected into the l0-norm space
     :rtype: PyTorch FloatTensor object (n, m)
     """
-    bottom_k = (
-        g.mul(clip[(1 + (g.sign() * 1 if max_obj else -1)) / 2])
-        .abs()
-        .topk(int(g.size(1) * 0.99), dim=1, largest=False)
-    )
+    valid_components = g.mul_(clip[(1 + (g.sign_() * 1 if max_obj else -1)) / 2])
+    bottom_k = valid_components.abs_().topk(int(g.size(1) * 0.99), dim=1, largest=False)
     return g.scatter_(dim=1, index=bottom_k.indices, value=0).sign_()
 
 
