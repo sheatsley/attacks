@@ -92,7 +92,8 @@ class Traveler:
         or (2) apply change of variables (e.g. CW) to the original inputs which
         requires that maximum values be less than the minimum value mapped to
         infinity by arctanh (i.e., 1-machine epsilon). Finally, p is attached
-        to the optimizer.
+        to the optimizer (by reinstantiation, given that PyTorch optimizers
+        cannot be initialized without a parameter group).
 
         :param x: the batch of inputs to produce adversarial examples from
         :type x: PyTorch FloatTensor object (n, m)
@@ -115,9 +116,9 @@ class Traveler:
             print(f"Applying change of variables to {len(x)} samples...")
             tanh_space(x, True)
 
-        # final subroutine: override the dummy parameter with p
+        # last subroutine: reinstantiate the optimizer with the perturbation vector
         print(f"Attaching the perturbation vector to {self.optmizer.__name__}...")
-        self.optimizer.param_groups[0]["params"] = p
+        self.optimizer.__init__([p], **self.optimizer.defaults)
         return None
 
 
