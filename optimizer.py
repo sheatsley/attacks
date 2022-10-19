@@ -47,11 +47,12 @@ class MomentumBestStart(torch.optim.Optimizer):
     input, Δ_i is the perturbation vector at the ith iteration, ρ is a
     constant, η_(w_j) is the learning rate at checkpoint w_j, and LMax_(w_j) is
     the highest model loss observed at checkpoint w_j. If both condtions are
-    found to be true, Δ is also reset to vector that attained the highest value
-    of L thus far. Conceptually, these optimizations augment PGD via momentum,
-    adjust the learning rate to ensure adversarial goals are met continuously,
-    and consume budget only if it aids in adversarial goals. As this optimizer
-    requires computing the loss, the attibute loss_req is set to True.
+    found to be true, Δ is also reset to the vector that attained the highest
+    value of L thus far. Conceptually, these optimizations augment PGD via
+    momentum, adjust the learning rate to ensure adversarial goals are met
+    continuously, and consume budget only if it aids in adversarial goals. As
+    this optimizer requires computing the loss, the attibute loss_req is set to
+    True.
 
     :func:`__init__`: instantiates MomentumBestStart objects
     :func:`step`: applies one optimization step
@@ -72,7 +73,7 @@ class MomentumBestStart(torch.optim.Optimizer):
         """
         This method instanties a MomentumBest Start object. It requires the
         total number of optimization iterations and a reference to a Loss
-        object (so that the most recently comptued loss can be retrieved). It
+        object (so that the most recently computed loss can be retrieved). It
         also accepts keyword arguments to provide a homogeneous interface.
         Notably, because PyTorch optimizers cannot be instantiated without the
         parameter to optimize, a dummy tensor is supplied and expected to be
@@ -146,9 +147,19 @@ class MomentumBestStart(torch.optim.Optimizer):
         """
         for group in self.param_groups:
             for p in group["params"]:
-                grad = p.grad.data
+                grad = p.grad.data if self.maximize else -p.grad.data
                 state = self.state[p]
 
                 # update max loss and best perturbations, element-wise
+                loss_inc = torch.gt(self.atk_loss.curr_loss, state["max_loss"])
+                state["max_loss"][loss_inc] = self.atk_loss.curr_loss[loss_inc]
+                state["best_p"][loss_inc] = p.detatch().clone()[loss_inc]
+
+                # apply perturbation and momoentum steps
+                p.add_(grad.mul_(state["lr"]))
+
+                # perform checkpoint subroutines
+
+                # update optimizer state
 
         return None
