@@ -121,8 +121,8 @@ class CWLoss(torch.nn.Module):
         expanded by the number of samples to faciliate hyperparameter
         optimization, as done in https://arxiv.org/pdf/1608.04644.pdf.
 
-        :param perturbation: perturbation vector
-        :type perturbation: PyTorch FloatTensor object (n, m)
+        :param delta: perturbation vector
+        :type delta: PyTorch FloatTensor object (n, m)
         :return: None
         :rtype: NoneType
         """
