@@ -7,6 +7,7 @@ import torch  # Tensors and Dynamic neural networks in Python with strong GPU ac
 import traveler  # PyTorch-based optimizers for crafting adversarial examples
 
 # TODO:
+# implement initialize
 # add unit tests
 
 
@@ -105,7 +106,7 @@ class Surface:
             else (x, y, p, 1)
         )
 
-        # map out of tanh-space, perform forward & backward pass
+        # map out of tanh-space, perform forward & backward passes
         p_j.requires_grad = True
         loss = self.loss(self.model(self.change_of_variables(x_j + p_j)), y_j)
         grads = torch.autograd.grad(loss, p_j, torch.ones_like(loss))
