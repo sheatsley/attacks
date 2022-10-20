@@ -7,9 +7,87 @@ import torch  # Tensors and Dynamic neural networks in Python with strong GPU ac
 from torch.optim import Adam  # Implements Adam: A Method for Stochasitc Optimization
 from torch.optim import SGD  # Implements stochasitc gradient descent
 
-# TODO
-# implement MomentumBestStart
-# implmenet BackwardSGD
+
+class BackwardSGD(torch.optim.Optimizer):
+    """
+    This class implements BackwardSGD (as named by [paper_url]), an optimizer
+    used in the Fast Adaptive Boundary Attack (FAB), as shown in
+    https://arxiv.org/abs/1907.02044. FAB aims to to address two key
+    deficiencies in PGD (as introduced in
+    https://arxiv.org/pdf/1706.06083.pdf): (1) inability to find minimum norm
+    adversarial examples (agnostic of lp budget), and (2) slow robust accuracy
+    assessment. (2) is broadly addressed through the saliency map used by
+    DeepFool (https://arxiv.org/pdf/1511.04599.pdf), while (1) is addressed by
+    this optimizer. Specifically, this optimizer performs a biased backward
+    step towards the original input, defined as:
+
+                        ß_(k+1) = ß if ∇f(x + Δ_k) ≠ c else 1
+                        Δ_(k+1) = ß_(k+1) * η * ∇f(x + Δ_k)
+
+    where k is the current iteration, ß is a consant in [0, 1], Δ is the
+    current perturbation vector to produce adversarial example, ∇f is the
+    gradient of the model with respect to Δ, x is the original input, c is the
+    label, and η is the learning rate. Conceputally, ß enables adversaires to
+    dampen the learning rate when the inputs is already misclassified, ensuring
+    x + Δ is as close to x as possible (while achieving adversarial goals).
+
+    :func:`__init__`: instantiates BackwardSGD objects
+    :func:`step`: applies one optimization step
+    """
+
+    def __init__(self, params, lr, beta, model, **kwargs):
+        """
+        This method instanties a Backward SGD object. It requires a learning
+        rate, ß, and a reference to a Scikit-Torch Model-inherited object (as
+        to determine misclassified inputs). It also accepts keyword arguments
+        for to provide a homogeneous interface. Notably, because PyTorch
+        optimizers cannot be instantiated without the parameter to optimize, a
+        dummy tensor is supplied and expected to be overriden at a later time
+        (i.e., within Traveler objects initialize method).
+
+        :param params: the parameters to optimize over
+        :type params: PyTorch FloatTensor object (n, m)
+        :param lr: learning rate
+        :type lr: float
+        :param beta: momentum factor
+        :type beta: float
+        :param model: returns misclassified inputs
+        :type model: Scikit-Torch Model-inherited object
+        :return: Backward SGD optimizer
+        :rtype: BackwardSGD object
+        """
+        super().__init__(
+            [params],
+            {"lr": lr, "beta": beta, "model": model},
+        )
+
+        # initialize state
+        for group in self.param_groups:
+            for p in group["params"]:
+                state = self.state[p]
+                state["beta"] = torch.full([p.size(0)], group["beta"])
+
+    @torch.no_grad()
+    def step(self):
+        """
+        This method applies one optimization step as described above.
+        Specifically, this optimizer: (1) sets ß based on whether samples are
+        misclassified, and (2) steps in the direction of the gradient of the
+        loss with static learning rate η.
+
+        :return: None
+        :rtype: NoneType
+        """
+        for group in self.param_groups:
+            for p in group["params"]:
+                grad = p.grad.data if group["maximize"] else -p.grad.data
+                state = self.state[p]
+
+                # set beta for misclassified inputs and apply update
+                misclassified = group["model"].misclassified
+                state["beta"] = torch.where(misclassified, group["beta"], 1)
+                p.mul_(grad.mul_(state["beta"].mul_(group["lr"])))
+        return None
 
 
 class MomentumBestStart(torch.optim.Optimizer):
@@ -23,16 +101,15 @@ class MomentumBestStart(torch.optim.Optimizer):
     this optimizer addresses these weaknesses. Firstly, this optimizer adds a
     momenmtum term, defined as:
 
-        δ_(k+1) = P(Δ_k + η * ∇f(x + Δ_k))
-        Δ_(k+1) = P(Δ_k + α * (δ_(k+1) - Δ_k) + (1 - α) * (Δ_k - Δ_(k-1))
+        δ_(k+1) = Δ_k + η * ∇f(x + Δ_k)
+        Δ_(k+1) = Δ_k + α * (δ_(k+1) - Δ_k) + (1 - α) * (Δ_k - Δ_(k-1)
 
-    where k is the current iteration, P projects inputs into the feasible set
-    (i.e., an lp-norm), Δ is the current perturbation vector to produce
-    adversarial examples, η is the current learning rate, ∇f is the gradient of
-    the model with respect to Δ, x is the original input, and α is a constant
-    in [0, 1]. Secondly, the learning rate η is potentially halved at every
-    checkpoint w, where checkpoints are determined by multiplying the total
-    number of attack iterations by p_j, defined as:
+    where k is the current iteration, Δ is the current perturbation vector to
+    produce adversarial examples, η is the current learning rate, ∇f is the
+    gradient of the model with respect to Δ, x is the original input, and α is
+    a constant in [0, 1]. Secondly, the learning rate η is potentially halved
+    at every checkpoint w, where checkpoints are determined by multiplying the
+    total number of attack iterations by p_j, defined as:
 
                 p_(j+1) = p_j + max(p_j - p_(j-1) - 0.03, 0.06)
 
@@ -65,20 +142,21 @@ class MomentumBestStart(torch.optim.Optimizer):
         epochs,
         epsilon,
         alpha=0.75,
-        eta=0.75,
+        rho=0.75,
         pdecay=0.03,
         min_plen=0.06,
         **kwargs
     ):
         """
         This method instanties a MomentumBest Start object. It requires the
-        total number of optimization iterations and a reference to a Loss
-        object (so that the most recently computed loss can be retrieved). It
-        also accepts keyword arguments to provide a homogeneous interface.
-        Notably, because PyTorch optimizers cannot be instantiated without the
-        parameter to optimize, a dummy tensor is supplied and expected to be
-        overriden at a later time (i.e., within Traveler objects initialize
-        method).
+        total number of optimization iterations, a reference to a Loss object
+        (so that the most recently computed loss can be retrieved), and the
+        maximimum budget of the lp-norm threat model (which initializes the
+        learning rate). It also accepts keyword arguments to provide a
+        homogeneous interface. Notably, because PyTorch optimizers cannot be
+        instantiated without the parameter to optimize, a dummy tensor is
+        supplied and expected to be overriden at a later time (i.e., within
+        Traveler objects initialize method).
 
         :param params: the parameters to optimize over
         :type params: PyTorch FloatTensor object (n, m)
@@ -86,12 +164,12 @@ class MomentumBestStart(torch.optim.Optimizer):
         :type atk_loss: Loss object
         :param epochs: total number of optimization iterations
         :type epochs: int
-        :param epsilon: lp-norm threat model
+        :param epsilon: lp-norm threat model budget
         :type epsilon: float
         :param alpha: momentum factor
         :type alpha: float
-        :param eta: minimum percentage of successful updates between checkpoints
-        :type eta: float
+        :param rho: minimum percentage of successful updates between checkpoints
+        :type rho: float
         :param pdecay: period length decay
         :type pdecay: float
         :param min_plen: minimum period length
@@ -111,7 +189,7 @@ class MomentumBestStart(torch.optim.Optimizer):
                 "alpha": alpha,
                 "epochs": epochs,
                 "epsilon": epsilon,
-                "eta": eta,
+                "rho": rho,
                 "checkpoints": {-int(-p * epochs) for p in pj[:-1]},
             },
         )
@@ -122,14 +200,14 @@ class MomentumBestStart(torch.optim.Optimizer):
                 state = self.state[p]
                 state["best_p"] = p.detach().clone()
                 state["momentum_buffer"] = p.detatch().clone()
+                state["step"] = 0
                 state["epoch"] = 0
-                state["max_loss"] = 0
                 state["pre_loss"] = 0
+                state["max_loss"] = 0
                 state["lr"] = torch.full([p.size(0)], group["epsilon"])
                 state["lr_updated"] = torch.full(state["lr"].size(), False)
-                state["num_loss_updates"] = torch.full(state["lr"].size(), False)
+                state["num_loss_updates"] = torch.zeros(state["lr"].size())
                 state["max_loss_updated"] = torch.full(state["lr"].size(), False)
-                #state["step"] = 0
         return None
 
     @torch.no_grad()
@@ -147,12 +225,13 @@ class MomentumBestStart(torch.optim.Optimizer):
         """
         for group in self.param_groups:
             for p in group["params"]:
-                grad = p.grad.data if self.maximize else -p.grad.data
+                curr_loss = group["atk_loss"].curr_loss
+                grad = p.grad.data if group["maximize"] else -p.grad.data
                 state = self.state[p]
 
                 # update max loss and best perturbations, element-wise
-                max_loss_inc = torch.gt(self.atk_loss.curr_loss, state["max_loss"])
-                state["max_loss"][max_loss_inc] = self.atk_loss.curr_loss[max_loss_inc]
+                max_loss_inc = curr_loss.gt(state["max_loss"])
+                state["max_loss"][max_loss_inc] = curr_loss[max_loss_inc]
                 state["best_p"][max_loss_inc] = p.detatch().clone()[max_loss_inc]
 
                 # apply perturbation and momoentum steps
@@ -161,14 +240,29 @@ class MomentumBestStart(torch.optim.Optimizer):
                 p.mul_(2).sum_(group["momentum_buffer"]).sum_(grad)
 
                 # perform checkpoint subroutines (and update associated info)
-                loss_inc = torch.gt(self.atk_loss.curr, state["prev_loss"])
+                loss_inc = curr_loss.gt(state["prev_loss"])
                 state["num_loss_updates"][loss_inc].add_(1)
                 state["max_loss_updated"][max_loss_inc] = True
-                state["prev_loss"] = self.atk_loss.curr
-                if state["step"] in group["checkpoints"]:
+                state["prev_loss"] = curr_loss
+                if state["epoch"] in group["checkpoints"]:
 
-                    # has the loss increased >eta% of steps within this checkpoint?
+                    # loss increased <rho% or lr and max loss stayed the same?
+                    c1 = state["num_loss_updates"].gt(group["rho"] * state["step"])
+                    c2 = state["lr_updated"].logical_and(state["max_loss_updated"])
+                    update = c1.logical_or(c2)
+
+                    # if so, half learning rate and reset perturbation to max loss
+                    state["lr"][update] = state["lr"].div(2)[update]
+                    p[update] = state["best_p"][update]
+
+                    # update checkpoint subroutine state
+                    state["step"] = 0
+                    state["lr_updated"].mul_(False)
+                    state["num_loss_updates"].mul_(0)
+                    state["max_loss_updated"].mul_(False)
 
                 # update optimizer state
-
+                state["momentum_buffer"] = p.detatch().clone()
+                state["epoch"] += 1
+                state["step"] += 1
         return None
