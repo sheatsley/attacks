@@ -121,15 +121,15 @@ class MomentumBestStart(torch.optim.Optimizer):
             for p in group["params"]:
                 state = self.state[p]
                 state["best_p"] = p.detach().clone()
+                state["momentum_buffer"] = p.detatch().clone()
                 state["epoch"] = 0
-                state["momentum_buffer"] = p
-                state["lr"] = torch.full([p.size(0)], group["epsilon"])
                 state["max_loss"] = 0
-                state["max_loss_updated"] = torch.full(state["lr"].size(), False)
                 state["pre_loss"] = 0
+                state["lr"] = torch.full([p.size(0)], group["epsilon"])
                 state["lr_updated"] = torch.full(state["lr"].size(), False)
-                state["num_loss_increased"] = torch.full(state["lr"].size(), False)
-                state["step"] = 0
+                state["num_loss_updates"] = torch.full(state["lr"].size(), False)
+                state["max_loss_updated"] = torch.full(state["lr"].size(), False)
+                #state["step"] = 0
         return None
 
     @torch.no_grad()
@@ -151,14 +151,23 @@ class MomentumBestStart(torch.optim.Optimizer):
                 state = self.state[p]
 
                 # update max loss and best perturbations, element-wise
-                loss_inc = torch.gt(self.atk_loss.curr_loss, state["max_loss"])
-                state["max_loss"][loss_inc] = self.atk_loss.curr_loss[loss_inc]
-                state["best_p"][loss_inc] = p.detatch().clone()[loss_inc]
+                max_loss_inc = torch.gt(self.atk_loss.curr_loss, state["max_loss"])
+                state["max_loss"][max_loss_inc] = self.atk_loss.curr_loss[max_loss_inc]
+                state["best_p"][max_loss_inc] = p.detatch().clone()[max_loss_inc]
 
                 # apply perturbation and momoentum steps
-                p.add_(grad.mul_(state["lr"]))
+                state["momentum_buffer"].mul_(group["alpha"] - 1)
+                grad.mul_(state["lr"].mul(group["alpha"]))
+                p.mul_(2).sum_(group["momentum_buffer"]).sum_(grad)
 
-                # perform checkpoint subroutines
+                # perform checkpoint subroutines (and update associated info)
+                loss_inc = torch.gt(self.atk_loss.curr, state["prev_loss"])
+                state["num_loss_updates"][loss_inc].add_(1)
+                state["max_loss_updated"][max_loss_inc] = True
+                state["prev_loss"] = self.atk_loss.curr
+                if state["step"] in group["checkpoints"]:
+
+                    # has the loss increased >eta% of steps within this checkpoint?
 
                 # update optimizer state
 
