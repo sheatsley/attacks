@@ -85,7 +85,7 @@ class Attack:
         :param norm: lp-space to project gradients into
         :type norm: surface module callable
         :param model: neural network
-        :type model: PyTorch Module-inherited object
+        :type model: Scikit-Torch Model-inherited object
         :param saliency_map: desired saliency map heuristic
         :type saliency_map: saliency module object
         :param surface_closure: subroutines after each backward pass
@@ -110,7 +110,7 @@ class Attack:
         self.clip = clip
         self.components = {
             "change of variables": change_of_variables,
-            "loss function": loss.__name__,
+            "loss function": loss_func.__name__,
             "optimizer": optimizer_alg.__name__,
             "random restart": random_restart,
             "saliency map": saliency_map.__name__,
@@ -143,14 +143,14 @@ class Attack:
         )
         loss_func = loss_func()
         custom_opt_params = {
-            "atk_loss": loss,
+            "atk_loss": loss_func,
             "epochs": epochs,
             "epsilon": self.epsilon,
             "model_acc": model.accuracy,
         }
         torch_opt_params = {
             "lr": self.alpha,
-            "maximize": loss.max_obj,
+            "maximize": loss_func.max_obj,
             "params": torch.zeros(1),
         }
         optimizer_alg = optimizer_alg(
