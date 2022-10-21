@@ -7,6 +7,10 @@ import torch  # Tensors and Dynamic neural networks in Python with strong GPU ac
 from torch.optim import Adam  # Implements Adam: A Method for Stochasitc Optimization
 from torch.optim import SGD  # Implements stochasitc gradient descent
 
+# TODO
+# consider adding closure to BackwardSGD to perform beta backstep after perturbation
+# add unit tests to confirm correctness
+
 
 class BackwardSGD(torch.optim.Optimizer):
     """
@@ -65,7 +69,7 @@ class BackwardSGD(torch.optim.Optimizer):
         for group in self.param_groups:
             for p in group["params"]:
                 state = self.state[p]
-                state["beta"] = torch.full([p.size(0)], group["beta"])
+                state["beta"] = torch.full((p.size(0),), group["beta"])
 
     @torch.no_grad()
     def step(self):
@@ -204,7 +208,7 @@ class MomentumBestStart(torch.optim.Optimizer):
                 state["epoch"] = 0
                 state["pre_loss"] = 0
                 state["max_loss"] = 0
-                state["lr"] = torch.full([p.size(0)], group["epsilon"])
+                state["lr"] = torch.full((p.size(0),), group["epsilon"])
                 state["lr_updated"] = torch.full(state["lr"].size(), False)
                 state["num_loss_updates"] = torch.zeros(state["lr"].size())
                 state["max_loss_updated"] = torch.full(state["lr"].size(), False)
@@ -266,3 +270,8 @@ class MomentumBestStart(torch.optim.Optimizer):
                 state["epoch"] += 1
                 state["step"] += 1
         return None
+
+
+if __name__ == "__main__":
+    """ """
+    raise SystemExit(0)
