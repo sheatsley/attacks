@@ -14,10 +14,10 @@ from utilities import print  # Use timestamped print
 
 # TODO
 # implement unit test
-# add shortcuts for auto-building known attacks (assist architectures.py)
+# implement adversary layer
+# consider removing closures and have it be implicit (eg if objs implement closure)
 # check if tuple passed as clip needs to be cast as matrix
 # add early termination support
-# organize argument orders
 
 
 class Attack:
@@ -35,8 +35,8 @@ class Attack:
 
     def __init__(
         self,
-        epochs,
         clip,
+        epochs,
         epsilon,
         alpha,
         change_of_variables,
@@ -47,8 +47,8 @@ class Attack:
         model,
         saliency_map,
         batch_size=-1,
-        surface_closure=(),
         traveler_closure=(),
+        surface_closure=(),
     ):
         """
         This method instantiates an Attack object with a variety of parameters
@@ -58,10 +58,10 @@ class Attack:
 
         :param batch_size: crafting batch size (-1 for 1 batch)
         :type batch_size: int
+        :param clip: range of allowable values for the domain
+        :type clip: tuple of ints or PyTorch FloatTensor objects (n, m)
         :param epochs: number of optimization steps to perform
         :type epochs: int
-        :param clip: range of allowable values for the domain
-        :type clip: tuple of integers or PyTorch FloatTensor objects (samples, features)
         :param epsilon: lp-norm ball threat model
         :type epsilon: float
 
@@ -125,10 +125,13 @@ class Attack:
             self.components["target norm"][1],
         }
         name_map = {
-            set("S", "r̶", "v̶", "Cr", "i", "∞"): "BIM",
-            set("A", "r̶", "V", "CW", "i", "2"): "CWL2",
+            set("M", "R", "v̶", "CE", "i", "∞"): "APGD-CE",
+            set("M", "R", "v̶", "DL", "i", "∞"): "APGD-DLR",
+            set("S", "r̶", "v̶", "CE", "i", "∞"): "BIM",
+            set("A", "r̶", "V", "CW", "i", "2"): "CW-L2",
             set("S", "r̶", "v̶", "Id", "d", "2"): "DF",
-            set("S", "R", "v̶", "Cr", "i", "∞"): "PGD",
+            set("B", "r̶", "v̶", "Id", "d", "2"): "FAB",
+            set("S", "R", "v̶", "CE", "i", "∞"): "PGD",
             set("S", "r̶", "v̶", "Id", "j", "0"): "JSMA",
         }
         self.name = name_map.get(name, "-".join(name))
@@ -173,11 +176,14 @@ class Attack:
         defines an attack made popular in the literature, it's full name is
         returned instead. The following named attacks are supported:
 
-            BIM (Basic Iterative Method) (https://arxiv.org/abs/1607.02533)
-            CWL2 (Carlini-Wagner L2) (https://arxiv.org/abs/1608.04644)
-            DF (DeepFool) (https://arxiv.org/abs/1511.04599)
-            PGD (Projected Gradient Descent) (https://arxiv.org/abs/1706.06083)
-            JSMA (Jacobian Saliency Map Approach) (https://arxiv.org/abs/1511.07528)
+            APGD-CE (Auto-PGD with CE loss) (https://arxiv.org/pdf/2003.01690.pdf)
+            APGD-DLR (Auto-PGD with DLR loss) (https://arxiv.org/pdf/2003.01690.pdf)
+            BIM (Basic Iterative Method) (https://arxiv.org/pdf/1611.01236.pdf)
+            CW-L2 (Carlini-Wagner with l₂ norm) (https://arxiv.org/pdf/1608.04644.pdf)
+            DF (DeepFool) (https://arxiv.org/pdf/1511.04599.pdf)
+            FAB (Fast Adaptive Boundary) (https://arxiv.org/pdf/1907.02044.pdf)
+            PGD (Projected Gradient Descent) (https://arxiv.org/pdf/1706.06083.pdf)
+            JSMA (Jacobian Saliency Map Approach) (https://arxiv.org/pdf/1511.07528.pdf)
 
         :return: the attack name with parameters
         :rtype: str
@@ -188,9 +194,11 @@ class Attack:
         """
         This method crafts adversarial examples, as defined by the attack
         parameters and the instantiated Travler and Surface attribute objects.
-        Specifically, it creates a copy of x, creates the desired batch size,
-        performs traveler initilizations (i.e., change of variables and random
-        restart), and iterates an epoch number of times.
+        Specifically, it normalizes inputs to be within [0, 1] (as some
+        techniques assume this range, e.g., change of variables), creates a
+        copy of x, creates the desired batch size, performs traveler
+        initilizations (i.e., change of variables and random restart), and
+        iterates an epoch number of times.
 
         :param x: the batch of inputs to produce adversarial examples from
         :type x: PyTorch FloatTensor object (n, m)
@@ -222,45 +230,60 @@ class Attack:
 
 def attack_builder(
     alpha=None,
+    clip=None,
     epochs=None,
     epsilon=None,
     model=None,
-    change_of_variables_enabled=(False, True),
-    optimizers=(optimizer.SGD, optimizer.Adam),
-    random_restart_enabled=(False, True),
-    losses=(loss.IdentityLoss, loss.CrossEntropyLoss, loss.CWLoss),
+    change_of_variables_enabled=(True, False),
+    optimizers=(
+        optimizer.Adam,
+        optimizer.BackwardSGD,
+        optimizer.MomentumBestStart,
+        optimizer.SGD,
+    ),
+    random_restart_enabled=(True, False),
+    losses=(loss.CELoss, loss.CWLoss, loss.DLRLoss, loss.IdentityLoss),
     norms=(surface.l0, surface.l2, surface.linf),
-    saliency_maps=(saliency.identity, saliency.jsma, saliency.deepfool),
+    saliency_maps=(
+        saliency.DeepFoolSaliency,
+        saliency.JacobianSaliency,
+        saliency.IdentitySaliency,
+    ),
 ):
     """
     As shown in [paper_url], seminal attacks in machine learning can be cast
     into a single, unified framework. With this observation, this method
     combinatorically builds attack objects by swapping popular optimizers,
-    norms, saliency maps, loss functions, and other "tricks" used within the
+    norms, saliency maps, loss functions, and other techniques used within the
     AML community, such as random restart and change of variables. The
     combinations of supported components are shown below:
 
         Traveler Components:
         Change of variables: Enabled or disabled
-        Optimizer: Adam and Stochastic Gradient Descent
+        Optimizer: Adam, Backward Stochastic Gradient Descent,
+                    Momentum Best Start, and Stochastic Gradient Descent
         Random restart: Enabled or disabled
 
         Surface Components:
-        Loss: Identity, Categorical Cross-Entropy, and Carlini-Wagner
+        Loss: Categorical Cross-Entropy, Difference of Logits Ratio, Identity,
+                and Carlini-Wagner
         Norm: l₀, l₂, and l∞
-        Saliency map: Identity, JSMA, and DeepFool
+        Saliency map: DeepFool, Jacobian, and Identity
 
-    Moreover, we expose these support components as arguments above for ease of
-    instantiating a subset of the total combination space.
+    We expose these supported components as arguments above for ease of
+    instantiating a subset of the total combination space. Moreover, we also
+    expose the following experimental parameters below to compare attacks.
 
     :param alpha: learning rate of the optimizer
     :type alpha: float
+    :param clip: permissible values for the domain
+    :type clip: tuple of ints or PyTorch FloatTensor object (n, m)
     :param epochs: number of optimization steps to perform
     :type epochs: int
     :param epsilon: lp-norm ball threat model
     :type epsilon: float
     :param model: neural network
-    :type model: PyTorch Module-inherited object
+    :type model: Scikit-Torch Model-inherited object
     :return: a generator yielding attack combinations
     :rtype: generator of Attack objects
     """
@@ -302,6 +325,278 @@ def attack_builder(
             loss=loss_func,
             norm=norm,
         )
+
+
+def apgdce(alpha=None, clip=None, epochs=None, epsilon=None, model=None):
+    """
+    This function serves as an alias to build Auto-PGD with Cross-Entropy loss
+    (APGD-CE), as shown in https://arxiv.org/abs/2003.01690. Specifically,
+    APGD-CE: does not use change of variables, uses the Momentum Best Start
+    optimizer, uses random restart, uses Cross-Entropy loss, uses l∞ norm, and
+    uses the Identity saliency map.
+
+    :param alpha: learning rate of the optimizer
+    :type alpha: float
+    :param epochs: number of optimization steps to perform
+    :type epochs: int
+    :param epsilon: lp-norm ball threat model
+    :type epsilon: float
+    :param model: neural network
+    :type model: Scikit-Torch Model-inherited object
+    :return: APGD-CE attack
+    :rtype: Attack objects
+    """
+    return Attack(
+        alpha=alpha,
+        clip=clip,
+        epochs=epochs,
+        epsilon=epsilon,
+        model=model,
+        change_of_variables=False,
+        optimizer=optimizer.MomentumBestStart,
+        random_restart=True,
+        loss=loss.CELoss,
+        norm=surface.linf,
+        saliency_map=saliency.IdentitySaliency,
+    )
+
+
+def apgddlr(alpha=None, clip=None, epochs=None, epsilon=None, model=None):
+    """
+    This function serves as an alias to build Auto-PGD with the Difference of
+    Logits Ratio loss (APGD-DLR), as shown in
+    https://arxiv.org/abs/2003.01690. Specifically, APGD-DLR: does not use
+    change of variables, uses the Momentum Best Start optimizer, uses random
+    restart, uses Difference of Logits ratio loss, uses l∞ norm, and uses the
+    Identity saliency map.
+
+    :param alpha: learning rate of the optimizer
+    :type alpha: float
+    :param epochs: number of optimization steps to perform
+    :type epochs: int
+    :param epsilon: lp-norm ball threat model
+    :type epsilon: float
+    :param model: neural network
+    :type model: Scikit-Torch Model-inherited object
+    :return: APGD-DLR attack
+    :rtype: Attack objects
+    """
+    return Attack(
+        alpha=alpha,
+        clip=clip,
+        epochs=epochs,
+        epsilon=epsilon,
+        model=model,
+        change_of_variables=False,
+        optimizer=optimizer.MomentumBestStart,
+        random_restart=True,
+        loss=loss.DLRLoss,
+        norm=surface.linf,
+        saliency_map=saliency.IdentitySaliency,
+    )
+
+
+def bim(alpha=None, clip=None, epochs=None, epsilon=None, model=None):
+    """
+    This function serves as an alias to build the Basic Iterative Method (BIM),
+    as shown in (https://arxiv.org/pdf/1611.01236.pdf) Specifically, BIM: does
+    not use change of variables, uses the Stochastic Gradient Descent
+    optimizer, does not use random restart, uses Cross Entropyy loss, uses l∞
+    norm, and uses the Identity saliency map.
+
+    :param alpha: learning rate of the optimizer
+    :type alpha: float
+    :param epochs: number of optimization steps to perform
+    :type epochs: int
+    :param epsilon: lp-norm ball threat model
+    :type epsilon: float
+    :param model: neural network
+    :type model: Scikit-Torch Model-inherited object
+    :return: BIM attack
+    :rtype: Attack objects
+    """
+    return Attack(
+        alpha=alpha,
+        clip=clip,
+        epochs=epochs,
+        epsilon=epsilon,
+        model=model,
+        change_of_variables=False,
+        optimizer=optimizer.SGD,
+        random_restart=False,
+        loss=loss.CELoss,
+        norm=surface.linf,
+        saliency_map=saliency.IdentitySaliency,
+    )
+
+
+def cwl2(alpha=None, clip=None, epochs=None, epsilon=None, model=None):
+    """
+    This function serves as an alias to build Carlini-Wagner l₂ (CW-L2), as
+    shown in (https://arxiv.org/pdf/1608.04644.pdf) Specifically, CW-L2: uses
+    change of variables, uses the Adam optimizer, does not use random restart,
+    uses Carlini-Wagner loss, uses l₂ norm, and uses the Identity saliency map.
+
+    :param alpha: learning rate of the optimizer
+    :type alpha: float
+    :param epochs: number of optimization steps to perform
+    :type epochs: int
+    :param epsilon: lp-norm ball threat model
+    :type epsilon: float
+    :param model: neural network
+    :type model: Scikit-Torch Model-inherited object
+    :return: Carlini-Wagner l₂ attack
+    :rtype: Attack objects
+    """
+    return Attack(
+        alpha=alpha,
+        clip=clip,
+        epochs=epochs,
+        epsilon=epsilon,
+        model=model,
+        change_of_variables=True,
+        optimizer=optimizer.Adam,
+        random_restart=False,
+        loss=loss.CWLoss,
+        norm=surface.l2,
+        saliency_map=saliency.IdentitySaliency,
+    )
+
+
+def df(alpha=None, clip=None, epochs=None, epsilon=None, model=None):
+    """
+    This function serves as an alias to build DeepFool (DF), as shown in
+    (https://arxiv.org/pdf/1511.04599.pdf) Specifically, DF: does not use
+    change of variables, uses the Stochastic Gradient Descent optimizer, does
+    not use random restart, uses Identity loss, uses l₂ norm, and uses the
+    DeepFool saliency map.
+
+    :param alpha: learning rate of the optimizer
+    :type alpha: float
+    :param epochs: number of optimization steps to perform
+    :type epochs: int
+    :param epsilon: lp-norm ball threat model
+    :type epsilon: float
+    :param model: neural network
+    :type model: Scikit-Torch Model-inherited object
+    :return: DeepFool attack
+    :rtype: Attack objects
+    """
+    return Attack(
+        alpha=alpha,
+        clip=clip,
+        epochs=epochs,
+        epsilon=epsilon,
+        model=model,
+        change_of_variables=False,
+        optimizer=optimizer.SGD,
+        random_restart=False,
+        loss=loss.IdentityLoss,
+        norm=surface.l2,
+        saliency_map=saliency.DeepFoolSaliency,
+    )
+
+
+def fab(alpha=None, clip=None, epochs=None, epsilon=None, model=None):
+    """
+    This function serves as an alias to build Fast Adaptive Boundary (FAB), as
+    shown in (https://arxiv.org/pdf/1907.02044.pdf) Specifically, FAB: does not
+    use change of variables, uses the Backward Stochastic Gradient Descent
+    optimizer, does not use random restart, uses Identity loss, uses l₂ norm,
+    and uses the Identity saliency map.
+
+    :param alpha: learning rate of the optimizer
+    :type alpha: float
+    :param epochs: number of optimization steps to perform
+    :type epochs: int
+    :param epsilon: lp-norm ball threat model
+    :type epsilon: float
+    :param model: neural network
+    :type model: Scikit-Torch Model-inherited object
+    :return: DeepFool attack
+    :rtype: Attack objects
+    """
+    return Attack(
+        alpha=alpha,
+        clip=clip,
+        epochs=epochs,
+        epsilon=epsilon,
+        model=model,
+        change_of_variables=False,
+        optimizer=optimizer.BackwardSGD,
+        random_restart=False,
+        loss=loss.IdentityLoss,
+        norm=surface.l2,
+        saliency_map=saliency.IdentitySaliency,
+    )
+
+
+def pgd(alpha=None, clip=None, epochs=None, epsilon=None, model=None):
+    """
+    This function serves as an alias to build Projected Gradient Descent (PGD),
+    as shown in (https://arxiv.org/pdf/1706.06083.pdf) Specifically, PGD: does
+    not use change of variables, uses the Stochastic Gradient Descent
+    optimizer, uses random restart, uses Identity loss, uses l∞ norm, and uses
+    the Identity saliency map.
+
+    :param alpha: learning rate of the optimizer
+    :type alpha: float
+    :param epochs: number of optimization steps to perform
+    :type epochs: int
+    :param epsilon: lp-norm ball threat model
+    :type epsilon: float
+    :param model: neural network
+    :type model: Scikit-Torch Model-inherited object
+    :return: DeepFool attack
+    :rtype: Attack objects
+    """
+    return Attack(
+        alpha=alpha,
+        clip=clip,
+        epochs=epochs,
+        epsilon=epsilon,
+        model=model,
+        change_of_variables=False,
+        optimizer=optimizer.SGD,
+        random_restart=False,
+        loss=loss.CELoss,
+        norm=surface.linf,
+        saliency_map=saliency.IdentitySaliency,
+    )
+
+
+def jsma(alpha=None, clip=None, epochs=None, epsilon=None, model=None):
+    """
+    This function serves as an alias to build the Jacobian-based Saliency Map
+    Approach (JSMA), as shown in (https://arxiv.org/pdf/1511.07528.pdf)
+    Specifically, the JSMA: does not use change of variables, uses the
+    Stochastic Gradient Descent optimizer, does not use random restart, uses
+    Identity loss, uses l0 norm, and uses the Jacobian saliency map.
+
+    :param alpha: learning rate of the optimizer
+    :type alpha: float
+    :param epochs: number of optimization steps to perform
+    :type epochs: int
+    :param epsilon: lp-norm ball threat model
+    :type epsilon: float
+    :param model: neural network
+    :type model: Scikit-Torch Model-inherited object
+    :return: DeepFool attack
+    :rtype: Attack objects
+    """
+    return Attack(
+        alpha=alpha,
+        clip=clip,
+        epochs=epochs,
+        epsilon=epsilon,
+        model=model,
+        change_of_variables=False,
+        optimizer=optimizer.SGD,
+        random_restart=False,
+        loss=loss.IdentityLoss,
+        norm=surface.l0,
+        saliency_map=saliency.JacobianSaliency,
+    )
 
 
 if __name__ == "__main__":
