@@ -7,7 +7,7 @@ import torch  # Tensors and Dynamic neural networks in Python with strong GPU ac
 import traveler  # PyTorch-based optimizers for crafting adversarial examples
 
 # TODO:
-# implement initialize
+# implement initialize (expose model accuracy)
 # add unit tests
 
 
