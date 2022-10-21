@@ -9,7 +9,7 @@ import torch  # Tensors and Dynamic neural networks in Python with strong GPU ac
 # add unit tests to confirm correctness
 
 
-class CrossEntropyLoss(torch.nn.CrossEntropyLoss):
+class CELoss(torch.nn.CrossEntropyLoss):
     """
     This class is identical to the CrossEntropyLoss class in PyTorch, with the
     exception that: (1) the most recently computed loss is stored in curr_loss
@@ -18,7 +18,7 @@ class CrossEntropyLoss(torch.nn.CrossEntropyLoss):
     attributes to state that optimizers should maximize this function and that
     a reference to perturbation vectors is not needed by this class.
 
-    :func:`__init__` instantiates a CrossEntropyLoss object
+    :func:`__init__` instantiates a CELoss object
     :func:`forward`: returns the loss for a given batch of inputs
     """
 
@@ -27,8 +27,8 @@ class CrossEntropyLoss(torch.nn.CrossEntropyLoss):
 
     def __init__(self, **kwargs):
         """
-        This method instantiates a CrossEntropyLoss object. It accepts keyword
-        arguments for the PyTorch parent class described in:
+        This method instantiates a CELoss object. It accepts keyword arguments
+        for the PyTorch parent class described in:
         https://pytorch.org/docs/stable/generated/torch.nn.CrossEntropyLoss.html
         We note that we explicitly pass reduction="none", as this can cause
         gradients to underflow when computing adversarial examples for large
@@ -37,7 +37,7 @@ class CrossEntropyLoss(torch.nn.CrossEntropyLoss):
         :param kwargs: keyword arguments for torch.nn.CrossEntropyLoss
         :type kwargs: dict
         :return: Cross Entropy loss
-        :rtype: CrossEntropyLoss object
+        :rtype: CELoss object
         """
         super().__init__(reduction="none", **kwargs)
         return None
@@ -118,7 +118,7 @@ class CWLoss(torch.nn.Module):
         This method serves as a setter for attaching a reference to the
         perturbation vector to CWLoss objects as an attribute (as the attribute
         is subsequently referenced in the forward pass). Additionally, c is
-        expanded by the number of samples to faciliate hyperparameter
+        expanded by the number of inputs to faciliate hyperparameter
         optimization, as done in https://arxiv.org/pdf/1608.04644.pdf.
 
         :param delta: perturbation vector
