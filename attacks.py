@@ -1,5 +1,6 @@
 """
-This module defines the attacks proposed in [paper_url].
+This module defines the attacks proposed in
+https://arxiv.org/pdf/2209.04521.pdf.
 Authors: Ryan Sheatsley & Blaine Hoak
 Mon Apr 18 2022
 """
@@ -14,19 +15,18 @@ from utilities import print  # Use timestamped print
 
 # TODO
 # implement unit test
-# implement adversary layer
-# consider removing closures and have it be implicit (eg if objs implement closure)
-# check if tuple passed as clip needs to be cast as matrix
 # add early termination support
+# implement DDN
 
 
 class Attack:
     """
     The Attack class serves as a binder between Traveler and Surface objects
-    with a high-level interface. Detailed in [paper_url], attacks are built
-    from a differentiable function (i.e., a surface) and routines to manipulate
-    inputs (i.e., a traveler). Upon instantiation, the `craft` method serves as
-    the main entry point in crafting adversarial examples.
+    with a high-level interface. Detailed in
+    https://arxiv.org/pdf/2209.04521.pdf, attacks are built from a
+    differentiable function (i.e., a surface) and routines to manipulate inputs
+    (i.e., a traveler). Upon instantiation, the `craft` method serves as the
+    main entry point in crafting adversarial examples.
 
     :func:`__init__`: instantiates Attack objects
     :func:`__repr__`: returns the attack name (based on the components)
@@ -47,8 +47,6 @@ class Attack:
         model,
         saliency_map,
         batch_size=-1,
-        traveler_closure=(),
-        surface_closure=(),
     ):
         """
         This method instantiates an Attack object with a variety of parameters
@@ -59,7 +57,7 @@ class Attack:
         :param batch_size: crafting batch size (-1 for 1 batch)
         :type batch_size: int
         :param clip: range of allowable values for the domain
-        :type clip: tuple of ints or PyTorch FloatTensor objects (n, m)
+        :type clip: tuple of floats or PyTorch FloatTensor object (n, m)
         :param epochs: number of optimization steps to perform
         :type epochs: int
         :param epsilon: lp-norm ball threat model
@@ -75,8 +73,6 @@ class Attack:
         :type optimizer_alg: optimizer module object
         :param random_restart: whether to randomly perturb inputs
         :type random_restart: bool
-        :param traveler_closure: subroutines after each perturbation
-        :type traveler_closure: tuple of callables
 
         Finally, the following parameters define Surface objects:
 
@@ -88,8 +84,6 @@ class Attack:
         :type model: Scikit-Torch Model-inherited object
         :param saliency_map: desired saliency map heuristic
         :type saliency_map: saliency module object
-        :param surface_closure: subroutines after each backward pass
-        :type surface_closure: tuple of callables
 
         To easily identify attacks, __repr__ is overriden and instead returns
         an abbreviation computed by concatenating the first letter (or two, if
@@ -149,7 +143,7 @@ class Attack:
             "atk_loss": loss_func,
             "epochs": epochs,
             "epsilon": self.epsilon,
-            "model_acc": model.accuracy,
+            "model_acc": model,
         }
         torch_opt_params = {
             "lr": self.alpha,
@@ -162,11 +156,9 @@ class Attack:
             else torch_opt_params
         )
         self.traveler = traveler.Traveler(
-            change_of_variables, optimizer_alg, random_restart, traveler_closure
+            change_of_variables, optimizer_alg, random_restart
         )
-        self.surface = surface.Surface(
-            model, saliency_map, loss_func, norm, surface_closure
-        )
+        self.surface = surface.Surface(model, saliency_map, loss_func, norm)
         return None
 
     def __repr__(self):
@@ -207,17 +199,25 @@ class Attack:
         :return: a batch of adversarial examples
         :rtype: PyTorch FloatTensor object (n, m)
         """
+
+        # clone inputs, setup perturbation vector, chunks, epsilon, and clip
         x = x.detatch().clone()
         p = x.new_zeros(x.size())
         chunks = len(x) if self.batch_size == -1 else -(-len(x) // self.batch_size)
+        epsilon = (-self.epsilon, self.epsilon)
+        clip = (
+            self.clip
+            if isinstance(self.clip, torch.Tensor)
+            else torch.tensor(self.clip).tile(*x.size(), 1)
+        )
+
+        # craft adversarial examples per batch
         for b, (xb, yb, pb) in enumerate(
             zip(x.chunk(chunks), y.chunk(chunks), p.chunk(chunks)), start=1
         ):
             print(f"Crafting {len(x)} adversarial examples with {self}... {b/chunks}")
-            min_p, max_p = (
-                (clip - xb).clamp(-self.epsilon, self.epsilon) for clip in self.clip
-            )
-            self.surface.initialize(xb, pb, (min_p, max_p))
+            min_p, max_p = clip.sub(xb.unsqueeze(1)).clamp(*epsilon).unbind(2)
+            self.surface.initialize((min_p, max_p))
             self.traveler.initialize(xb, pb)
             p.clamp_(min_p, max_p)
             for epoch in range(self.epochs):
@@ -251,12 +251,12 @@ def attack_builder(
     ),
 ):
     """
-    As shown in [paper_url], seminal attacks in machine learning can be cast
-    into a single, unified framework. With this observation, this method
-    combinatorically builds attack objects by swapping popular optimizers,
-    norms, saliency maps, loss functions, and other techniques used within the
-    AML community, such as random restart and change of variables. The
-    combinations of supported components are shown below:
+    As shown in https://arxiv.org/pdf/2209.04521.pdf, seminal attacks in
+    machine learning can be cast into a single, unified framework. With this
+    observation, this method combinatorically builds attack objects by swapping
+    popular optimizers, norms, saliency maps, loss functions, and other
+    techniques used within the AML community, such as random restart and change
+    of variables. The combinations of supported components are shown below:
 
         Traveler Components:
         Change of variables: Enabled or disabled
@@ -277,7 +277,7 @@ def attack_builder(
     :param alpha: learning rate of the optimizer
     :type alpha: float
     :param clip: permissible values for the domain
-    :type clip: tuple of ints or PyTorch FloatTensor object (n, m)
+    :type clip: tuple of floats or PyTorch FloatTensor object (n, m)
     :param epochs: number of optimization steps to perform
     :type epochs: int
     :param epsilon: lp-norm ball threat model
@@ -372,6 +372,8 @@ def apgddlr(alpha=None, clip=None, epochs=None, epsilon=None, model=None):
 
     :param alpha: learning rate of the optimizer
     :type alpha: float
+    :param clip: range of allowable values for the domain
+    :type clip: tuple of floats or PyTorch FloatTensor object (n, m)
     :param epochs: number of optimization steps to perform
     :type epochs: int
     :param epsilon: lp-norm ball threat model
@@ -406,6 +408,8 @@ def bim(alpha=None, clip=None, epochs=None, epsilon=None, model=None):
 
     :param alpha: learning rate of the optimizer
     :type alpha: float
+    :param clip: range of allowable values for the domain
+    :type clip: tuple of floats or PyTorch FloatTensor object (n, m)
     :param epochs: number of optimization steps to perform
     :type epochs: int
     :param epsilon: lp-norm ball threat model
@@ -439,6 +443,8 @@ def cwl2(alpha=None, clip=None, epochs=None, epsilon=None, model=None):
 
     :param alpha: learning rate of the optimizer
     :type alpha: float
+    :param clip: range of allowable values for the domain
+    :type clip: tuple of floats or PyTorch FloatTensor object (n, m)
     :param epochs: number of optimization steps to perform
     :type epochs: int
     :param epsilon: lp-norm ball threat model
@@ -473,6 +479,8 @@ def df(alpha=None, clip=None, epochs=None, epsilon=None, model=None):
 
     :param alpha: learning rate of the optimizer
     :type alpha: float
+    :param clip: range of allowable values for the domain
+    :type clip: tuple of floats or PyTorch FloatTensor object (n, m)
     :param epochs: number of optimization steps to perform
     :type epochs: int
     :param epsilon: lp-norm ball threat model
@@ -507,6 +515,8 @@ def fab(alpha=None, clip=None, epochs=None, epsilon=None, model=None):
 
     :param alpha: learning rate of the optimizer
     :type alpha: float
+    :param clip: range of allowable values for the domain
+    :type clip: tuple of floats or PyTorch FloatTensor object (n, m)
     :param epochs: number of optimization steps to perform
     :type epochs: int
     :param epsilon: lp-norm ball threat model
@@ -541,6 +551,8 @@ def pgd(alpha=None, clip=None, epochs=None, epsilon=None, model=None):
 
     :param alpha: learning rate of the optimizer
     :type alpha: float
+    :param clip: range of allowable values for the domain
+    :type clip: tuple of floats or PyTorch FloatTensor object (n, m)
     :param epochs: number of optimization steps to perform
     :type epochs: int
     :param epsilon: lp-norm ball threat model
@@ -575,6 +587,8 @@ def jsma(alpha=None, clip=None, epochs=None, epsilon=None, model=None):
 
     :param alpha: learning rate of the optimizer
     :type alpha: float
+    :param clip: range of allowable values for the domain
+    :type clip: tuple of floats or PyTorch FloatTensor object (n, m)
     :param epochs: number of optimization steps to perform
     :type epochs: int
     :param epsilon: lp-norm ball threat model
