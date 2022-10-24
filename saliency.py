@@ -161,7 +161,7 @@ class JacobianSaliency:
     This class implements a similar saliency map used in the Jacobian-based
     Saliency Map Approach (JSMA) attack, as shown in
     https://arxiv.org/pdf/1511.07528.pdf. Specifically, the Jacobian saliency
-    map as used in [paper_url] is defined as:
+    map as used in https://arxiv.org/pdf/2209.04521.pdf is defined as:
 
          |J_y| * Σ_[i ≠ y] J_i if sign(J_y) ≠ sign(Σ_[i ≠ y] J_i) else 0
 
