@@ -1,5 +1,6 @@
 """
-This module defines the travler class referenced in [paper_url].
+This module defines the travler class referenced in
+https://arxiv.org/pdf/2209.04521.pdf.
 Authors: Ryan Sheatsley & Blaine Hoak
 Wed Apr 27 2022
 """
@@ -23,7 +24,7 @@ class Traveler:
     :func:`initialize`: prepares Traveler objects to operate over inputs
     """
 
-    def __init__(self, change_of_variables, optimizer, random_restart, closure=()):
+    def __init__(self, change_of_variables, optimizer, random_restart):
         """
         This method instantiates Traveler objects with a variety of attributes
         necessary for the remaining methods in this class. Conceptually,
@@ -50,7 +51,9 @@ class Traveler:
         self.change_of_variables = change_of_variables
         self.optimizer = optimizer
         self.random_restart = random_restart
-        self.closure = closure
+        self.closure = [
+            comp for c in vars(self) if hasattr(comp := getattr(self, c), "closure")
+        ]
         self.params = {
             "α": optimizer.lr,
             "CoV": change_of_variables,
@@ -71,7 +74,7 @@ class Traveler:
         :rtype: NoneType
         """
         self.optimizer.step()
-        [f() for f in self.closure]
+        [comp.closure() for comp in self.closure]
         return None
 
     def __repr__(self):
