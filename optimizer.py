@@ -14,8 +14,9 @@ from torch.optim import SGD  # Implements stochasitc gradient descent
 
 class BackwardSGD(torch.optim.Optimizer):
     """
-    This class implements BackwardSGD (as named by [paper_url]), an optimizer
-    used in the Fast Adaptive Boundary Attack (FAB), as shown in
+    This class implements BackwardSGD (as named by
+    https://arxiv.org/pdf/2209.04521.pdf), an optimizer used in the Fast
+    Adaptive Boundary Attack (FAB), as shown in
     https://arxiv.org/abs/1907.02044. FAB aims to to address two key
     deficiencies in PGD (as introduced in
     https://arxiv.org/pdf/1706.06083.pdf): (1) inability to find minimum norm
@@ -62,7 +63,7 @@ class BackwardSGD(torch.optim.Optimizer):
         """
         super().__init__(
             [params],
-            {"lr": lr, "beta": beta, "model": model},
+            {"lr": lr, "beta": beta, "model_acc": model},
         )
 
         # initialize state
@@ -88,7 +89,7 @@ class BackwardSGD(torch.optim.Optimizer):
                 state = self.state[p]
 
                 # set beta for misclassified inputs and apply update
-                misclassified = group["model"].misclassified
+                misclassified = ~group["model_acc"].accuracy
                 state["beta"] = torch.where(misclassified, group["beta"], 1)
                 p.mul_(grad.mul_(state["beta"].mul_(group["lr"])))
         return None
@@ -96,10 +97,10 @@ class BackwardSGD(torch.optim.Optimizer):
 
 class MomentumBestStart(torch.optim.Optimizer):
     """
-    This class implements MomentumBestStart (as named by [paper_url]), an
-    optimizer used in the AutoPGD attack, as shown in
-    https://arxiv.org/pdf/2003.01690.pdf. AutoPGD aims to address three key
-    deficiencies in PGD (as introduced in
+    This class implements MomentumBestStart (as named by
+    https://arxiv.org/pdf/2209.04521.pdf), an optimizer used in the AutoPGD
+    attack, as shown in https://arxiv.org/pdf/2003.01690.pdf. AutoPGD aims to
+    address three key deficiencies in PGD (as introduced in
     https://arxiv.org/pdf/1706.06083.pdf): (1) a fixed learning rate, (2)
     obliviousness to budget, and (3) a lack of any measurement of progress;
     this optimizer addresses these weaknesses. Firstly, this optimizer adds a
