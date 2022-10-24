@@ -1,5 +1,6 @@
 """
-This module defines the surface class referenced in [paper_url].
+This module defines the surface class referenced in
+https://arxiv.org/pdf/2209.04521.pdf.
 Authors: Ryan Sheatsley & Blaine Hoak
 Thu June 30 2022
 """
@@ -7,7 +8,6 @@ import torch  # Tensors and Dynamic neural networks in Python with strong GPU ac
 import traveler  # PyTorch-based optimizers for crafting adversarial examples
 
 # TODO:
-# implement initialize (expose model accuracy)
 # add unit tests
 
 
@@ -25,9 +25,7 @@ class Surface:
     :func:`initialize`: prepares Surface objects to operate over inputs
     """
 
-    def __init__(
-        self, loss, model, norm, saliency_map, change_of_variables=False, closure=()
-    ):
+    def __init__(self, loss, model, norm, saliency_map, change_of_variables=False):
         """
         This method instantiates Surface objects with a variety of attributes
         necessary for the remaining methods in this class. Conceputally,
@@ -51,8 +49,6 @@ class Surface:
         :type saliency_map: saliency module object
         :param change_of_variables: whether to map inputs out of tanh-space
         :type change_of_variables: boolean
-        :param closure: subroutines to run at the end of __call__
-        :type closure: tuple of callables
         :return: a surface
         :rtype: Surface object
         """
@@ -63,6 +59,9 @@ class Surface:
         self.change_of_variables = (
             traveler.tanh_space if change_of_variables else lambda x: x
         )
+        self.closure = [
+            comp for c in vars(self) if hasattr(comp := getattr(self, c), "closure")
+        ]
         self.params = {
             "loss": type(loss).__name__,
             "model": type(model).__name__,
@@ -125,7 +124,7 @@ class Surface:
         )
 
         # call closure subroutines and attach grads to the perturbation vector
-        [f() for f in self.closure]
+        [comp.closure(final_grads) for comp in self.closure]
         p.grad = final_grads
         return None
 
@@ -137,6 +136,23 @@ class Surface:
         :rtype: str
         """
         return f"Surface({self.params})"
+
+    def initialize(self, clip):
+        """
+        This method performs any preprocessing and initialization steps prior
+        to crafting adversarial examples. Specifically, some attacks operate
+        under the l0-norm, which exhibit a difficiency when the most salient
+        feature is at a clipping or threat-model bound; this can be alleviated
+        by considering these bounds when building the saliency map. At this time,
+        this intilization method attaches these bounds to Surface objects.
+
+        :param clip: the range of allowable values for the perturbation vector
+        :type clip: tuple of PyTorch FloatTensor objects (n, m)
+        :return: None
+        :rtype: NoneType
+        """
+        self.clip = clip
+        return None
 
 
 def linf(g):
@@ -166,7 +182,7 @@ def l0(g, clip, max_obj):
     :param g: the gradients of the perturbation vector
     :type g: PyTorch FloatTensor object (n, m)
     :param clip: the range of allowable values for the perturbation vector
-    :type clip: tuple of PyTorch FloatTensor objects (samples, features)
+    :type clip: tuple of PyTorch FloatTensor objects (n, m)
     :param max_obj: whether the used loss function is to be maximized
     :type max_obj: boolean
     :return: gradients projected into the l0-norm space
