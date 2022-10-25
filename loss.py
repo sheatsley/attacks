@@ -50,11 +50,11 @@ class CELoss(torch.nn.CrossEntropyLoss):
         optimizers who require it (e.g., BWSGD).
 
         :param logits: the model logits
-        :type logits: PyTorch FloatTensor object (n, c)
+        :type logits: torch Tensor object (n, c)
         :param y: the labels (or initial predictions) of the inputs (e.g., x)
         :type y: PyTorch Tensor object (n,)
         :return: the current loss
-        :rtype: PyTorch FloatTensor (n,)
+        :rtype: torch Tensor object (n,)
         """
         curr_loss = super().forward(logits, y)
         self.curr_loss = curr_loss.detatch()
@@ -122,7 +122,7 @@ class CWLoss(torch.nn.Module):
         optimization, as done in https://arxiv.org/pdf/1608.04644.pdf.
 
         :param delta: perturbation vector
-        :type delta: PyTorch FloatTensor object (n, m)
+        :type delta: torch Tensor object (n, m)
         :return: None
         :rtype: NoneType
         """
@@ -141,11 +141,11 @@ class CWLoss(torch.nn.Module):
         is the number of classes).
 
         :param logits: the model logits
-        :type logits: PyTorch FloatTensor object (n, c)
+        :type logits: torch Tensor object (n, c)
         :param y: the labels (or initial predictions) of the inputs (e.g., x)
         :type y: PyTorch Tensor object (n,)
         :return: the current loss
-        :rtype: PyTorch FloatTensor (n,)
+        :rtype: torch Tensor object (n,)
         """
 
         # compute lp-norm of perturbation vector
@@ -209,13 +209,13 @@ class DLRLoss(torch.nn.Module):
         tasks the 2nd largest logit is returned.
 
         :param logits: the model logits
-        :type logits: PyTorch FloatTensor object (n, c)
+        :type logits: torch Tensor object (n, c)
         :param y: the labels (or initial predictions) of the inputs (e.g., x)
         :type y: PyTorch Tensor object (n,)
         :param minimum: minimum gradient value (to mitigate underflow)
-        :type minimum: PyTorch FloatTensor object (1,)
+        :type minimum: torch Tensor object (1,)
         :return: the current loss
-        :rtype: PyTorch FloatTensor (n,)
+        :rtype: torch Tensor object (n,)
         """
 
         # compute logit differences
@@ -269,11 +269,11 @@ class IdentityLoss(torch.nn.Module):
         the yth-component of the logits.
 
         :param logits: the model logits
-        :type logits: PyTorch FloatTensor object (n, c)
+        :type logits: torch Tensor object (n, c)
         :param y: the labels (or initial predictions) of the inputs (e.g., x)
         :type y: PyTorch Tensor object (n,)
         :return: the current loss
-        :rtype: PyTorch FloatTensor (n,)
+        :rtype: torch Tensor object (n,)
         """
         curr_loss = logits.gather(1, y.unsqueeze(1)).flatten()
         self.curr_loss = curr_loss.detatch()
