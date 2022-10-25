@@ -43,21 +43,21 @@ class BackwardSGD(torch.optim.Optimizer):
     def __init__(self, params, lr, beta, model, **kwargs):
         """
         This method instanties a Backward SGD object. It requires a learning
-        rate, ß, and a reference to a Scikit-Torch Model-inherited object (as
-        to determine misclassified inputs). It also accepts keyword arguments
-        for to provide a homogeneous interface. Notably, because PyTorch
-        optimizers cannot be instantiated without the parameter to optimize, a
-        dummy tensor is supplied and expected to be overriden at a later time
-        (i.e., within Traveler objects initialize method).
+        rate, ß, and a reference to a scikit-torch LinearClassifier-inherited
+        object (as to determine misclassified inputs). It also accepts keyword
+        arguments for to provide a homogeneous interface. Notably, because
+        PyTorch optimizers cannot be instantiated without the parameter to
+        optimize, a dummy tensor is supplied and expected to be overriden at a
+        later time (i.e., within Traveler objects initialize method).
 
         :param params: the parameters to optimize over
-        :type params: PyTorch FloatTensor object (n, m)
+        :type params: torch Tensor object (n, m)
         :param lr: learning rate
         :type lr: float
         :param beta: momentum factor
         :type beta: float
         :param model: returns misclassified inputs
-        :type model: Scikit-Torch Model-inherited object
+        :type model: scikit-torch LinearClassifier-inherited object
         :return: Backward SGD optimizer
         :rtype: BackwardSGD object
         """
@@ -89,7 +89,7 @@ class BackwardSGD(torch.optim.Optimizer):
                 state = self.state[p]
 
                 # set beta for misclassified inputs and apply update
-                misclassified = ~group["model_acc"].accuracy
+                misclassified = ~group["model_acc"].correct
                 state["beta"] = torch.where(misclassified, group["beta"], 1)
                 p.mul_(grad.mul_(state["beta"].mul_(group["lr"])))
         return None
@@ -164,7 +164,7 @@ class MomentumBestStart(torch.optim.Optimizer):
         Traveler objects initialize method).
 
         :param params: the parameters to optimize over
-        :type params: PyTorch FloatTensor object (n, m)
+        :type params: torch Tensor object (n, m)
         :param atk_loss: returns the current loss of the attack
         :type atk_loss: Loss object
         :param epochs: total number of optimization iterations
