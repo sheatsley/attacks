@@ -38,7 +38,7 @@ class Traveler:
         a tuple of callables to run on the input passed in to __call__.
 
         :param change_of_variables: whether to map inputs to tanh-space
-        :type change_of_variables: boolean
+        :type change_of_variables: bool
         :param optimizer: optimization algorithm to use
         :type optimizer: optimizer module object
         :param random_restart: magnitude of a random perturbation
@@ -99,9 +99,9 @@ class Traveler:
         cannot be initialized without a parameter group).
 
         :param x: the batch of inputs to produce adversarial examples from
-        :type x: PyTorch FloatTensor object (n, m)
+        :type x: torch Tensor object (n, m)
         :param p: the perturbation vectors used to craft adversarial examples
-        :type p: PyTorch FloatTensor object (n, m)
+        :type p: torch Tensor object (n, m)
         :return: None
         :rtype: NoneType
         """
@@ -148,11 +148,11 @@ def tanh_space(x, into=False):
     argument.
 
     :param x: the batch of inputs to map into tanh-space
-    :type x: PyTorch FloatTensor object (n, m)
+    :type x: torch Tensor object (n, m)
     :param into: whether to map into (or out of) the tanh-space
-    :type into: boolean
+    :type into: bool
     :return: x mapped into (or back out of) tanh-space
-    :rtype: PyTorch FloatTensor object (n, m)
+    :rtype: torch Tensor object (n, m)
     """
     return (
         x.mul_(2).sub_(1).arctanh_(1 - torch.finfo(x.dtype).eps)
