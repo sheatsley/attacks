@@ -65,17 +65,17 @@ class DeepFoolSaliency:
         lp-norm function in the surface module.
 
         :param g: the gradients of the perturbation vector
-        :type g: PyTorch FloatTensor object (n, c, m)
+        :type g: torch Tensor object (n, c, m)
         :param logits: the current loss (or logits) used to compute g
         :type logits: PyTortch FloatTensor object (n,)
         :param y: the labels (or initial predictions) of x
         :type y: PyTorch Tensor object (n,)
         :param minimum: minimum gradient value (to mitigate underflow)
-        :type minimum: PyTorch FloatTensor object (1,)
+        :type minimum: torch Tensor object (1,)
         :param kwargs: miscellaneous keyword arguments
         :type kwargs: dict
         :return: gradient differences as defined by DeepFool
-        :rtype: PyTorch FloatTensor object (n, m)
+        :rtype: torch Tensor object (n, m)
         """
 
         # retrieve yth gradient and logit
@@ -109,9 +109,9 @@ class DeepFoolSaliency:
         computed within __call__.
 
         :param g: the (lp-normalized) gradients of the perturbation vector
-        :type g: PyTorch FloatTensor (n, m)
+        :type g: torch Tensor (n, m)
         :return: finalized gradients for optimizers to step into
-        :rtype: PyTorch FloatTensor (n, m)
+        :rtype: torch Tensor (n, m)
         """
         return g.mul_(self.ith_logit_diff)
 
@@ -147,11 +147,11 @@ class IdentitySaliency:
         arguments are also defined.
 
         :param g: the gradients of the perturbation vector
-        :type g: PyTorch FloatTensor object (n, c, m)
+        :type g: torch Tensor object (n, c, m)
         :param kwargs: miscellaneous keyword arguments
         :type kwargs: dict
         :return: squeezed gradients of the perturbation vector
-        :rtype: PyTorch FloatTensor object (n, m)
+        :rtype: torch Tensor object (n, m)
         """
         return g.squeeze_()
 
@@ -200,13 +200,13 @@ class JacobianSaliency:
         across all saliency maps, keyword arguments are also defined.
 
         :param g: the gradients of the perturbation vector
-        :type g: PyTorch FloatTensor object (n, c, m)
+        :type g: torch Tensor object (n, c, m)
         :param y: the labels (or initial predictions) of x
         :type y: PyTorch Tensor object (n,)
         :param kwargs: miscellaneous keyword arguments
         :type kwargs: dict
         :return: JSMA-like manipulated gradients
-        :rtype: PyTorch FloatTensor object (n, m)
+        :rtype: torch Tensor object (n, m)
         """
 
         # get yth row and "gather" ith rows by subtracting yth row
