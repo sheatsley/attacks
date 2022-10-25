@@ -16,7 +16,7 @@ class Surface:
     The Surface class handles input gradient computation and manipulation via
     arbitrary combinations of loss functions, models, saliency maps, and
     lp-norms. Under the hood, Surface objects serve as intelligent wrappers for
-    PyTorch models and the methods defined within this class are designed to
+    Pytorch LinearClassifiers and the methods defined within this class are designed to
     facilitate crafting adversarial examples.
 
     :func:`__init__`: instantiates Surface objects
@@ -32,23 +32,23 @@ class Surface:
         Surfaces are responsible for producing gradients from inputs, and thus,
         the following attributes are collected: (1) a PyTorch-based loss object
         from the loss module, (2) a PyTorch-based model object from
-        Scikit-Torch ([sktorch_url]), (3) the lp-norm to project gradients
-        into, (4) the saliency map to apply, and (5) a tuple of callables to
-        run on the input passed in to __call__. Notably, the
-        change_of_variables argument (configured in the traveler module)
-        determines if inputs should be mapped out of the tanh-space before
-        passed into models.
+        scikit-torch (https://github.com/sheatsley/scikit-torch), (3) the
+        lp-norm to project gradients into, (4) the saliency map to apply, and
+        (5) a tuple of callables to run on the input passed in to __call__.
+        Notably, the change_of_variables argument (configured in the traveler
+        module) determines if inputs should be mapped out of the tanh-space
+        before passed into models.
 
         :param loss: objective function to differentiate
         :type loss: loss module object
         :param model: feedforward differentiable neural network
-        :type model: Scikit-Torch Model-inherited object
+        :type model: scikit-torch LinearClassifier-inherited object
         :param norm: lp-space to project gradients into
         :type norm: surface module callable
         :param saliency_map: desired saliency map heuristic
         :type saliency_map: saliency module object
         :param change_of_variables: whether to map inputs out of tanh-space
-        :type change_of_variables: boolean
+        :type change_of_variables: bool
         :return: a surface
         :rtype: Surface object
         """
@@ -84,11 +84,11 @@ class Surface:
         computed gradients.
 
         :param x: the batch of inputs to produce adversarial examples from
-        :type x: PyTorch FloatTensor object (n, m)
+        :type x: torch Tensor object (n, m)
         :param y: the labels (or initial predictions) of x
         :type y: PyTorch Tensor object (n,)
         :param p: the perturbation vectors used to craft adversarial examples
-        :type p: PyTorch FloatTensor object (n, m)
+        :type p: torch Tensor object (n, m)
         :return: None
         return NoneType
         """
@@ -147,7 +147,7 @@ class Surface:
         this intilization method attaches these bounds to Surface objects.
 
         :param clip: the range of allowable values for the perturbation vector
-        :type clip: tuple of PyTorch FloatTensor objects (n, m)
+        :type clip: tuple of torch Tensor objects (n, m)
         :return: None
         :rtype: NoneType
         """
@@ -161,9 +161,9 @@ def linf(g):
     is defined as taking the sign of the gradients.
 
     :param g: the gradients of the perturbation vector
-    :type g: PyTorch FloatTensor object (n, m)
+    :type g: torch Tensor object (n, m)
     :return: gradients projected into the l∞-norm space
-    :rtype: PyTorch FloatTensor object (n, m)
+    :rtype: torch Tensor object (n, m)
     """
     return g.sign_()
 
@@ -180,13 +180,13 @@ def l0(g, clip, max_obj):
     feature).
 
     :param g: the gradients of the perturbation vector
-    :type g: PyTorch FloatTensor object (n, m)
+    :type g: torch Tensor object (n, m)
     :param clip: the range of allowable values for the perturbation vector
-    :type clip: tuple of PyTorch FloatTensor objects (n, m)
+    :type clip: tuple of torch Tensor objects (n, m)
     :param max_obj: whether the used loss function is to be maximized
-    :type max_obj: boolean
+    :type max_obj: bool
     :return: gradients projected into the l0-norm space
-    :rtype: PyTorch FloatTensor object (n, m)
+    :rtype: torch Tensor object (n, m)
     """
     valid_components = g.mul_(clip[(1 + (g.sign_() * 1 if max_obj else -1)) / 2])
     bottom_k = valid_components.abs_().topk(int(g.size(1) * 0.99), dim=1, largest=False)
@@ -201,11 +201,11 @@ def l2(g, minimum=torch.tensor(1e-8)):
 
 
     :param g: the gradients of the perturbation vector
-    :type g: PyTorch FloatTensor object (n, m)
+    :type g: torch Tensor object (n, m)
     :param minimum: minimum gradient value (to mitigate underflow)
-    :type minimum: PyTorch FloatTensor object (1,)
+    :type minimum: torch Tensor object (1,)
     :return: gradients projected into the l2-norm space
-    :rtype: PyTorch FloatTensor object (n, m)
+    :rtype: torch Tensor object (n, m)
     """
     return g.div_(g.norm(2, dim=1, keepdim=True).clamp_(minimum))
 
