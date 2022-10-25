@@ -57,7 +57,7 @@ class Attack:
         :param batch_size: crafting batch size (-1 for 1 batch)
         :type batch_size: int
         :param clip: range of allowable values for the domain
-        :type clip: tuple of floats or PyTorch FloatTensor object (n, m)
+        :type clip: tuple of floats or torch Tensor object (n, m)
         :param epochs: number of optimization steps to perform
         :type epochs: int
         :param epsilon: lp-norm ball threat model
@@ -70,20 +70,20 @@ class Attack:
         :param change_of_variables: whether to map inputs to tanh-space
         :type change_of_variables: bool
         :param optimizer_alg: optimization algorithm to use
-        :type optimizer_alg: optimizer module object
+        :type optimizer_alg: optimizer module class
         :param random_restart: whether to randomly perturb inputs
         :type random_restart: bool
 
         Finally, the following parameters define Surface objects:
 
         :param loss_func: objective function to differentiate
-        :type loss_func: loss module object
+        :type loss_func: loss module class
         :param norm: lp-space to project gradients into
         :type norm: surface module callable
         :param model: neural network
-        :type model: Scikit-Torch Model-inherited object
+        :type model: scikit-torch LinearClassifier-inherited object
         :param saliency_map: desired saliency map heuristic
-        :type saliency_map: saliency module object
+        :type saliency_map: saliency module class
 
         To easily identify attacks, __repr__ is overriden and instead returns
         an abbreviation computed by concatenating the first letter (or two, if
@@ -193,11 +193,11 @@ class Attack:
         iterates an epoch number of times.
 
         :param x: the batch of inputs to produce adversarial examples from
-        :type x: PyTorch FloatTensor object (n, m)
+        :type x: torch Tensor object (n, m)
         :param y: the labels (or initial predictions) of x
-        :type y: PyTorch Tensor object (n,)
+        :type y: Pytorch Tensor object (n,)
         :return: a batch of adversarial examples
-        :rtype: PyTorch FloatTensor object (n, m)
+        :rtype: torch Tensor object (n, m)
         """
 
         # clone inputs, setup perturbation vector, chunks, epsilon, and clip
@@ -277,13 +277,13 @@ def attack_builder(
     :param alpha: learning rate of the optimizer
     :type alpha: float
     :param clip: permissible values for the domain
-    :type clip: tuple of floats or PyTorch FloatTensor object (n, m)
+    :type clip: tuple of floats or torch Tensor object (n, m)
     :param epochs: number of optimization steps to perform
     :type epochs: int
     :param epsilon: lp-norm ball threat model
     :type epsilon: float
     :param model: neural network
-    :type model: Scikit-Torch Model-inherited object
+    :type model: scikit-torch LinearClassifier-inherited object
     :return: a generator yielding attack combinations
     :rtype: generator of Attack objects
     """
@@ -342,7 +342,7 @@ def apgdce(alpha=None, clip=None, epochs=None, epsilon=None, model=None):
     :param epsilon: lp-norm ball threat model
     :type epsilon: float
     :param model: neural network
-    :type model: Scikit-Torch Model-inherited object
+    :type model: scikit-torch LinearClassifier-inherited object
     :return: APGD-CE attack
     :rtype: Attack objects
     """
@@ -373,13 +373,13 @@ def apgddlr(alpha=None, clip=None, epochs=None, epsilon=None, model=None):
     :param alpha: learning rate of the optimizer
     :type alpha: float
     :param clip: range of allowable values for the domain
-    :type clip: tuple of floats or PyTorch FloatTensor object (n, m)
+    :type clip: tuple of floats or torch Tensor object (n, m)
     :param epochs: number of optimization steps to perform
     :type epochs: int
     :param epsilon: lp-norm ball threat model
     :type epsilon: float
     :param model: neural network
-    :type model: Scikit-Torch Model-inherited object
+    :type model: scikit-torch LinearClassifier-inherited object
     :return: APGD-DLR attack
     :rtype: Attack objects
     """
@@ -409,13 +409,13 @@ def bim(alpha=None, clip=None, epochs=None, epsilon=None, model=None):
     :param alpha: learning rate of the optimizer
     :type alpha: float
     :param clip: range of allowable values for the domain
-    :type clip: tuple of floats or PyTorch FloatTensor object (n, m)
+    :type clip: tuple of floats or torch Tensor object (n, m)
     :param epochs: number of optimization steps to perform
     :type epochs: int
     :param epsilon: lp-norm ball threat model
     :type epsilon: float
     :param model: neural network
-    :type model: Scikit-Torch Model-inherited object
+    :type model: scikit-torch LinearClassifier-inherited object
     :return: BIM attack
     :rtype: Attack objects
     """
@@ -444,13 +444,13 @@ def cwl2(alpha=None, clip=None, epochs=None, epsilon=None, model=None):
     :param alpha: learning rate of the optimizer
     :type alpha: float
     :param clip: range of allowable values for the domain
-    :type clip: tuple of floats or PyTorch FloatTensor object (n, m)
+    :type clip: tuple of floats or torch Tensor object (n, m)
     :param epochs: number of optimization steps to perform
     :type epochs: int
     :param epsilon: lp-norm ball threat model
     :type epsilon: float
     :param model: neural network
-    :type model: Scikit-Torch Model-inherited object
+    :type model: scikit-torch LinearClassifier-inherited object
     :return: Carlini-Wagner l₂ attack
     :rtype: Attack objects
     """
@@ -480,13 +480,13 @@ def df(alpha=None, clip=None, epochs=None, epsilon=None, model=None):
     :param alpha: learning rate of the optimizer
     :type alpha: float
     :param clip: range of allowable values for the domain
-    :type clip: tuple of floats or PyTorch FloatTensor object (n, m)
+    :type clip: tuple of floats or torch Tensor object (n, m)
     :param epochs: number of optimization steps to perform
     :type epochs: int
     :param epsilon: lp-norm ball threat model
     :type epsilon: float
     :param model: neural network
-    :type model: Scikit-Torch Model-inherited object
+    :type model: scikit-torch LinearClassifier-inherited object
     :return: DeepFool attack
     :rtype: Attack objects
     """
@@ -516,13 +516,13 @@ def fab(alpha=None, clip=None, epochs=None, epsilon=None, model=None):
     :param alpha: learning rate of the optimizer
     :type alpha: float
     :param clip: range of allowable values for the domain
-    :type clip: tuple of floats or PyTorch FloatTensor object (n, m)
+    :type clip: tuple of floats or torch Tensor object (n, m)
     :param epochs: number of optimization steps to perform
     :type epochs: int
     :param epsilon: lp-norm ball threat model
     :type epsilon: float
     :param model: neural network
-    :type model: Scikit-Torch Model-inherited object
+    :type model: scikit-torch LinearClassifier-inherited object
     :return: DeepFool attack
     :rtype: Attack objects
     """
@@ -552,13 +552,13 @@ def pgd(alpha=None, clip=None, epochs=None, epsilon=None, model=None):
     :param alpha: learning rate of the optimizer
     :type alpha: float
     :param clip: range of allowable values for the domain
-    :type clip: tuple of floats or PyTorch FloatTensor object (n, m)
+    :type clip: tuple of floats or torch Tensor object (n, m)
     :param epochs: number of optimization steps to perform
     :type epochs: int
     :param epsilon: lp-norm ball threat model
     :type epsilon: float
     :param model: neural network
-    :type model: Scikit-Torch Model-inherited object
+    :type model: scikit-torch LinearClassifier-inherited object
     :return: DeepFool attack
     :rtype: Attack objects
     """
@@ -588,13 +588,13 @@ def jsma(alpha=None, clip=None, epochs=None, epsilon=None, model=None):
     :param alpha: learning rate of the optimizer
     :type alpha: float
     :param clip: range of allowable values for the domain
-    :type clip: tuple of floats or PyTorch FloatTensor object (n, m)
+    :type clip: tuple of floats or torch Tensor object (n, m)
     :param epochs: number of optimization steps to perform
     :type epochs: int
     :param epsilon: lp-norm ball threat model
     :type epsilon: float
     :param model: neural network
-    :type model: Scikit-Torch Model-inherited object
+    :type model: scikit-torch LinearClassifier-inherited object
     :return: DeepFool attack
     :rtype: Attack objects
     """
