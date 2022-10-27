@@ -107,7 +107,7 @@ class Traveler:
         """
 
         # subroutine (1): random restart
-        print(f"Applying random restart {self.params['RR']} to {len(p)} vectors...")
+        print(f"Applying random restart {self.params['RR']} to {p.size(0)} vectors...")
         p.add_(
             torch.distributions.uniform.Uniform(
                 -self.random_restart, self.random_restart
@@ -116,7 +116,7 @@ class Traveler:
 
         # subroutine (2): change of variables
         if self.change_of_variables:
-            print(f"Applying change of variables to {len(x)} samples...")
+            print(f"Applying change of variables to {x.size(0)} samples...")
             tanh_space(x, True)
 
         # last subroutine: reinstantiate the optimizer with the perturbation vector
