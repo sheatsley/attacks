@@ -203,7 +203,8 @@ class Attack:
         # clone inputs, setup perturbation vector, chunks, epsilon, and clip
         x = x.detatch().clone()
         p = x.new_zeros(x.size())
-        chunks = len(x) if self.batch_size == -1 else -(-len(x) // self.batch_size)
+        batch_size = x.size(0) if self.batch_size == -1 else self.batch_size
+        num_batches = -(-x.size(0) // batch_size)
         epsilon = (-self.epsilon, self.epsilon)
         clip = (
             self.clip
@@ -212,10 +213,10 @@ class Attack:
         )
 
         # craft adversarial examples per batch
-        for b, (xb, yb, pb) in enumerate(
-            zip(x.chunk(chunks), y.chunk(chunks), p.chunk(chunks)), start=1
-        ):
-            print(f"Crafting {len(x)} adversarial examples with {self}... {b/chunks}")
+        print("Crafting {x.size(0)} adversarial examples with {self}...")
+        xi, yi, pi = x.split(batch_size), y.split(batch_size), p.split(batch_size)
+        for b, (xb, yb, pb) in enumerate(zip(xi, yi, pi), start=1):
+            print(f"On batch {b} of {num_batches} {b/num_batches:.1%}...")
             min_p, max_p = clip.sub(xb.unsqueeze(1)).clamp(*epsilon).unbind(2)
             self.surface.initialize((min_p, max_p))
             self.traveler.initialize(xb, pb)
