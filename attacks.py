@@ -16,7 +16,7 @@ from utilities import print  # Use timestamped print
 # TODO
 # implement unit test
 # add early termination support
-# implement DDN
+# implement DDN (implement alternating SGD optimizer)
 
 
 class Attack:
@@ -159,6 +159,9 @@ class Attack:
             change_of_variables, optimizer_alg, random_restart
         )
         self.surface = surface.Surface(model, saliency_map, loss_func, norm)
+
+        # collect any registered hyperparameters
+        self.hparams = self.traveler.hparams | self.surface.hparams
         return None
 
     def __repr__(self):
