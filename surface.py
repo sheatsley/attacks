@@ -33,11 +33,13 @@ class Surface:
         the following attributes are collected: (1) a PyTorch-based loss object
         from the loss module, (2) a PyTorch-based model object from
         scikit-torch (https://github.com/sheatsley/scikit-torch), (3) the
-        lp-norm to project gradients into, (4) the saliency map to apply, and
-        (5) a tuple of callables to run on the input passed in to __call__.
-        Notably, the change_of_variables argument (configured in the traveler
-        module) determines if inputs should be mapped out of the tanh-space
-        before passed into models.
+        lp-norm to project gradients into, (4) the saliency map to apply, (5) a
+        tuple of callables to run on the input passed in to __call__. Notably,
+        the change_of_variables argument (configured in the traveler module)
+        determines if inputs should be mapped out of the tanh-space before
+        passed into models, and (6) any component that has advertised
+        optimizable hyperparameters.
+
 
         :param loss: objective function to differentiate
         :type loss: loss module object
@@ -62,6 +64,8 @@ class Surface:
         self.closure = [
             comp for c in vars(self) if hasattr(comp := getattr(self, c), "closure")
         ]
+        components = (loss, model, saliency_map)
+        self.hparams = dict(*[c.items() for c in components if hasattr(c, "hparams")])
         self.params = {
             "loss": type(loss).__name__,
             "model": type(model).__name__,

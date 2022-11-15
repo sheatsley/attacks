@@ -34,8 +34,9 @@ class Traveler:
         into and out of the hyperbolic tangent space), (2) a PyTorch-based
         optimizer object from the optimizer module (which is initialized with
         α, the learning rate), (3) the minimum and maximum values to initialize
-        inputs (i.e., random restart, often sampled between -ε and ε), and (5)
-        a tuple of callables to run on the input passed in to __call__.
+        inputs (i.e., random restart, often sampled between -ε and ε), (4) a
+        tuple of callables to run on the input passed in to __call__, and (5)
+        any component that has advertised optimizable hyperparameters.
 
         :param change_of_variables: whether to map inputs to tanh-space
         :type change_of_variables: bool
@@ -54,6 +55,8 @@ class Traveler:
         self.closure = [
             comp for c in vars(self) if hasattr(comp := getattr(self, c), "closure")
         ]
+        components = (optimizer,)
+        self.hparams = dict(*[c.items() for c in components if hasattr(c, "hparams")])
         self.params = {
             "α": optimizer.lr,
             "CoV": change_of_variables,
