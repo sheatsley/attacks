@@ -96,7 +96,8 @@ class CWLoss(torch.nn.Module):
         adversarial goals over the introduced distortion, and (3) k, which
         controls how far adversarial examples are pushed across the decision
         boundary (as measured through the logit differences of the yth logit
-        and the next largest logit).
+        and the next largest logit). Finally, a reference to c is saved and
+        exposed as an optimizable hyperparameter.
 
         :param norm: lp-space to project gradients into
         :type norm: supported ord arguments in PyTorch linalg.vector_norm function
@@ -109,16 +110,17 @@ class CWLoss(torch.nn.Module):
         """
         super().__init__()
         self.norm = norm
-        self.c = c
+        self.c = torch.tensor(c)
         self.k = k
+        self.hparams = {"c": self.c}
         return None
 
     def attach(self, delta):
         """
         This method serves as a setter for attaching a reference to the
         perturbation vector to CWLoss objects as an attribute (as the attribute
-        is subsequently referenced in the forward pass). Additionally, c is
-        expanded by the number of inputs to faciliate hyperparameter
+        is subsequently referenced in the forward pass). If necessary, c is
+        expanded in-place by the number of inputs to faciliate hyperparameter
         optimization, as done in https://arxiv.org/pdf/1608.04644.pdf.
 
         :param delta: perturbation vector
@@ -127,7 +129,9 @@ class CWLoss(torch.nn.Module):
         :rtype: NoneType
         """
         self.delta = delta
-        self.c = torch.full((delta.size(0),), self.c)
+        self.c.resize_(delta.size(0)).fill_(
+            self.c[0]
+        ) if self.c.shape < delta.shape else None
         return None
 
     def forward(self, logits, y):
