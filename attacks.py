@@ -8,6 +8,7 @@ import itertools  # Functions creating iterators for efficietn looping
 import loss  # PyTorch-based custom loss functions
 import optimizer  # PyTorch-based custom optimizers
 import saliency  # Gradient manipulation heuristics to achieve adversarial goals
+import sklearn.preprocessing  # Preprocessing and Normalization
 import surface  # PyTorch-based models for crafting adversarial examples
 import torch  # Tensors and Dynamic neural networks in Python with strong GPU acceleration
 import traveler  # PyTorch-based optimizers for crafting adversarial examples
@@ -17,6 +18,249 @@ from utilities import print  # Use timestamped print
 # implement unit test
 # add early termination support
 # implement DDN (implement alternating SGD optimizer)
+# cleanup hparam updates
+# consider merging min_norm and carlini interfaces
+
+
+class Adversary:
+    """
+    The Adversary class supports generalized threat modeling. Specifically, as
+    shown in https://arxiv.org/pdf/1608.04644.pdf and
+    https://arxiv.org/pdf/1907.02044.pdf, effective adversaries often enact
+    some decision after adversarial examples have been crafted. For the
+    provided examples, such adversaries embed hyperparamter optimization, and
+    perform multiple restarts (useful only if the attack is non-deterministic)
+    and simply return the most effective adversarial examples. This class
+    facilitiates such functions.
+
+    :func:`__init__`: instantiates Adversary objects
+    :func:`__repr__`: returns the threat model
+    :func:`attack`: returns a set of adversarial examples
+    :func:`carlini`: hyperparameter criterion used in CW attack
+    :func:`max_loss`: restart criterion used in PGD attack
+    :func:`min_norm`: restart criterion used in FAB attack
+    :func:`minmax_scale`: normalizes inputs to be within [0, 1]
+    """
+
+    def __init__(
+        self,
+        hparam,
+        hparam_bounds,
+        hparam_criterion,
+        hparam_steps,
+        num_restarts,
+        restart_criterion,
+        **atk_args,
+    ):
+        """
+        This method instantiates an Adversary object with a hyperparameter to
+        be optimized (via binary search), the lower and upper bounds to
+        consider for binary search, the criterion to control the hyperparameter
+        search (by convention, "success" is encoded as True), the number of
+        hyperparameter optimization steps, the number of restarts, and the
+        criterion to determine if an input is kept across restarts.
+
+        :param hparam: the hyperparameter to be optimized
+        :type hparam: str
+        :param hparam_bounds: lower and upper bounds for binary search
+        :type hparam_bounds: tuple
+        :param hparam_criterion: criterion for hyperparameter optimization
+        :type hparam_criterion: callable
+        :param hparam_steps: the number of hyperparameter optimization steps
+        :type hparam_steps: int
+        :param num_restarts: number of restarts to consider
+        :type num_restarts: int
+        :param restart_criterion: criterion for keeping inputs across restarts
+        :type restart_criterion: callable
+        :param atk_args: attack parameters
+        :type atk_args: dict
+        :return: an adversary
+        :rtype: Adversary object
+        """
+        attack = Attack(**atk_args)
+        self.hparam = hparam
+        self.hparam_bounds = hparam_bounds
+        self.hparam_criterion = hparam_criterion
+        self.hparam_steps = min(hparam_steps, 1)
+        self.num_restarts = min(num_restarts, 1)
+        self.restart_criterion = restart_criterion
+        self.attack = attack
+        self.loss = atk_args["loss"]
+        self.norm = atk_args["norm"]
+        self.model = atk_args["model"]
+        self.params = {
+            "hparam": hparam,
+            "hparam bounds": hparam_bounds,
+            "hparam criterion": hparam_criterion.__name__,
+            "hparam steps": hparam_steps,
+            "num restarts": num_restarts,
+            "restart_criterion": restart_criterion.__name__,
+            "attack": attack.name,
+        }
+        return None
+
+    def __repr__(self):
+        """
+        This method returns a concise string representation of adversary
+        parameters and the attack name.
+
+        :return: adversarial parameters and the attached attack name
+        :rtype: str
+        """
+        return f"Adversary({self.params})"
+
+    def attack(self, x, y):
+        """
+        This method represents the core of the Adversary class. Specifically,
+        this class produces the most effective adversarial examples,
+        parameterized by restarts and hyperparameter optimization. Notably, as
+        criterion callables can require arbitrary arguments, it is assumed all
+        such callables accept keyword arguments.
+
+        :param x: the batch of inputs to produce adversarial examples from
+        :type x: torch Tensor object (n, m)
+        :param y: the labels (or initial predictions) of x
+        :type y: Pytorch Tensor object (n,)
+        :return: a batch of adversarial examples
+        :rtype: torch Tensor object (n, m)
+        """
+
+        # rescale inputs and  iterate over restarts & hyperparameters
+        print("Rescaling inputs...")
+        x = self.minmaxscale(x)
+        best_p = torch.zeros_like_(x)
+        for iter_step in range(self.num_restarts):
+            print(
+                f"On iteration {iter+1} of {self.num_restarts}...",
+                f"({iter_step/self.num_restarts:.1%})",
+            )
+
+            # instantiate bookkeeping and apply hyperparameter criterion
+            prev_p = torch.full_like(x, torch.inf)
+            p = torch.zeros_like(x)
+            hparam_bounds = torch.tensor(self.hparam_bounds).repeat(y.numel())
+            for hparam_step in range(self.hparam_steps):
+                curr_p = self.attack(x + p, y)
+                if self.hparam:
+                    print(
+                        "On hyperparameter iteration {hparam_step+1}} of",
+                        "{self.hparam_steps}...",
+                        f"({hparam_step/self.hparam_steps:.1%})",
+                    )
+                    hparam_value = self.attack.hparams[self.hparam]
+                    hparam_updates = self.hparam_criterion(x, curr_p, prev_p, y)
+                    hparam_bounds[hparam_updates][1] = torch.minimum(
+                        hparam_bounds[hparam_updates][1], hparam_value[hparam_updates]
+                    )
+                    hparam_bounds[~hparam_updates][0] = torch.maximum(
+                        hparam_bounds[~hparam_updates][0], hparam_value[~hparam_updates]
+                    )
+                    self.attack.hparams[self.hparam] = hparam_bounds.diff().div(2)
+                    print(
+                        f"{hparam_updates.sum().div(hparam_updates.numel()):.2%}",
+                        "inputs were determined succesful.",
+                        f"Hyperparameter {self.hparam} updated.",
+                    )
+
+                # store the best adversarial examples seen thus far
+                best_updates = self.restart_criterion(x, curr_p, best_p, y)
+                best_p[best_updates] = curr_p[best_updates]
+                print(
+                    f"Found {best_updates.sum()} better adversarial examples!",
+                    "(+{best_updates.sum().div(best_updates.numel()):.2%})",
+                )
+
+        # unscale inputs and return
+        return self.minmaxscale(x + best_p, False)
+
+    def carlini(self, x, curr_p, prev_p, y):
+        """
+        This method serves as the hyperparameter criterion as used in
+        https://arxiv.org/pdf/1608.04644.pdf. Specifically, it enforces the
+        following scheme: if the current iterate is misclassifed and has lower
+        norm than the previous iterate, then decrease the hyperparameter
+        emphasizing misclassification, otherwise increase it.
+
+        :param x: the batch of inputs to produce adversarial examples from
+        :type x: torch Tensor object (n, m)
+        :param curr_p: the current batch of perturbation vectors
+        :type curr_p: torch Tensor object (n, m)
+        :param prev_p: the previous  batch of perturbation vectors
+        :type prev_p: torch Tensor object (n, m)
+        :param y: the labels (or initial predictions) of x
+        :type y: Pytorch Tensor object (n,)
+        :return: whether the hyperparameter should be decreased
+        :rtype: torch Tensor object (n,)
+        """
+        return self.model.predict(x + curr_p).not_eq_(y) and curr_p.norm(
+            self.norm, 1
+        ) < prev_p.norm(self.norm, 1)
+
+    def max_loss(self, x, curr_p, best_p, y):
+        """
+        This method serves as a restart criterion as used in
+        https://arxiv.org/pdf/1706.06083.pdf. Specifically, it returns the set
+        of perturbations whose loss is maximal.
+
+        :param x: the batch of inputs to produce adversarial examples from
+        :type x: torch Tensor object (n, m)
+        :param curr_p: the current batch of perturbation vectors
+        :type curr_p: torch Tensor object (n, m)
+        :param best_p: the previous  batch of perturbation vectors
+        :type best_p: torch Tensor object (n, m )
+        :param y: the labels (or initial predictions) of x
+        :type y: Pytorch Tensor object (n,)
+        :return: the perturbations whose loss is maximal
+        :rtype: torch Tensor object (n,)
+        """
+        return self.loss(self.model(x + curr_p), y).gt(
+            self.loss(self.model(x + best_p)), y
+        )
+
+    def min_norm(self, x, curr_p, best_p, y):
+        """
+        This method serves as a restart criterion as used in
+        https://arxiv.org/pdf/1907.02044.pdf. Specifically, it returns the set
+        of perturbations whose norm is minimal (while still being
+        misclassified).
+
+        :param x: the batch of inputs to produce adversarial examples from
+        :type x: torch Tensor object (n, m)
+        :param curr_p: the current batch of perturbation vectors
+        :type curr_p: torch Tensor object (n, m)
+        :param best_p: the previous  batch of perturbation vectors
+        :type best_p: torch Tensor object (n, m )
+        :param y: the labels (or initial predictions) of x
+        :type y: Pytorch Tensor object (n,)
+        :return: the perturbations whose loss is maximal
+        :rtype: torch Tensor object (n,)
+        """
+        return self.model.predict(x + curr_p).not_eq_(y) and (
+            curr_p.norm(self.norm, 1) < best_p.norm(self.norm, 1)
+            or best_p.norm(self.norm, 1).eq(0)
+        )
+
+    def minmax_scale(self, x, transform=True):
+        """
+        This method serves as a wrapper for sklearn.preprocessing.MinMaxScaler.
+        Specifically, it maps inputs to [0, 1] (as some techniques assume this
+        range, e.g., change of variables). Importantly, since these scalers
+        always return numpy arrays, this method additionally casts these inputs
+        back as PyTorch tensors with the original data type.
+
+        :param x: the batch of inputs to scale
+        :type x: torch Tensor object (n, m)
+        :param transform: performs the transformation if true; the inverse if false
+        :return: a batch of scaled inputs
+        :rtype: torch Tensor object (n, m)
+        """
+        if transform:
+            self.scaler = sklearn.preprocessing.MinMaxScaler()
+            self.scaler.dtype = x.dtype
+            x = self.scaler.fit_transform(x)
+        else:
+            x = self.scaler.inverse_transform(x)
+        return torch.from_numpy(x).to(self.scaler.dtype)
 
 
 class Attack:
@@ -199,7 +443,7 @@ class Attack:
         :type x: torch Tensor object (n, m)
         :param y: the labels (or initial predictions) of x
         :type y: Pytorch Tensor object (n,)
-        :return: a batch of adversarial examples
+        :return: the batch of perturbation vectors
         :rtype: torch Tensor object (n, m)
         """
 
@@ -229,7 +473,7 @@ class Attack:
                 self.surface(xb, yb, pb)
                 self.traveler()
                 p.clamp_(min_p, max_p)
-        return x + p
+        return p
 
 
 def attack_builder(
