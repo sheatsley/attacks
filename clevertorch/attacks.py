@@ -4,15 +4,15 @@ https://arxiv.org/pdf/2209.04521.pdf.
 Authors: Ryan Sheatsley & Blaine Hoak
 Mon Apr 18 2022
 """
-import itertools  # Functions creating iterators for efficietn looping
-import loss  # PyTorch-based custom loss functions
-import optimizer  # PyTorch-based custom optimizers
-import saliency  # Gradient manipulation heuristics to achieve adversarial goals
+import clevertorch.loss as loss  # PyTorch-based custom loss functions
+import clevertorch.optimizer as optimizer  # PyTorch-based custom optimizers
+import clevertorch.saliency as saliency  # Gradient manipulation heuristics to achieve adversarial goals
 import sklearn.preprocessing  # Preprocessing and Normalization
-import surface  # PyTorch-based models for crafting adversarial examples
+import clevertorch.surface as surface  # PyTorch-based models for crafting adversarial examples
+import clevertorch.traveler as traveler  # PyTorch-based optimizers for crafting adversarial examples
+from clevertorch.utilities import print  # Use timestamped print
+import itertools  # Functions creating iterators for efficietn looping
 import torch  # Tensors and Dynamic neural networks in Python with strong GPU acceleration
-import traveler  # PyTorch-based optimizers for crafting adversarial examples
-from utilities import print  # Use timestamped print
 
 # TODO
 # implement unit test

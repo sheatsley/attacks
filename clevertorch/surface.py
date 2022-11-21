@@ -5,7 +5,7 @@ Authors: Ryan Sheatsley & Blaine Hoak
 Thu June 30 2022
 """
 import torch  # Tensors and Dynamic neural networks in Python with strong GPU acceleration
-import traveler  # PyTorch-based optimizers for crafting adversarial examples
+import clevertorch.traveler as traveler  # PyTorch-based optimizers for crafting adversarial examples
 
 # TODO:
 # add unit tests
