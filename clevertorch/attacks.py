@@ -354,23 +354,23 @@ class Attack:
             "saliency map": saliency_map.__name__,
             "target norm": "l∞" if norm == surface.linf else norm.__name__,
         }
-        name = {
+        name = (
             self.components["optimizer"][0],
             "R" if self.components["random restart"] else "r̶",
             "V" if self.components["change of variables"] else "v̶",
             self.components["loss function"][:2],
             self.components["saliency map"][0],
             self.components["target norm"][1],
-        }
+        )
         name_map = {
-            set("M", "R", "v̶", "CE", "i", "∞"): "APGD-CE",
-            set("M", "R", "v̶", "DL", "i", "∞"): "APGD-DLR",
-            set("S", "r̶", "v̶", "CE", "i", "∞"): "BIM",
-            set("A", "r̶", "V", "CW", "i", "2"): "CW-L2",
-            set("S", "r̶", "v̶", "Id", "d", "2"): "DF",
-            set("B", "r̶", "v̶", "Id", "d", "2"): "FAB",
-            set("S", "R", "v̶", "CE", "i", "∞"): "PGD",
-            set("S", "r̶", "v̶", "Id", "j", "0"): "JSMA",
+            ("M", "R", "v̶", "CE", "i", "∞"): "APGD-CE",
+            ("M", "R", "v̶", "DL", "i", "∞"): "APGD-DLR",
+            ("S", "r̶", "v̶", "CE", "i", "∞"): "BIM",
+            ("A", "r̶", "V", "CW", "i", "2"): "CW-L2",
+            ("S", "r̶", "v̶", "Id", "d", "2"): "DF",
+            ("B", "r̶", "v̶", "Id", "d", "2"): "FAB",
+            ("S", "R", "v̶", "CE", "i", "∞"): "PGD",
+            ("S", "r̶", "v̶", "Id", "j", "0"): "JSMA",
         }
         self.name = name_map.get(name, "-".join(name))
         self.params = {"α": alpha, "ε": epsilon, "epochs": epochs}
@@ -390,9 +390,9 @@ class Attack:
             "model_acc": model,
         }
         torch_opt_params = {
-            "lr": self.alpha,
+            "lr": alpha,
             "maximize": loss_func.max_obj,
-            "params": torch.zeros(1),
+            "params": (torch.zeros(1),),
         }
         optimizer_alg = optimizer_alg(
             **(custom_opt_params | torch_opt_params)
@@ -402,7 +402,9 @@ class Attack:
         self.traveler = traveler.Traveler(
             change_of_variables, optimizer_alg, random_restart
         )
-        self.surface = surface.Surface(model, saliency_map, loss_func, norm)
+        self.surface = surface.Surface(
+            loss_func, model, norm, saliency_map, change_of_variables
+        )
 
         # collect any registered hyperparameters
         self.hparams = self.traveler.hparams | self.surface.hparams
@@ -585,6 +587,8 @@ def apgdce(alpha=None, clip=None, epochs=None, epsilon=None, model=None):
 
     :param alpha: learning rate of the optimizer
     :type alpha: float
+    :param clip: range of allowable values for the domain
+    :type clip: tuple of floats or torch Tensor object (n, m)
     :param epochs: number of optimization steps to perform
     :type epochs: int
     :param epsilon: lp-norm ball threat model
@@ -601,9 +605,9 @@ def apgdce(alpha=None, clip=None, epochs=None, epsilon=None, model=None):
         epsilon=epsilon,
         model=model,
         change_of_variables=False,
-        optimizer=optimizer.MomentumBestStart,
+        optimizer_alg=optimizer.MomentumBestStart,
         random_restart=True,
-        loss=loss.CELoss,
+        loss_func=loss.CELoss,
         norm=surface.linf,
         saliency_map=saliency.IdentitySaliency,
     )
@@ -638,9 +642,9 @@ def apgddlr(alpha=None, clip=None, epochs=None, epsilon=None, model=None):
         epsilon=epsilon,
         model=model,
         change_of_variables=False,
-        optimizer=optimizer.MomentumBestStart,
+        optimizer_alg=optimizer.MomentumBestStart,
         random_restart=True,
-        loss=loss.DLRLoss,
+        loss_func=loss.DLRLoss,
         norm=surface.linf,
         saliency_map=saliency.IdentitySaliency,
     )
@@ -674,9 +678,9 @@ def bim(alpha=None, clip=None, epochs=None, epsilon=None, model=None):
         epsilon=epsilon,
         model=model,
         change_of_variables=False,
-        optimizer=optimizer.SGD,
+        optimizer_alg=optimizer.SGD,
         random_restart=False,
-        loss=loss.CELoss,
+        loss_func=loss.CELoss,
         norm=surface.linf,
         saliency_map=saliency.IdentitySaliency,
     )
@@ -709,9 +713,9 @@ def cwl2(alpha=None, clip=None, epochs=None, epsilon=None, model=None):
         epsilon=epsilon,
         model=model,
         change_of_variables=True,
-        optimizer=optimizer.Adam,
+        optimizer_alg=optimizer.Adam,
         random_restart=False,
-        loss=loss.CWLoss,
+        loss_func=loss.CWLoss,
         norm=surface.l2,
         saliency_map=saliency.IdentitySaliency,
     )
@@ -745,9 +749,9 @@ def df(alpha=None, clip=None, epochs=None, epsilon=None, model=None):
         epsilon=epsilon,
         model=model,
         change_of_variables=False,
-        optimizer=optimizer.SGD,
+        optimizer_alg=optimizer.SGD,
         random_restart=False,
-        loss=loss.IdentityLoss,
+        loss_func=loss.IdentityLoss,
         norm=surface.l2,
         saliency_map=saliency.DeepFoolSaliency,
     )
@@ -781,9 +785,9 @@ def fab(alpha=None, clip=None, epochs=None, epsilon=None, model=None):
         epsilon=epsilon,
         model=model,
         change_of_variables=False,
-        optimizer=optimizer.BackwardSGD,
+        optimizer_alg=optimizer.BackwardSGD,
         random_restart=False,
-        loss=loss.IdentityLoss,
+        loss_func=loss.IdentityLoss,
         norm=surface.l2,
         saliency_map=saliency.IdentitySaliency,
     )
@@ -817,9 +821,9 @@ def pgd(alpha=None, clip=None, epochs=None, epsilon=None, model=None):
         epsilon=epsilon,
         model=model,
         change_of_variables=False,
-        optimizer=optimizer.SGD,
+        optimizer_alg=optimizer.SGD,
         random_restart=False,
-        loss=loss.CELoss,
+        loss_func=loss.CELoss,
         norm=surface.linf,
         saliency_map=saliency.IdentitySaliency,
     )
@@ -853,9 +857,9 @@ def jsma(alpha=None, clip=None, epochs=None, epsilon=None, model=None):
         epsilon=epsilon,
         model=model,
         change_of_variables=False,
-        optimizer=optimizer.SGD,
+        optimizer_alg=optimizer.SGD,
         random_restart=False,
-        loss=loss.IdentityLoss,
+        loss_func=loss.IdentityLoss,
         norm=surface.l0,
         saliency_map=saliency.JacobianSaliency,
     )
