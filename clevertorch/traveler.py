@@ -58,7 +58,7 @@ class Traveler:
         components = (optimizer,)
         self.hparams = dict(*[c.items() for c in components if hasattr(c, "hparams")])
         self.params = {
-            "α": optimizer.lr,
+            "α": optimizer.defaults["lr"],
             "CoV": change_of_variables,
             "optim": type(optimizer).__name__,
             "RR": (-random_restart, random_restart),
