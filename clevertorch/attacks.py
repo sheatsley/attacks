@@ -363,14 +363,14 @@ class Attack:
             self.components["target norm"][1],
         )
         name_map = {
-            ("M", "R", "v̶", "CE", "i", "∞"): "APGD-CE",
-            ("M", "R", "v̶", "DL", "i", "∞"): "APGD-DLR",
-            ("S", "r̶", "v̶", "CE", "i", "∞"): "BIM",
-            ("A", "r̶", "V", "CW", "i", "2"): "CW-L2",
-            ("S", "r̶", "v̶", "Id", "d", "2"): "DF",
-            ("B", "r̶", "v̶", "Id", "d", "2"): "FAB",
-            ("S", "R", "v̶", "CE", "i", "∞"): "PGD",
-            ("S", "r̶", "v̶", "Id", "j", "0"): "JSMA",
+            ("M", "R", "v̶", "CE", "I", "∞"): "APGD-CE",
+            ("M", "R", "v̶", "DL", "I", "∞"): "APGD-DLR",
+            ("S", "r̶", "v̶", "CE", "I", "∞"): "BIM",
+            ("A", "r̶", "V", "CW", "I", "2"): "CW-L2",
+            ("S", "r̶", "v̶", "Id", "D", "2"): "DF",
+            ("B", "r̶", "v̶", "Id", "D", "2"): "FAB",
+            ("S", "R", "v̶", "CE", "I", "∞"): "PGD",
+            ("S", "r̶", "v̶", "Id", "J", "0"): "JSMA",
         }
         self.name = name_map.get(name, "-".join(name))
         self.params = {"α": alpha, "ε": epsilon, "epochs": epochs}
@@ -400,7 +400,7 @@ class Attack:
             else torch_opt_params
         )
         self.traveler = traveler.Traveler(
-            change_of_variables, optimizer_alg, random_restart
+            change_of_variables, optimizer_alg, random_restart * epsilon
         )
         self.surface = surface.Surface(
             loss_func, model, norm, saliency_map, change_of_variables
@@ -429,7 +429,7 @@ class Attack:
         :return: the attack name with parameters
         :rtype: str
         """
-        return f"{self.name}({self.params})"
+        return f"{self.name}({', '.join(f'{p}={v}' for p, v in self.params.items())})"
 
     def craft(self, x, y):
         """
@@ -450,7 +450,7 @@ class Attack:
         """
 
         # clone inputs, setup perturbation vector, chunks, epsilon, and clip
-        x = x.detatch().clone()
+        x = x.detach().clone()
         p = x.new_zeros(x.size())
         batch_size = x.size(0) if self.batch_size == -1 else self.batch_size
         num_batches = -(-x.size(0) // batch_size)
@@ -462,16 +462,16 @@ class Attack:
         )
 
         # craft adversarial examples per batch
-        print("Crafting {x.size(0)} adversarial examples with {self}...")
+        print(f"Crafting {x.size(0)} adversarial examples with {self}...")
         xi, yi, pi = x.split(batch_size), y.split(batch_size), p.split(batch_size)
         for b, (xb, yb, pb) in enumerate(zip(xi, yi, pi), start=1):
             print(f"On batch {b} of {num_batches} {b/num_batches:.1%}...")
-            min_p, max_p = clip.sub(xb.unsqueeze(1)).clamp(*epsilon).unbind(2)
+            min_p, max_p = clip.sub(xb.unsqueeze(2)).clamp(*epsilon).unbind(2)
             self.surface.initialize((min_p, max_p))
             self.traveler.initialize(xb, pb)
             p.clamp_(min_p, max_p)
             for epoch in range(self.epochs):
-                print(f"On epoch {epoch}... ({epoch/self.epochs:.1%})")
+                print(f"On epoch {epoch}... ({epoch/self.epochs:.1%})", end="\r")
                 self.surface(xb, yb, pb)
                 self.traveler()
                 p.clamp_(min_p, max_p)
@@ -822,7 +822,7 @@ def pgd(alpha=None, clip=None, epochs=None, epsilon=None, model=None):
         model=model,
         change_of_variables=False,
         optimizer_alg=optimizer.SGD,
-        random_restart=False,
+        random_restart=True,
         loss_func=loss.CELoss,
         norm=surface.linf,
         saliency_map=saliency.IdentitySaliency,
