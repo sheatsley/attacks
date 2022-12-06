@@ -105,20 +105,20 @@ class Surface:
                 p.repeat_interleave(c_j),
                 c_j,
             )
-            if (c_j := self.model.classes * self.saliency_map.jac_req)
+            if (c_j := self.model.params["classes"] * self.saliency_map.jac_req)
             else (x, y, p, 1)
         )
 
         # map out of tanh-space, perform forward & backward passes
         p_j.requires_grad = True
         loss = self.loss(self.model(self.change_of_variables(x_j + p_j)), y_j)
-        grads = torch.autograd.grad(loss, p_j, torch.ones_like(loss))
+        grads = torch.autograd.grad(loss, p_j, torch.ones_like(loss))[0]
         p_j.requires_grad = False
 
         # apply saliency map and lp-norm filter
         smap_grads = self.saliency_map(
             grads.view(-1, c_j, grads.size(1)),
-            loss=loss.view(-1, self.model.classes),
+            loss=loss.view(-1, c_j),
             y=y,
         )
         final_grads = (
