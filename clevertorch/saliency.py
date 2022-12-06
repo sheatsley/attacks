@@ -66,8 +66,8 @@ class DeepFoolSaliency:
 
         :param g: the gradients of the perturbation vector
         :type g: torch Tensor object (n, c, m)
-        :param logits: the current loss (or logits) used to compute g
-        :type logits: PyTortch FloatTensor object (n,)
+        :param loss: the current loss (or logits) used to compute g
+        :type loss: PyTortch FloatTensor object (n, c)
         :param y: the labels (or initial predictions) of x
         :type y: PyTorch Tensor object (n,)
         :param minimum: minimum gradient value (to mitigate underflow)
