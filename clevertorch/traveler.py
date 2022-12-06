@@ -4,6 +4,7 @@ https://arxiv.org/pdf/2209.04521.pdf.
 Authors: Ryan Sheatsley & Blaine Hoak
 Wed Apr 27 2022
 """
+from clevertorch.utilities import print  # Use timestamped print
 import torch  # Tensors and Dynamic neural networks in Python with strong GPU acceleration
 
 # TODO
@@ -123,7 +124,7 @@ class Traveler:
             tanh_space(x, True)
 
         # last subroutine: reinstantiate the optimizer with the perturbation vector
-        print(f"Attaching the perturbation vector to {self.optmizer.__name__}...")
+        print(f"Attaching perturbation vector to {type(self.optimizer).__name__}...")
         self.optimizer.__init__([p], **self.optimizer.defaults)
         return None
 
