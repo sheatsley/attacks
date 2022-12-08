@@ -4,7 +4,6 @@ https://arxiv.org/pdf/2209.04521.pdf.
 Authors: Ryan Sheatsley & Blaine Hoak
 Wed Apr 27 2022
 """
-from clevertorch.utilities import print  # Use timestamped print
 import torch  # Tensors and Dynamic neural networks in Python with strong GPU acceleration
 
 # TODO
