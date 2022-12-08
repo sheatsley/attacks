@@ -1,5 +1,5 @@
 """
-Build script for CleverTorch
+Build script for the Adversarial Machine Learning repo
 Author: Ryan Sheatsley
 Date: Mon Nov 21 2022
 """
@@ -28,9 +28,9 @@ setuptools.setup(
     long_description=long_description,
     long_description_content_type="text/markdown",
     keywords="machine-learning pytorch adversarial-machine-learning",
-    name="clevertorch",
+    name="aml",
     packages=setuptools.find_packages(),
     python_requires=">=3.10",
-    url="https://github.com/sheatsley/clevertorch",
-    version="0.9.0",
+    url="https://github.com/sheatsley/adversarial_machine_learning",
+    version="0.9.1",
 )
