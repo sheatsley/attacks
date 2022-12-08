@@ -4,8 +4,8 @@ https://arxiv.org/pdf/2209.04521.pdf.
 Authors: Ryan Sheatsley & Blaine Hoak
 Thu June 30 2022
 """
+import aml.traveler as traveler  # PyTorch-based custom optimizers for crafting adversarial examples
 import torch  # Tensors and Dynamic neural networks in Python with strong GPU acceleration
-import clevertorch.traveler as traveler  # PyTorch-based optimizers for crafting adversarial examples
 
 # TODO:
 # add unit tests
