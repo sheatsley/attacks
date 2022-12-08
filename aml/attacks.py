@@ -4,14 +4,13 @@ https://arxiv.org/pdf/2209.04521.pdf.
 Authors: Ryan Sheatsley & Blaine Hoak
 Mon Apr 18 2022
 """
-import clevertorch.loss as loss  # PyTorch-based custom loss functions
-import clevertorch.optimizer as optimizer  # PyTorch-based custom optimizers
-import clevertorch.saliency as saliency  # Gradient manipulation heuristics to achieve adversarial goals
-import sklearn.preprocessing  # Preprocessing and Normalization
-import clevertorch.surface as surface  # PyTorch-based models for crafting adversarial examples
-import clevertorch.traveler as traveler  # PyTorch-based optimizers for crafting adversarial examples
-from clevertorch.utilities import print  # Use timestamped print
+import aml.loss as loss  # Popular PyTorch-based loss functions
+import aml.optimizer as optimizer  # PyTorch-based custom optimizers for crafting adversarial examples
+import aml.saliency as saliency  # Gradient manipulation heuristics to achieve adversarial goals
+import aml.surface as surface  # PyTorch-based models for crafting adversarial examples
+import aml.traveler as traveler  # PyTorch-based perturbation schemes for crafting adversarial examples
 import itertools  # Functions creating iterators for efficietn looping
+import sklearn.preprocessing  # Preprocessing and Normalization
 import torch  # Tensors and Dynamic neural networks in Python with strong GPU acceleration
 
 # TODO
@@ -423,8 +422,8 @@ class Attack:
             CW-L2 (Carlini-Wagner with l₂ norm) (https://arxiv.org/pdf/1608.04644.pdf)
             DF (DeepFool) (https://arxiv.org/pdf/1511.04599.pdf)
             FAB (Fast Adaptive Boundary) (https://arxiv.org/pdf/1907.02044.pdf)
-            PGD (Projected Gradient Descent) (https://arxiv.org/pdf/1706.06083.pdf)
             JSMA (Jacobian Saliency Map Approach) (https://arxiv.org/pdf/1511.07528.pdf)
+            PGD (Projected Gradient Descent) (https://arxiv.org/pdf/1706.06083.pdf)
 
         :return: the attack name with parameters
         :rtype: str
