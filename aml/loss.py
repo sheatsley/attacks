@@ -42,11 +42,11 @@ class CELoss(torch.nn.CrossEntropyLoss):
         super().__init__(reduction="none", **kwargs)
         return None
 
-    def forwad(self, logits, y):
+    def forward(self, logits, y):
         """
         This method serves as a wrapper for the PyTorch CrossEntropyLoss
         forward method. We provide this wrapper to expose the most recently
-        computed loss (detatched from the current graph) to be used later by
+        computed loss (detached from the current graph) to be used later by
         optimizers who require it (e.g., BWSGD).
 
         :param logits: the model logits
@@ -57,7 +57,7 @@ class CELoss(torch.nn.CrossEntropyLoss):
         :rtype: torch Tensor object (n,)
         """
         curr_loss = super().forward(logits, y)
-        self.curr_loss = curr_loss.detatch()
+        self.curr_loss = curr_loss.detach()
         return curr_loss
 
 
@@ -153,7 +153,7 @@ class CWLoss(torch.nn.Module):
         """
 
         # compute lp-norm of perturbation vector
-        lp = self.delta.norm(ord=self.norm, dim=1).repeat_interleave(
+        lp = self.delta.norm(p=self.norm, dim=1).repeat_interleave(
             logits.size(0) // self.delta.size(0)
         )
 
@@ -165,7 +165,7 @@ class CWLoss(torch.nn.Module):
 
         # save current loss for optimizers later
         curr_loss = lp + self.c * log_diff
-        self.curr_loss = curr_loss.detatch()
+        self.curr_loss = curr_loss.detach()
         return curr_loss
 
 
@@ -231,8 +231,8 @@ class DLRLoss(torch.nn.Module):
         # compute ordered logit differences
         log_desc = logits.sort(dim=1, descending=True).values
         pi_diff = log_desc[:, 0] - log_desc[:, min(2, logits.size(1) - 1)]
-        curr_loss = -(log_diff / pi_diff.clam_(minimum))
-        self.curr_loss = curr_loss.detatch()
+        curr_loss = -(log_diff / pi_diff.clamp_(minimum))
+        self.curr_loss = curr_loss.detach()
         return curr_loss
 
 
@@ -280,7 +280,7 @@ class IdentityLoss(torch.nn.Module):
         :rtype: torch Tensor object (n,)
         """
         curr_loss = logits.gather(1, y.unsqueeze(1)).flatten()
-        self.curr_loss = curr_loss.detatch()
+        self.curr_loss = curr_loss.detach()
         return curr_loss
 
 
