@@ -15,9 +15,8 @@ class DeepFoolSaliency:
     (https://arxiv.org/pdf/1511.04599.pdf) as a saliency map. Specifically,
     DeepFool adds the following perturbation to inputs:
 
-            |f(x + Δ)_i - f(x + Δ)_y| / ||∇f(x + Δ)_i - ∇f(x + Δ)_y||_q^q
-                            * |∇f(x + Δ)_i - ∇f(x + Δ)_y|^(q-1)
-                                * sign(∇f(x + Δ)_i - ∇f(x + Δ)_y)
+      |f(x + Δ)_i - f(x + Δ)_y| / ||∇f(x + Δ)_i - ∇f(x + Δ)_y||_q^q
+        * |∇f(x + Δ)_i - ∇f(x + Δ)_y|^(q-1) * sign(∇f(x + Δ)_i - ∇f(x + Δ)_y)
 
     where f returns the model logits, x is the original input, Δ is the current
     perturbation vector to produce adversarial examples, y is the true class, i
@@ -49,8 +48,8 @@ class DeepFoolSaliency:
         saves q as an attribute.
 
         :param q: the lp-norm to apply
-        :return: a Jacobian saliency map
-        :rtype: JacobianSaliency object
+        :return: a DeepFool saliency map
+        :rtype: DeepFoolSaliency object
         """
         self.q = q
         return None
@@ -80,18 +79,18 @@ class DeepFoolSaliency:
 
         # retrieve yth gradient and logit
         y_hot = torch.nn.functional.one_hot(y).bool()
-        yth_grad = g[y_hot]
-        yth_logit = loss.masked_select(y_hot)
+        yth_grad = g[y_hot].unsqueeze(1)
+        yth_logit = loss[y_hot].unsqueeze(1)
 
         # retrieve all non-yth gradients and logits
         other_grad = g[~y_hot].view(g.size(0), -1, g.size(2))
-        other_logits = loss.masked_select(~y_hot)
+        other_logits = loss[~y_hot].view(loss.size(0), -1)
 
         # compute ith class
         grad_diffs = other_grad.sub(yth_grad)
         logit_diffs = other_logits.sub(yth_logit).abs_()
         normed_ith_logit_diff, i = logit_diffs.div(
-            grad_diffs.norm(self.q, dim=1).clamp_(minimum)
+            grad_diffs.norm(self.q, dim=2).clamp_(minimum)
         ).topk(1, dim=1, largest=False)
 
         # save normed ith logit differences and return ith gradient differences
@@ -113,7 +112,7 @@ class DeepFoolSaliency:
         :return: finalized gradients for optimizers to step into
         :rtype: torch Tensor (n, m)
         """
-        return g.mul_(self.ith_logit_diff)
+        return g.mul_(self.normed_ith_logit_diff)
 
 
 class IdentitySaliency:
