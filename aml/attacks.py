@@ -19,6 +19,7 @@ import torch  # Tensors and Dynamic neural networks in Python with strong GPU ac
 # implement DDN (implement alternating SGD optimizer)
 # cleanup hparam updates
 # consider merging min_norm and carlini interfaces
+# epsilon and clipping  (min_p, max_p) do not work for l0, maybe l2 as well
 
 
 class Adversary:
@@ -278,16 +279,16 @@ class Attack:
 
     def __init__(
         self,
+        alpha,
+        change_of_variables,
         clip,
         epochs,
         epsilon,
-        alpha,
-        change_of_variables,
-        optimizer_alg,
-        random_restart,
         loss_func,
         norm,
         model,
+        optimizer_alg,
+        random_restart,
         saliency_map,
         batch_size=-1,
     ):
@@ -300,7 +301,7 @@ class Attack:
         :param batch_size: crafting batch size (-1 for 1 batch)
         :type batch_size: int
         :param clip: range of allowable values for the domain
-        :type clip: tuple of floats or torch Tensor object (n, m)
+        :type clip: tuple of floats or torch Tensor object (n, m, 2)
         :param epochs: number of optimization steps to perform
         :type epochs: int
         :param epsilon: lp-norm ball threat model
@@ -375,7 +376,7 @@ class Attack:
         self.params = {"α": alpha, "ε": epsilon, "epochs": epochs}
 
         # instantiate traveler, surface, and necessary subcomponents
-        norm_map = {0: surface.l0, 1: surface.linf, 2: surface.l2}
+        norm_map = {surface.l0: 0, surface.linf: 1, surface.l2: 2}
         saliency_map = (
             saliency_map(norm_map[norm])
             if saliency_map is saliency.DeepFoolSaliency
@@ -395,7 +396,7 @@ class Attack:
         }
         optimizer_alg = optimizer_alg(
             **(custom_opt_params | torch_opt_params)
-            if optimizer_alg.__module__ == "optimizer"
+            if optimizer_alg.__module__ == optimizer.__name__
             else torch_opt_params
         )
         self.traveler = traveler.Traveler(
@@ -466,7 +467,7 @@ class Attack:
         for b, (xb, yb, pb) in enumerate(zip(xi, yi, pi), start=1):
             print(f"On batch {b} of {num_batches} {b/num_batches:.1%}...")
             min_p, max_p = clip.sub(xb.unsqueeze(2)).clamp(*epsilon).unbind(2)
-            self.surface.initialize((min_p, max_p))
+            self.surface.initialize((min_p, max_p), pb)
             self.traveler.initialize(xb, pb)
             p.clamp_(min_p, max_p)
             for epoch in range(self.epochs):
@@ -636,15 +637,15 @@ def apgddlr(alpha=None, clip=None, epochs=None, epsilon=None, model=None):
     """
     return Attack(
         alpha=alpha,
+        change_of_variables=False,
         clip=clip,
         epochs=epochs,
         epsilon=epsilon,
+        loss_func=loss.DLRLoss,
         model=model,
-        change_of_variables=False,
+        norm=surface.linf,
         optimizer_alg=optimizer.MomentumBestStart,
         random_restart=True,
-        loss_func=loss.DLRLoss,
-        norm=surface.linf,
         saliency_map=saliency.IdentitySaliency,
     )
 
@@ -672,15 +673,15 @@ def bim(alpha=None, clip=None, epochs=None, epsilon=None, model=None):
     """
     return Attack(
         alpha=alpha,
+        change_of_variables=False,
         clip=clip,
         epochs=epochs,
         epsilon=epsilon,
+        loss_func=loss.CELoss,
         model=model,
-        change_of_variables=False,
+        norm=surface.linf,
         optimizer_alg=optimizer.SGD,
         random_restart=False,
-        loss_func=loss.CELoss,
-        norm=surface.linf,
         saliency_map=saliency.IdentitySaliency,
     )
 
@@ -707,15 +708,15 @@ def cwl2(alpha=None, clip=None, epochs=None, epsilon=None, model=None):
     """
     return Attack(
         alpha=alpha,
+        change_of_variables=True,
         clip=clip,
         epochs=epochs,
         epsilon=epsilon,
+        loss_func=loss.CWLoss,
         model=model,
-        change_of_variables=True,
+        norm=surface.l2,
         optimizer_alg=optimizer.Adam,
         random_restart=False,
-        loss_func=loss.CWLoss,
-        norm=surface.l2,
         saliency_map=saliency.IdentitySaliency,
     )
 
@@ -743,15 +744,15 @@ def df(alpha=None, clip=None, epochs=None, epsilon=None, model=None):
     """
     return Attack(
         alpha=alpha,
+        change_of_variables=False,
         clip=clip,
         epochs=epochs,
         epsilon=epsilon,
+        loss_func=loss.IdentityLoss,
         model=model,
-        change_of_variables=False,
+        norm=surface.l2,
         optimizer_alg=optimizer.SGD,
         random_restart=False,
-        loss_func=loss.IdentityLoss,
-        norm=surface.l2,
         saliency_map=saliency.DeepFoolSaliency,
     )
 
@@ -779,15 +780,15 @@ def fab(alpha=None, clip=None, epochs=None, epsilon=None, model=None):
     """
     return Attack(
         alpha=alpha,
+        change_of_variables=False,
         clip=clip,
         epochs=epochs,
         epsilon=epsilon,
+        loss_func=loss.IdentityLoss,
         model=model,
-        change_of_variables=False,
+        norm=surface.l2,
         optimizer_alg=optimizer.BackwardSGD,
         random_restart=False,
-        loss_func=loss.IdentityLoss,
-        norm=surface.l2,
         saliency_map=saliency.IdentitySaliency,
     )
 
@@ -815,15 +816,15 @@ def pgd(alpha=None, clip=None, epochs=None, epsilon=None, model=None):
     """
     return Attack(
         alpha=alpha,
+        change_of_variables=False,
         clip=clip,
         epochs=epochs,
         epsilon=epsilon,
+        loss_func=loss.CELoss,
         model=model,
-        change_of_variables=False,
+        norm=surface.linf,
         optimizer_alg=optimizer.SGD,
         random_restart=True,
-        loss_func=loss.CELoss,
-        norm=surface.linf,
         saliency_map=saliency.IdentitySaliency,
     )
 
@@ -853,13 +854,13 @@ def jsma(alpha=None, clip=None, epochs=None, epsilon=None, model=None):
         alpha=alpha,
         clip=clip,
         epochs=epochs,
-        epsilon=epsilon,
-        model=model,
         change_of_variables=False,
+        epsilon=epsilon,
+        loss_func=loss.IdentityLoss,
+        model=model,
+        norm=surface.l0,
         optimizer_alg=optimizer.SGD,
         random_restart=False,
-        loss_func=loss.IdentityLoss,
-        norm=surface.l0,
         saliency_map=saliency.JacobianSaliency,
     )
 
