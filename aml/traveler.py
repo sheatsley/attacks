@@ -58,7 +58,7 @@ class Traveler:
         components = (optimizer,)
         self.hparams = dict(*[c.items() for c in components if hasattr(c, "hparams")])
         self.params = {
-            "α": optimizer.defaults["lr"],
+            "α": optimizer.defaults.get("lr", "adaptive"),
             "CoV": change_of_variables,
             "optim": type(optimizer).__name__,
             "RR": (-random_restart, random_restart),
@@ -115,7 +115,7 @@ class Traveler:
             torch.distributions.uniform.Uniform(
                 -self.random_restart, self.random_restart
             ).sample(p.size())
-        )
+        ) if self.random_restart else 0
 
         # subroutine (2): change of variables
         if self.change_of_variables:
@@ -144,7 +144,7 @@ def tanh_space(x, into=False):
 
                         x = (Tanh(w + Δ) + 1) / 2                       (2)
 
-    where Δ is the computed perturbation to produce an adversarail examples. As
+    where Δ is the computed perturbation to produce an adversarial examples. As
     described in https://arxiv.org/pdf/1608.04644.pdf, (2) ensures that x is
     gauranteed to be within the range [0, 1] (thus avoiding any clipping
     mechanisms). Whether (1) or (2) is applied is determined by the inverse
@@ -158,9 +158,9 @@ def tanh_space(x, into=False):
     :rtype: torch Tensor object (n, m)
     """
     return (
-        x.mul_(2).sub_(1).arctanh_(1 - torch.finfo(x.dtype).eps)
+        x.mul_(2).sub_(1).mul_(1 - torch.finfo(x.dtype).eps).arctanh_()
         if into
-        else x.tanh_().add_(1).div_(2)
+        else x.tanh_().add(1).div_(2)
     )
 
 
