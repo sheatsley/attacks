@@ -2,10 +2,10 @@
 This module runs attack performance and correctness tests against other AML
 libraries. Specifically, this defines three types of tests: (1) functional, (2)
 semantic, and (3) identity. Details surrounding these tests can be found in the
-respecetive classes: FunctionalTest, SemanticTest, and IdentityTest. Aside from
-these standard tests, special tests can be found in the SpecialTest class,
-which evaluate particulars of the implementation in the Space of Adversarial
-Strategies (https://arxiv.org/pdf/2209.04521.pdf).
+respecetive classes: FunctionalTests, SemanticTests, and IdentityTests. Aside
+from these standard tests, special tests can be found in the SpecialTests
+class, which evaluate particulars of the implementation in the Space of
+Adversarial Strategies (https://arxiv.org/pdf/2209.04521.pdf).
 Authors: Ryan Sheatsley and Blaine Hoak
 Mon Nov 28 2022
 """
@@ -19,11 +19,11 @@ import torch  # Tensors and Dynamic neural networks in Python with strong GPU ac
 
 
 # TODO
-# integrate framework loading in BaseTest and cleanup clipping print at the end
 # get all functional tests passing
 # implement identity tests
 # implement semantic tests
 # implement special tests
+# integrate binary search steps for aml cwl2 tests
 
 
 class BaseTest(unittest.TestCase):
@@ -32,7 +32,17 @@ class BaseTest(unittest.TestCase):
     there is no good way to setup test fixtures *across test cases*, we emulate
     this setup by defining a base class which has a class setup test fixture
     (Unfortunately, setUpModule does nothing special with namespaces, so it is
-    ostensibly useless even though it seems like it ought to fit the bill...)
+    ostensibly useless even though it seems like it ought to fit the bill...).
+
+    The following attacks are supported:
+        APGD-CE (Auto-PGD with CE loss) (https://arxiv.org/pdf/2003.01690.pdf)
+        APGD-DLR (Auto-PGD with DLR loss) (https://arxiv.org/pdf/2003.01690.pdf)
+        BIM (Basic Iterative Method) (https://arxiv.org/pdf/1611.01236.pdf)
+        CW-L2 (Carlini-Wagner with l₂ norm) (https://arxiv.org/pdf/1608.04644.pdf)
+        DF (DeepFool) (https://arxiv.org/pdf/1511.04599.pdf)
+        FAB (Fast Adaptive Boundary) (https://arxiv.org/pdf/1907.02044.pdf)
+        JSMA (Jacobian Saliency Map Approach) (https://arxiv.org/pdf/1511.07528.pdf)
+        PGD (Projected Gradient Descent) (https://arxiv.org/pdf/1706.06083.pdf)
 
     :func:`setUpClass`: initializes the setup for all tests cases
     """
@@ -44,9 +54,9 @@ class BaseTest(unittest.TestCase):
         """
         This function initializes the setup necessary for all test cases within
         this module. Specifically, this method retrieves data, processes it,
-        trains a model, sets attack parameters, determines which external
-        libraries are available (used for semantic and identity tests), and
-        loads PyTorch in debug mode if desired (to assist debugging autograd).
+        trains a model, instantiates attacks, imports availabe external
+        libraries (used for semantic and identity tests), and loads PyTorch in
+        debug mode if desired (to assist debugging autograd).
 
         :param alpha: perturbation strength
         :type alpha: float
@@ -61,11 +71,6 @@ class BaseTest(unittest.TestCase):
         :return: None
         :rtype: NoneType
         """
-
-        # check the frameworks that are available
-        supported = ("cleverhans", "art")
-        available = ((f, importlib.util.find_spec(f)) for f in supported)
-        frameworks = ", ".join((f for f, a in available if a))
 
         # set debug mode, load data (extract training and test sets, if they exist)
         print("Initializing module for all test cases...")
@@ -83,9 +88,15 @@ class BaseTest(unittest.TestCase):
             cls.y = torch.from_numpy(data.dataset.labels).long()
 
         # determine clipping range (datasets need not be between 0 and 1)
-        maximum, idx = cls.x.max(0)
-        minimum, idx = cls.x.min(0)
-        clip = torch.stack((minimum, maximum), 1).tile((cls.x.size(0), 1, 1))
+        mins, idx = cls.x.min(0)
+        maxs, idx = cls.x.max(0)
+        clip = (mins, maxs)
+        clip_info = (
+            (mins[0, 0], maxs[0, 0])
+            if (mins[0].eq(mins).all() and maxs[0].eq(maxs).all())
+            else f"(({mins.min().item()}, ..., {mins.max()}.item()),"
+            "({maxs.min().item()}, ..., {maxs.max().item()}))"
+        )
 
         # train model
         template = getattr(dlm.architectures, dataset)
@@ -96,16 +107,34 @@ class BaseTest(unittest.TestCase):
         )
         cls.model.fit(*(x, y) if has_test else (cls.x, cls.y))
 
-        # define supported attacks and save attack parameters
+        # instantiate attacks and save attack parameters
         cls.l0 = int(cls.x.size(1) * norm)
-        cls.l2 = maximum.sub(minimum).norm(2).item()
+        cls.l2 = maxs.sub(mins).norm(2).item()
         cls.linf = norm
-        cls.attack_parameters = {
+        cls.attack_params = {
             "alpha": alpha,
             "clip": clip,
             "epochs": epochs,
             "model": cls.model,
         }
+        cls.attacks = {
+            "APGD-CE": aml.attacks.apgdce(**cls.attack_params | {"epsilon": cls.linf}),
+            "APGD-DLR": aml.attacks.apgdce(**cls.attack_params | {"epsilon": cls.linf}),
+            "BIM": aml.attacks.bim(**cls.attack_params | {"epsilon": cls.linf}),
+            "CW-L2": aml.attacks.cwl2(**cls.attack_params | {"epsilon": cls.l2}),
+            "DF": aml.attacks.df(**cls.attack_params | {"epsilon": cls.l2}),
+            "FAB": aml.attacks.fab(**cls.attack_params | {"epsilon": cls.l2}),
+            "JSMA": aml.attacks.fab(**cls.attack_params | {"epsilon": cls.l0}),
+            "PGD": aml.attacks.fab(**cls.attack_params | {"epsilon": cls.linf}),
+        }
+
+        # determine available frameworks (and import for test cases that need it)
+        supported = ("cleverhans", "art")
+        cls.available = ((f, importlib.util.find_spec(f)) for f in supported)
+        frameworks = ", ".join((f for f, a in cls.available if a))
+        if cls in {IdentityTests, SemanticTests}:
+            print("Importing frameworks...")
+            [importlib.import_module(f) for f, a in cls.available if a]
         print(
             "Module Setup complete. Testing Parameters:",
             f"Dataset: {dataset}, Test Set: {has_test}",
@@ -113,10 +142,11 @@ class BaseTest(unittest.TestCase):
             f"Model Type: {cls.model.__class__.__name__}",
             f"Train Acc: {cls.model.stats['train_acc'][-1]:.1%}",
             f"Craftset Acc: {cls.model.accuracy(cls.x, cls.y):.1%}",
-            f"Attack Clipping Values: ({minimum}, {maximum})",
+            f"Attack Clipping Values: {clip_info}",
             f"Attack Strength α: {cls.attack_parameters['alpha']}",
             f"Attack Epochs: {cls.attack_parameters['epochs']}",
             f"Max Norm Radii: l0: {cls.l0}, l2: {cls.l2:.3}, l∞: {cls.linf}",
+            f"Available Frameworks: {frameworks}",
             sep="\n",
         )
         return None
@@ -142,7 +172,7 @@ class FunctionalTests(BaseTest):
         PGD (Projected Gradient Descent) (https://arxiv.org/pdf/1706.06083.pdf)
 
     :func:`functional_test`: performs a functional test
-    :func:`setUpClass`: loads frameworks, retrieves data, and trains models
+    :func:`setUpClass`: sets functional test parameters
     :func:`test_apgdce`: functional test for APGD-CE
     :func:`test_apgddlr`: functional test for APGD-DLR
     :func:`test_bim`: functional test for BIM
@@ -175,7 +205,7 @@ class FunctionalTests(BaseTest):
         """
         This method performs a functional test for a given attack.
 
-        :param attack: attacks to test
+        :param attack: attack to test
         :type attack: aml Attack object
         :return: None
         :rtype: NoneType
@@ -200,9 +230,7 @@ class FunctionalTests(BaseTest):
         :return: None
         :rtype: NoneType
         """
-        return self.functional_test(
-            aml.attacks.apgdce(**self.attack_parameters | {"epsilon": self.linf})
-        )
+        return self.functional_test(self.attacks["APGD-CE"])
 
     def test_apgddlr(self):
         """
@@ -212,9 +240,7 @@ class FunctionalTests(BaseTest):
         :return: None
         :rtype: NoneType
         """
-        return self.functional_test(
-            aml.attacks.apgddlr(**self.attack_parameters | {"epsilon": self.linf})
-        )
+        return self.functional_test(self.attacks["APGD-DLR"])
 
     def test_bim(self):
         """
@@ -224,9 +250,7 @@ class FunctionalTests(BaseTest):
         :return: None
         :rtype: NoneType
         """
-        return self.functional_test(
-            aml.attacks.bim(**self.attack_parameters | {"epsilon": self.linf})
-        )
+        return self.functional_test(self.attacks["BIM"])
 
     def test_cwl2(self):
         """
@@ -236,9 +260,7 @@ class FunctionalTests(BaseTest):
         :return: None
         :rtype: NoneType
         """
-        return self.functional_test(
-            aml.attacks.cwl2(**self.attack_parameters | {"epsilon": self.l2})
-        )
+        return self.functional_test(self.attacks["CW-L2"])
 
     def test_df(self):
         """
@@ -248,9 +270,7 @@ class FunctionalTests(BaseTest):
         :return: None
         :rtype: NoneType
         """
-        return self.functional_test(
-            aml.attacks.df(**self.attack_parameters | {"epsilon": self.l2})
-        )
+        return self.functional_test(self.attacks["DF"])
 
     def test_fab(self):
         """
@@ -260,9 +280,7 @@ class FunctionalTests(BaseTest):
         :return: None
         :rtype: NoneType
         """
-        return self.functional_test(
-            aml.attacks.fab(**self.attack_parameters | {"epsilon": self.l2})
-        )
+        return self.functional_test(self.attacks["FAB"])
 
     def test_jsma(self):
         """
@@ -272,9 +290,7 @@ class FunctionalTests(BaseTest):
         :return: None
         :rtype: NoneType
         """
-        return self.functional_test(
-            aml.attacks.jsma(**self.attack_parameters | {"epsilon": self.l0})
-        )
+        return self.functional_test(self.attacks["JSMA"])
 
     def test_pgd(self):
         """
@@ -284,9 +300,7 @@ class FunctionalTests(BaseTest):
         :return: None
         :rtype: NoneType
         """
-        return self.functional_test(
-            aml.attacks.pgd(**self.attack_parameters | {"epsilon": self.linf})
-        )
+        return self.functional_test(self.attacks["PGD"])
 
 
 class IdentityTests(unittest.TestCase):
@@ -312,7 +326,7 @@ class IdentityTests(unittest.TestCase):
         PGD (Projected Gradient Descent) (https://arxiv.org/pdf/1706.06083.pdf)
 
     :func:`identity_test`: performs an identity test
-    :func:`setUpClass`: loads frameworks, retrieves data, and trains models
+    :func:`setUpClass`: sets identity test parameters
     :func:`test_apgdce`: identity test for APGD-CE
     :func:`test_apgddlr`: identity test for APGD-DLR
     :func:`test_bim`: identity test for BIM
@@ -326,11 +340,12 @@ class IdentityTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls, max_distance=0.001):
         """
-        This method initializes the identity testing framework by setting
-        parameters unique to the tests within this test case. At this time,
-        this just sets the maximum distance (measured at the feature-level)
-        between adversarial examples produced by aml and other frameworks to
-        be considered "identical."
+        This method initializes the identity testing case by setting parameters
+        unique to the tests within this test case. At this time, this sets the
+        maximum allowable distance (measured at the feature-level) between
+        adversarial examples produced by aml and other frameworks such that aml
+        adversarial examples are considered "identical" to adversarial examples
+        produced by attacks in other frameworks.
 
         :param max_distance: the maximum allowable distance between features
         :type max_distance: float
@@ -341,7 +356,7 @@ class IdentityTests(unittest.TestCase):
         return None
 
 
-class SemanticTest(unittest.TestCase):
+class SemanticTests(unittest.TestCase):
     """
     The following class implements semantic tests. Semantic correctness tests
     are more sophisticated than functional tests, in that they compare the the
@@ -367,7 +382,7 @@ class SemanticTest(unittest.TestCase):
         PGD (Projected Gradient Descent) (https://arxiv.org/pdf/1706.06083.pdf)
 
     :func:`semantic_test`: performs a semantic test
-    :func:`setUp`: loads frameworks, retrieves data, and trains models
+    :func:`setUpClass`: sets semantic test parameters
     :func:`test_apgdce`: semantic test for APGD-CE
     :func:`test_apgddlr`: semantic test for APGD-DLR
     :func:`test_bim`: semantic test for BIM
@@ -378,13 +393,113 @@ class SemanticTest(unittest.TestCase):
     :func:`test_pgd`: semantic test for PGD
     """
 
+    @classmethod
+    def setUpClass(cls, performance=0.01):
+        """
+        This method initializes the semantic testing case by setting parameters
+        unique to the tests within this test case. At this time, this sets the
+        maximum allowable performance difference between adversarial examples
+        produced by aml and other frameworks such that the aml attacks are
+        considered to be "semantically" correct. Performance is measured as the
+        one minus the product of model accuracy and normalized lp-norm.
+
+        :param max_distance: the maximum allowable distance between features
+        :type max_distance: float
+        :return: None
+        :rtype: NoneType
+        """
+        cls.performance = performance
+        return None
+
+    def semantic_test(self, attack, fws):
+        """
+        This method performs a semantic test for a given attack.
+
+        :param attack: attack to test
+        :type attack: aml Attack object
+        :param fws: adversarial examples produced by other frameworks
+        :type fws: tuple of torch Tensor object (n, m) and str
+        :return: None
+        :rtype: NoneType
+        """
+        for fw_adv, fw in fws:
+            with self.subTest(Attack=f"{attack.name} v. {fw}"):
+                aml_p = attack.craft(self.x, self.y)
+                aml_norm = (aml_p.norm(d, 1).mean().item() for d in (0, 2, torch.inf))
+                aml_norm_results = ", ".join(
+                    f"l{p}: {n:.3}/{b} ({n/b:.2%})"
+                    for n, b, p in zip(
+                        aml_norm, (self.l0, self.l2, self.linf), (0, 2, "∞")
+                    )
+                )
+                fw_p = fw_adv.sub(self.x)
+                fw_norm = (fw_p.norm(d, 1).mean().item() for d in (0, 2, torch.inf))
+                fw_norm_results = ", ".join(
+                    f"l{p}: {n:.3}/{b} ({n/b:.2%})"
+                    for n, b, p in zip(
+                        fw_norm, (self.l0, self.l2, self.linf), (0, 2, "∞")
+                    )
+                )
+                aml_acc = self.model.accuracy(self.x + aml_norm, self.y)
+                fw_acc = self.model.accuracy(fw_adv, self.y)
+                print(f"AML {attack.name} Model Acc: {aml_acc:.2%},", aml_norm_results)
+                print(f"{fw} {attack.name} Model Acc: {fw_acc:.2%},", fw_norm_results)
+                aml_perf = 
+                self.assertLess(advx_acc, self.min_acc)
+        return None
+
+    def test_cwl2(self):
+        """
+        This method performs a semantic test for CW-L2 (Carlini-Wagner with l₂
+        norm) (https://arxiv.org/pdf/1608.04644.pdf). The supported frameworks
+        for CW-L2 include CleverHans and ART.
+
+        :return: None
+        :rtype: NoneType
+        """
+        if cleverhans:
+            from cleverhans.torch.attacks.carlini_wagner_l2 import carlini_wagner_l2
+
+            ch_adv = (
+                carlini_wagner_l2(
+                    model_fn=self.attack_params["model"],
+                    x=self.x,
+                    n_classes=self.attack_params["model"].params["classes"],
+                    y=self.y,
+                    lr=self.attack_params["alpha"],
+                    confidence=self.attacks["CW-L2"].surface.loss.c.item(),
+                    clip_min=self.attack_params["clip"][0].max().item(),
+                    clip_max=self.attack_params_["clip"][1].min().item(),
+                    binary_search_steps=1,
+                    max_iterations=self.attack_params["epochs"],
+                ),
+                "CleverHans",
+            )
+        if art:
+            pass
+
+        cls.attack_params = {
+            "alpha": alpha,
+            "clip": clip,
+            "epochs": epochs,
+            "model": cls.model,
+        }
+        cls.attacks = {
+            "APGD-CE": aml.attacks.apgdce(**cls.attack_params | {"epsilon": cls.linf}),
+            "APGD-DLR": aml.attacks.apgdce(**cls.attack_params | {"epsilon": cls.linf}),
+            "BIM": aml.attacks.bim(**cls.attack_params | {"epsilon": cls.linf}),
+            "CW-L2": aml.attacks.cwl2(**cls.attack_params | {"epsilon": cls.l2}),
+        }
+        return self.semantic_test(self.attacks["CW-L2"], (ch_adv, art_adv))
+
 
 class SpecialTest(unittest.TestCase):
     """
-    The following class implements special tests. Special tests are designed to
-    exercise components of the Space of Adversarial Strategies framework
-    (https://arxiv.org/pdf/2209.04521.pdf) in specific ways. The purpose and
-    detailed description of each test can be found in their respecitve methods.
+    The following class implements the special test case. Special tests are
+    designed to exercise components of the Space of Adversarial Strategies
+    framework (https://arxiv.org/pdf/2209.04521.pdf) in specific ways. The
+    purpose and detailed description of each test can be found in their
+    respecitve methods.
 
     :func:`test_all_components`: coverage test that stresses all components
     """
