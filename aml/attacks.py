@@ -303,7 +303,7 @@ class Attack:
         :param batch_size: crafting batch size (-1 for 1 batch)
         :type batch_size: int
         :param clip: range of allowable values for the domain
-        :type clip: tuple of floats or torch Tensor object (n, m, 2)
+        :type clip: tuple of floats or tuple of torch Tensor object (n, m)
         :param epochs: number of optimization steps to perform
         :type epochs: int
         :param epsilon: lp-norm ball threat model
@@ -459,24 +459,24 @@ class Attack:
         epsilon = (-self.epsilon, self.epsilon)
         clip = (
             self.clip
-            if isinstance(self.clip, torch.Tensor)
-            else torch.tensor(self.clip).tile(*x.size(), 1)
+            if all(isinstance(c, torch.Tensor) for c in self.clip)
+            else tuple(torch.full_like(x, c) for c in self.clip)
         )
 
         # craft adversarial examples per batch
         print(f"Crafting {x.size(0)} adversarial examples with {self}...")
-        xi, yi, pi = x.split(batch_size), y.split(batch_size), p.split(batch_size)
-        for b, (xb, yb, pb) in enumerate(zip(xi, yi, pi), start=1):
+        xi, yi, pi, cni, cxi = (t.split(batch_size) for t in (x, y, p, *clip))
+        for b, (xb, yb, pb, cnb, cxb) in enumerate(zip(xi, yi, pi, cni, cxi), start=1):
             print(f"On batch {b} of {num_batches} {b/num_batches:.1%}...")
-            min_p, max_p = clip.sub(xb.unsqueeze(2)).clamp(*epsilon).unbind(2)
+            min_p, max_p = (c.sub(xb).clamp(*epsilon) for c in (cnb, cxb))
             self.surface.initialize((min_p, max_p), pb)
             self.traveler.initialize(xb, pb)
-            p.clamp_(min_p, max_p)
+            pb.clamp_(min_p, max_p)
             for epoch in range(self.epochs):
                 print(f"On epoch {epoch}... ({epoch/self.epochs:.1%})", end="\r")
                 self.surface(xb, yb, pb)
                 self.traveler()
-                p.clamp_(min_p, max_p)
+                pb.clamp_(min_p, max_p)
         return p
 
 
