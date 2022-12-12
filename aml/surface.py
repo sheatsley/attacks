@@ -65,7 +65,9 @@ class Surface:
             comp for c in vars(self) if hasattr(comp := getattr(self, c), "closure")
         ]
         components = (loss, model, saliency_map)
-        self.hparams = dict(*[c.items() for c in components if hasattr(c, "hparams")])
+        self.hparams = dict(
+            *[c.hparams.items() for c in components if hasattr(c, "hparams")]
+        )
         self.params = {
             "loss": type(loss).__name__,
             "model": type(model).__name__,
@@ -100,9 +102,9 @@ class Surface:
         # expand inputs if components require a full model jacobian
         x_j, y_j, p_j, c_j = (
             (
-                x.repeat_interleave(c_j),
+                x.repeat_interleave(c_j, dim=0),
                 torch.arange(c_j).repeat(x.size(0)),
-                p.repeat_interleave(c_j),
+                p.repeat_interleave(c_j, dim=0),
                 c_j,
             )
             if (c_j := self.model.params["classes"] * self.saliency_map.jac_req)
@@ -113,6 +115,7 @@ class Surface:
         p_j.requires_grad = True
         loss = self.loss(self.model(self.change_of_variables(x_j + p_j)), y_j)
         grads = torch.autograd.grad(loss, p_j, torch.ones_like(loss))[0]
+        loss = loss.detach()
         p_j.requires_grad = False
 
         # apply saliency map and lp-norm filter
@@ -141,21 +144,33 @@ class Surface:
         """
         return f"Surface({self.params})"
 
-    def initialize(self, clip):
+    def initialize(self, clip, p):
         """
         This method performs any preprocessing and initialization steps prior
-        to crafting adversarial examples. Specifically, some attacks operate
-        under the l0-norm, which exhibit a difficiency when the most salient
-        feature is at a clipping or threat-model bound; this can be alleviated
-        by considering these bounds when building the saliency map. At this time,
-        this intilization method attaches these bounds to Surface objects.
+        to crafting adversarial examples. Specifically, some attacks (1)
+        operate under the l0-norm, which exhibit a difficiency when the most
+        salient feature is at a clipping or threat-model bound; this can be
+        alleviated by considering these bounds when building the saliency map,
+        or (2) directly incorporates lp-norms as part of the loss function
+        (e.g., CW) which requires access to the perturbation vector. At this
+        time, this intilization method attaches l0-bounds to Surface objects
+        and perturbation vectors to loss functions (if required).
 
         :param clip: the range of allowable values for the perturbation vector
         :type clip: tuple of torch Tensor objects (n, m)
+        :param p: the perturbation vectors used to craft adversarial examples
+        :type p: torch Tensor object (n, m)
         :return: None
         :rtype: NoneType
         """
+
+        # subroutine (1): save minimum and maximum values for l0 attacks
         self.clip = clip
+
+        # subroutine (2): attach the perturbation vector to loss objects
+        if self.loss.del_req:
+            print(f"Attaching perturbation vector to {type(self.loss).__name__}...")
+            self.loss.attach(p)
         return None
 
 
@@ -174,14 +189,12 @@ def linf(g):
 
 def l0(g, clip, max_obj):
     """
-    This function projects gradients into the l0-norm space. Specifically, this
-    is defined as taking the sign of the gradient component with the largest
-    magnitude (or top 1% of components, if there are more than 100 features)
-    and setting all other component gradients to zero. In addition, this
-    function zeroes any component whose direction would result in a
-    perturbation that exceeds the valid feature range defined by the clip
-    argument (otherwise optimizers would indefinitely perturb the same
-    feature).
+    This function projects gradients into the l0-norm space. Specifically,
+    features are scored by the product of their gradients and the distance
+    remaining to either the minimum or maximum clipping bounds (depending on
+    the sign of the gradient). Afterwards, the component with the largest
+    magntiude is set to its sign (or top 1% of components, if there are more
+    than 100 features) while all other component gradients are set to zero.
 
     :param g: the gradients of the perturbation vector
     :type g: torch Tensor object (n, m)
@@ -192,8 +205,9 @@ def l0(g, clip, max_obj):
     :return: gradients projected into the l0-norm space
     :rtype: torch Tensor object (n, m)
     """
-    valid_components = g.mul_(clip[(1 + (g.sign_() * 1 if max_obj else -1)) / 2])
-    bottom_k = valid_components.abs_().topk(int(g.size(1) * 0.99), dim=1, largest=False)
+    component_direction = g.sign().mul_(1 if max_obj else -1).add_(1).div_(2).bool()
+    g.mul_(torch.where(component_direction, *clip))
+    bottom_k = g.abs_().topk(int(g.size(1) * 0.99), dim=1, largest=False)
     return g.scatter_(dim=1, index=bottom_k.indices, value=0).sign_()
 
 
@@ -202,7 +216,6 @@ def l2(g, minimum=torch.tensor(1e-8)):
     This function projects gradients into the l2-norm space. Specifically, this
     is defined as normalizing the gradients by thier l2-norm. The minimum
     optional argument can be used to mitigate underflow.
-
 
     :param g: the gradients of the perturbation vector
     :type g: torch Tensor object (n, m)
