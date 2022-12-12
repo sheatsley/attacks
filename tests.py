@@ -19,53 +19,34 @@ import torch  # Tensors and Dynamic neural networks in Python with strong GPU ac
 
 
 # TODO
-# add perturbation visualizations (maybe provide in examples?)
-# running module direcetly should run all test classes a test suite?
-# unclear if test classes should be per-dataset, or per-test-type (need to look at command line patterns)
-# add unittest.main() at the end of the script to run *all* tests
+# integrate framework loading in BaseTest and cleanup clipping print at the end
+# get all functional tests passing
+# implement identity tests
+# implement semantic tests
+# implement special tests
 
 
-class FunctionalTests(unittest.TestCase):
+class BaseTest(unittest.TestCase):
     """
-    The following class implements functional tests. Functional correctness
-    tests involve crafting adversarial examples and verifying that model
-    accuracy can be dropped to <1% for some "small" lp-budget. This is
-    typically defined as ~15% consumption of budget measured by the target
-    lp-norm (e.g., for a space with 100 features, this is budget is defined as
-    15 in l0, 10 in l2, and 0.15 in l∞).
+    The following class serves as the base test for all tests cases. Since
+    there is no good way to setup test fixtures *across test cases*, we emulate
+    this setup by defining a base class which has a class setup test fixture
+    (Unfortunately, setUpModule does nothing special with namespaces, so it is
+    ostensibly useless even though it seems like it ought to fit the bill...)
 
-    The following attacks are supported:
-        APGD-CE (Auto-PGD with CE loss) (https://arxiv.org/pdf/2003.01690.pdf)
-        APGD-DLR (Auto-PGD with DLR loss) (https://arxiv.org/pdf/2003.01690.pdf)
-        BIM (Basic Iterative Method) (https://arxiv.org/pdf/1611.01236.pdf)
-        CW-L2 (Carlini-Wagner with l₂ norm) (https://arxiv.org/pdf/1608.04644.pdf)
-        DF (DeepFool) (https://arxiv.org/pdf/1511.04599.pdf)
-        FAB (Fast Adaptive Boundary) (https://arxiv.org/pdf/1907.02044.pdf)
-        JSMA (Jacobian Saliency Map Approach) (https://arxiv.org/pdf/1511.07528.pdf)
-        PGD (Projected Gradient Descent) (https://arxiv.org/pdf/1706.06083.pdf)
-
-    :func:`functional_test`: performs functional test(s)
-    :func:`setUp`: loads frameworks, retrieves data, and trains models
-    :func:`test_all`: perform functional test for all attacks
-    :func:`test_apgdce`: functional test for APGD-CE
-    :func:`test_apgddlr`: functional test for APGD-DLR
-    :func:`test_bim`: functional test for BIM
-    :func:`test_cwl2`: functional test for CW-L2
-    :func:`test_df`: functional test for DF
-    :func:`test_fab`: functional test for FAB
-    :func:`test_jsma`: functional test for JSMA
-    :func:`test_pgd`: functional test for PGD
+    :func:`setUpClass`: initializes the setup for all tests cases
     """
 
     @classmethod
     def setUpClass(
-        cls, alpha=0.01, dataset="phishing", debug=False, epochs=30, small=0.15
+        cls, alpha=0.01, dataset="phishing", debug=False, epochs=30, norm=0.15
     ):
         """
-        This method initializes the functional testing framework by retrieving
-        data, procesing data, training models, defining supported attacks, and
-        saving attack parameters for use later. Moreover, it supports loading
-        PyTorch in debug mode to assist debugging errors in autograd.
+        This function initializes the setup necessary for all test cases within
+        this module. Specifically, this method retrieves data, processes it,
+        trains a model, sets attack parameters, determines which external
+        libraries are available (used for semantic and identity tests), and
+        loads PyTorch in debug mode if desired (to assist debugging autograd).
 
         :param alpha: perturbation strength
         :type alpha: float
@@ -75,13 +56,19 @@ class FunctionalTests(unittest.TestCase):
         :type debugf: bool
         :param epochs: number of attack iterations
         :type epochs: int
-        :param small: maximum % of lp-budget consumption
-        :type small: float
+        :param norm: maximum % of lp-budget consumption
+        :type norm: float
         :return: None
         :rtype: NoneType
         """
 
+        # check the frameworks that are available
+        supported = ("cleverhans", "art")
+        available = ((f, importlib.util.find_spec(f)) for f in supported)
+        frameworks = ", ".join((f for f, a in available if a))
+
         # set debug mode, load data (extract training and test sets, if they exist)
+        print("Initializing module for all test cases...")
         torch.autograd.set_detect_anomaly(debug)
         data = getattr(mlds, dataset)
         try:
@@ -110,32 +97,78 @@ class FunctionalTests(unittest.TestCase):
         cls.model.fit(*(x, y) if has_test else (cls.x, cls.y))
 
         # define supported attacks and save attack parameters
-        cls.l0 = int(cls.x.size(1) * small)
+        cls.l0 = int(cls.x.size(1) * norm)
         cls.l2 = maximum.sub(minimum).norm(2).item()
-        cls.linf = small
+        cls.linf = norm
         cls.attack_parameters = {
             "alpha": alpha,
             "clip": clip,
             "epochs": epochs,
             "model": cls.model,
         }
-        cls.all_attacks = (
-            cls.test_apgdce,
-            cls.test_apgddlr,
-            cls.test_bim,
-            cls.test_cwl2,
-            cls.test_df,
-            cls.test_fab,
-            cls.test_jsma,
-            cls.test_pgd,
-        )
         print(
-            f"Setup complete. Dataset: {dataset},",
-            f"Craftset shape: ({cls.x.size(0)}, {cls.x.size(1)}),",
-            f"Model: {cls.model.__class__.__name__},",
-            f"Train Acc: {cls.model.stats['train_acc'][-1]:.1%},",
+            "Module Setup complete. Testing Parameters:",
+            f"Dataset: {dataset}, Test Set: {has_test}",
+            f"Craftset shape: ({cls.x.size(0)}, {cls.x.size(1)})",
+            f"Model Type: {cls.model.__class__.__name__}",
+            f"Train Acc: {cls.model.stats['train_acc'][-1]:.1%}",
+            f"Craftset Acc: {cls.model.accuracy(cls.x, cls.y):.1%}",
+            f"Attack Clipping Values: ({minimum}, {maximum})",
+            f"Attack Strength α: {cls.attack_parameters['alpha']}",
+            f"Attack Epochs: {cls.attack_parameters['epochs']}",
             f"Max Norm Radii: l0: {cls.l0}, l2: {cls.l2:.3}, l∞: {cls.linf}",
+            sep="\n",
         )
+        return None
+
+
+class FunctionalTests(BaseTest):
+    """
+    The following class implements functional tests. Functional correctness
+    tests involve crafting adversarial examples and verifying that model
+    accuracy can be dropped to <1% for some "small" lp-budget. This is
+    typically defined as ~15% consumption of budget measured by the target
+    lp-norm (e.g., for a space with 100 features, this is budget is defined as
+    15 in l0, 10 in l2, and 0.15 in l∞).
+
+    The following attacks are supported:
+        APGD-CE (Auto-PGD with CE loss) (https://arxiv.org/pdf/2003.01690.pdf)
+        APGD-DLR (Auto-PGD with DLR loss) (https://arxiv.org/pdf/2003.01690.pdf)
+        BIM (Basic Iterative Method) (https://arxiv.org/pdf/1611.01236.pdf)
+        CW-L2 (Carlini-Wagner with l₂ norm) (https://arxiv.org/pdf/1608.04644.pdf)
+        DF (DeepFool) (https://arxiv.org/pdf/1511.04599.pdf)
+        FAB (Fast Adaptive Boundary) (https://arxiv.org/pdf/1907.02044.pdf)
+        JSMA (Jacobian Saliency Map Approach) (https://arxiv.org/pdf/1511.07528.pdf)
+        PGD (Projected Gradient Descent) (https://arxiv.org/pdf/1706.06083.pdf)
+
+    :func:`functional_test`: performs a functional test
+    :func:`setUpClass`: loads frameworks, retrieves data, and trains models
+    :func:`test_apgdce`: functional test for APGD-CE
+    :func:`test_apgddlr`: functional test for APGD-DLR
+    :func:`test_bim`: functional test for BIM
+    :func:`test_cwl2`: functional test for CW-L2
+    :func:`test_df`: functional test for DF
+    :func:`test_fab`: functional test for FAB
+    :func:`test_jsma`: functional test for JSMA
+    :func:`test_pgd`: functional test for PGD
+    """
+
+    @classmethod
+    def setUpClass(cls, min_acc=0.01):
+        """
+        This method initializes the functional testing framework by setting
+        parameters unique to the tests within this test case. At this time,
+        this just sets the minimum accuracy needed for an attack to be
+        considered "functionally" correct (notably, this should be tuned
+        appropriately with the number of epochs and norm-ball size defined in
+        the setUpModule function).
+
+        :param min_acc: the minimum accuracy necessary for a "successful" attack
+        :type min_acc: float
+        :return: None
+        :rtype: NoneType
+        """
+        cls.min_acc = min_acc
         return None
 
     def functional_test(self, attack):
@@ -156,17 +189,8 @@ class FunctionalTests(unittest.TestCase):
             )
             advx_acc = self.model.accuracy(self.x + p, self.y)
             print(f"{attack.name} complete! Model Acc: {advx_acc:.2%},", norm_results)
-            self.assertLess(advx_acc, 0.01)
+            self.assertLess(advx_acc, self.min_acc)
         return None
-
-    def test_all(self):
-        """
-        This method performs a functional test for each supported attack.
-
-        :return: None
-        :rtype: Nonetype
-        """
-        return [self.functional_test(attack()) for attack in self.all_attacks]
 
     def test_apgdce(self):
         """
@@ -265,40 +289,106 @@ class FunctionalTests(unittest.TestCase):
         )
 
 
-"""
-(1) Functional correctness tests involve crafting
-adversarial examples and verifying that model accuracy can be dropped to <1%
-for some "small" lp-budget, (2) Semantic correctness tests are more
-sophisticated, in that they compare the adversarial examples produced by known
-attacks within aml to those implemented in other adversarial machine learning
-frameworks. Attacks in aml are determined to be semantically correct if the
-produced adversarial examples are within no worse than 1% of the performance of
-adversarial examples produced by other frameworks. Performance is defined as
-one minus the product of model accuracy and lp-norm (normalized to 0-1). (3)
-Identity correctness tests assert that the feature values of aml adversarial
-examples themselves must be at least 99% similar to adversarial examples of
-other frameworks. Feature values are considered similar if their difference is
-smaller than ε (defaulted to 0.001).
+class IdentityTests(unittest.TestCase):
+    """
+    The following class implements identity tests. Identity correctness tests
+    assert that the feature values of aml adversarial examples themselves must
+    be at least 99% similar to adversarial examples of other frameworks.
+    Feature values are considered similar if their difference is smaller than ε
+    (defaulted to 0.001).
 
     The following frameworks are supported:
         CleverHans (https://github.com/cleverhans-lab/cleverhans)
         ART (https://github.com/Trusted-AI/adversarial-robustness-toolbox)
-"""
-"""
-    Aside from standard tests, the following unique tests are supported:
-        (1) Full component test: performs functional tests with attacks that
-        uniquely exercise all possible components with the aml framework.
 
-    :func:`test_all_components`: functional test that excersises all components
-    :func:`test_all_functional`: functional test for all attacks
-    :func:`test_all_identity`: identity test for all attacks
-    :func:`test_all_semantic`: semantic test for all attacks
+    The following attacks are supported:
+        APGD-CE (Auto-PGD with CE loss) (https://arxiv.org/pdf/2003.01690.pdf)
+        APGD-DLR (Auto-PGD with DLR loss) (https://arxiv.org/pdf/2003.01690.pdf)
+        BIM (Basic Iterative Method) (https://arxiv.org/pdf/1611.01236.pdf)
+        CW-L2 (Carlini-Wagner with l₂ norm) (https://arxiv.org/pdf/1608.04644.pdf)
+        DF (DeepFool) (https://arxiv.org/pdf/1511.04599.pdf)
+        FAB (Fast Adaptive Boundary) (https://arxiv.org/pdf/1907.02044.pdf)
+        JSMA (Jacobian Saliency Map Approach) (https://arxiv.org/pdf/1511.07528.pdf)
+        PGD (Projected Gradient Descent) (https://arxiv.org/pdf/1706.06083.pdf)
 
-        # check the frameworks that are available
-        supported = ("cleverhans", "art")
-        available = ((f, importlib.util.find_spec(f)) for f in supported)
-        frameworks = ", ".join((f for f, a in available if a))
-"""
+    :func:`identity_test`: performs an identity test
+    :func:`setUpClass`: loads frameworks, retrieves data, and trains models
+    :func:`test_apgdce`: identity test for APGD-CE
+    :func:`test_apgddlr`: identity test for APGD-DLR
+    :func:`test_bim`: identity test for BIM
+    :func:`test_cwl2`: identity test for CW-L2
+    :func:`test_df`: identity test for DF
+    :func:`test_fab`: identity test for FAB
+    :func:`test_jsma`: identity test for JSMA
+    :func:`test_pgd`: identity test for PGD
+    """
+
+    @classmethod
+    def setUpClass(cls, max_distance=0.001):
+        """
+        This method initializes the identity testing framework by setting
+        parameters unique to the tests within this test case. At this time,
+        this just sets the maximum distance (measured at the feature-level)
+        between adversarial examples produced by aml and other frameworks to
+        be considered "identical."
+
+        :param max_distance: the maximum allowable distance between features
+        :type max_distance: float
+        :return: None
+        :rtype: NoneType
+        """
+        cls.max_distance = max_distance
+        return None
+
+
+class SemanticTest(unittest.TestCase):
+    """
+    The following class implements semantic tests. Semantic correctness tests
+    are more sophisticated than functional tests, in that they compare the the
+    performance of adversarial examples produced by known attacks within aml to
+    those implemented in other adversarial machine learning frameworks. Attacks
+    in aml are determined to be semantically correct if the produced
+    adversarial examples are within no worse than 1% of the performance of
+    adversarial examples produced by other frameworks. Performance is defined
+    as one minus the product of model accuracy and lp-norm (normalized to 0-1).
+
+    The following frameworks are supported:
+        CleverHans (https://github.com/cleverhans-lab/cleverhans)
+        ART (https://github.com/Trusted-AI/adversarial-robustness-toolbox)
+
+    The following attacks are supported:
+        APGD-CE (Auto-PGD with CE loss) (https://arxiv.org/pdf/2003.01690.pdf)
+        APGD-DLR (Auto-PGD with DLR loss) (https://arxiv.org/pdf/2003.01690.pdf)
+        BIM (Basic Iterative Method) (https://arxiv.org/pdf/1611.01236.pdf)
+        CW-L2 (Carlini-Wagner with l₂ norm) (https://arxiv.org/pdf/1608.04644.pdf)
+        DF (DeepFool) (https://arxiv.org/pdf/1511.04599.pdf)
+        FAB (Fast Adaptive Boundary) (https://arxiv.org/pdf/1907.02044.pdf)
+        JSMA (Jacobian Saliency Map Approach) (https://arxiv.org/pdf/1511.07528.pdf)
+        PGD (Projected Gradient Descent) (https://arxiv.org/pdf/1706.06083.pdf)
+
+    :func:`semantic_test`: performs a semantic test
+    :func:`setUp`: loads frameworks, retrieves data, and trains models
+    :func:`test_apgdce`: semantic test for APGD-CE
+    :func:`test_apgddlr`: semantic test for APGD-DLR
+    :func:`test_bim`: semantic test for BIM
+    :func:`test_cwl2`: semantic test for CW-L2
+    :func:`test_df`: semantic test for DF
+    :func:`test_fab`: semantic test for FAB
+    :func:`test_jsma`: semantic test for JSMA
+    :func:`test_pgd`: semantic test for PGD
+    """
+
+
+class SpecialTest(unittest.TestCase):
+    """
+    The following class implements special tests. Special tests are designed to
+    exercise components of the Space of Adversarial Strategies framework
+    (https://arxiv.org/pdf/2209.04521.pdf) in specific ways. The purpose and
+    detailed description of each test can be found in their respecitve methods.
+
+    :func:`test_all_components`: coverage test that stresses all components
+    """
+
 
 if __name__ == "__main__":
     raise SystemExit(0)
