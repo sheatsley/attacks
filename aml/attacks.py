@@ -389,7 +389,7 @@ class Attack:
             "atk_loss": loss_func,
             "epochs": epochs,
             "epsilon": self.epsilon,
-            "model_acc": model,
+            "model": model,
         }
         torch_opt_params = {
             "lr": alpha,
@@ -765,7 +765,7 @@ def fab(alpha=None, clip=None, epochs=None, epsilon=None, model=None):
     shown in (https://arxiv.org/pdf/1907.02044.pdf) Specifically, FAB: does not
     use change of variables, uses the Backward Stochastic Gradient Descent
     optimizer, does not use random restart, uses Identity loss, uses l₂ norm,
-    and uses the Identity saliency map.
+    and uses the DeepFool saliency map.
 
     :param alpha: learning rate of the optimizer
     :type alpha: float
@@ -791,7 +791,7 @@ def fab(alpha=None, clip=None, epochs=None, epsilon=None, model=None):
         norm=surface.l2,
         optimizer_alg=optimizer.BackwardSGD,
         random_restart=False,
-        saliency_map=saliency.IdentitySaliency,
+        saliency_map=saliency.DeepFoolSaliency,
     )
 
 
