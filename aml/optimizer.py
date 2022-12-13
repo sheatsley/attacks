@@ -11,6 +11,7 @@ from torch.optim import SGD  # Implements stochasitc gradient descent
 # consider adding closure to BackwardSGD to perform beta backstep after perturbation
 # add support when maximize is false (eg MBS max loss cannot be initialized to zero)
 # add unit tests to confirm correctness
+# find better way to update p in BackwardSGD
 
 
 class BackwardSGD(torch.optim.Optimizer):
@@ -41,7 +42,7 @@ class BackwardSGD(torch.optim.Optimizer):
     :func:`step`: applies one optimization step
     """
 
-    def __init__(self, params, beta, lr, maximize, model, **kwargs):
+    def __init__(self, params, lr, maximize, model, beta=0.9, **kwargs):
         """
         This method instanties a Backward SGD object. It requires a learning
         rate, ß, and a reference to a dlm LinearClassifier-inherited object (as
@@ -66,7 +67,7 @@ class BackwardSGD(torch.optim.Optimizer):
         """
         super().__init__(
             params,
-            {"lr": lr, "beta": beta, "maximize": maximize, "model_acc": model},
+            {"lr": lr, "beta": beta, "maximize": maximize, "model": model},
         )
 
         # initialize state
@@ -92,9 +93,9 @@ class BackwardSGD(torch.optim.Optimizer):
                 state = self.state[p]
 
                 # set beta for misclassified inputs and apply update
-                misclassified = ~group["model_acc"].correct
-                state["beta"] = torch.where(misclassified, group["beta"], 1)
-                p.mul_(grad.mul_(state["beta"].mul_(group["lr"])))
+                misclassified = ~group["model"].correct
+                state["beta"] = torch.where(misclassified, state["beta"], 1)
+                p[:] = grad.mul_(state["beta"].unsqueeze(1).mul_(group["lr"]))
         return None
 
 
