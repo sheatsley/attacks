@@ -92,7 +92,7 @@ class BaseTest(unittest.TestCase):
         maxs, idx = cls.x.max(0)
         clip = (mins, maxs)
         clip_info = (
-            (mins[0, 0], maxs[0, 0])
+            (mins[0], maxs[0])
             if (mins[0].eq(mins).all() and maxs[0].eq(maxs).all())
             else f"(({mins.min().item()}, ..., {mins.max()}.item()),"
             "({maxs.min().item()}, ..., {maxs.max().item()}))"
@@ -130,11 +130,8 @@ class BaseTest(unittest.TestCase):
 
         # determine available frameworks (and import for test cases that need it)
         supported = ("cleverhans", "art")
-        cls.available = ((f, importlib.util.find_spec(f)) for f in supported)
-        frameworks = ", ".join((f for f, a in cls.available if a))
-        if cls in {IdentityTests, SemanticTests}:
-            print("Importing frameworks...")
-            [importlib.import_module(f) for f, a in cls.available if a]
+        cls.available = [f for f in supported if importlib.util.find_spec(f)]
+        frameworks = ", ".join(cls.available)
         print(
             "Module Setup complete. Testing Parameters:",
             f"Dataset: {dataset}, Test Set: {has_test}",
@@ -143,8 +140,8 @@ class BaseTest(unittest.TestCase):
             f"Train Acc: {cls.model.stats['train_acc'][-1]:.1%}",
             f"Craftset Acc: {cls.model.accuracy(cls.x, cls.y):.1%}",
             f"Attack Clipping Values: {clip_info}",
-            f"Attack Strength α: {cls.attack_parameters['alpha']}",
-            f"Attack Epochs: {cls.attack_parameters['epochs']}",
+            f"Attack Strength α: {cls.attack_params['alpha']}",
+            f"Attack Epochs: {cls.attack_params['epochs']}",
             f"Max Norm Radii: l0: {cls.l0}, l2: {cls.l2:.3}, l∞: {cls.linf}",
             f"Available Frameworks: {frameworks}",
             sep="\n",
@@ -198,6 +195,7 @@ class FunctionalTests(BaseTest):
         :return: None
         :rtype: NoneType
         """
+        super().setUpClass()
         cls.min_acc = min_acc
         return None
 
@@ -356,7 +354,7 @@ class IdentityTests(unittest.TestCase):
         return None
 
 
-class SemanticTests(unittest.TestCase):
+class SemanticTests(BaseTest):
     """
     The following class implements semantic tests. Semantic correctness tests
     are more sophisticated than functional tests, in that they compare the the
@@ -394,21 +392,25 @@ class SemanticTests(unittest.TestCase):
     """
 
     @classmethod
-    def setUpClass(cls, performance=0.01):
+    def setUpClass(cls, max_perf_degrad=0.01):
         """
         This method initializes the semantic testing case by setting parameters
         unique to the tests within this test case. At this time, this sets the
-        maximum allowable performance difference between adversarial examples
+        maximum allowable performance degration between adversarial examples
         produced by aml and other frameworks such that the aml attacks are
         considered to be "semantically" correct. Performance is measured as the
         one minus the product of model accuracy and normalized lp-norm.
+        Notably, if aml attacks are *better* than other frameworks by greater
+        than the maximum allowable performance degradation, the tests still
+        pass (failure can only occurs if aml attacks are worse).
 
-        :param max_distance: the maximum allowable distance between features
-        :type max_distance: float
+        :param max_perf_degrad: the maximum allowable difference in performance
+        :type max_perf_degrad: float
         :return: None
         :rtype: NoneType
         """
-        cls.performance = performance
+        super().setUpClass()
+        cls.max_perf_degrad = max_perf_degrad
         return None
 
     def semantic_test(self, attack, fws):
@@ -424,29 +426,106 @@ class SemanticTests(unittest.TestCase):
         """
         for fw_adv, fw in fws:
             with self.subTest(Attack=f"{attack.name} v. {fw}"):
+
+                # craft adversarial examples
                 aml_p = attack.craft(self.x, self.y)
-                aml_norm = (aml_p.norm(d, 1).mean().item() for d in (0, 2, torch.inf))
-                aml_norm_results = ", ".join(
-                    f"l{p}: {n:.3}/{b} ({n/b:.2%})"
-                    for n, b, p in zip(
-                        aml_norm, (self.l0, self.l2, self.linf), (0, 2, "∞")
-                    )
-                )
                 fw_p = fw_adv.sub(self.x)
-                fw_norm = (fw_p.norm(d, 1).mean().item() for d in (0, 2, torch.inf))
-                fw_norm_results = ", ".join(
-                    f"l{p}: {n:.3}/{b} ({n/b:.2%})"
-                    for n, b, p in zip(
-                        fw_norm, (self.l0, self.l2, self.linf), (0, 2, "∞")
-                    )
+
+                # compute perturbation norms
+                budgets = (self.l0, self.l2, self.linf)
+                pert_norms = zip((aml_p, fw_p), (0, 2, torch.inf) * 2)
+                aml_norm, fw_norm = (p.norm(d, 1).mean().item() for p, d in pert_norms)
+
+                # compute model accuracy
+                advs = (self.x + aml_p, fw_adv)
+                aml_acc, fw_acc = (self.model.accuracy(adv, self.y) for adv in advs)
+
+                # compute perturbation budget consumption
+                norm_budgets = zip((aml_norm, fw_norm), budgets * 2)
+                aml_budget, fw_budget = (n / b for n, b in norm_budgets)
+                acc_budgets = zip((aml_acc, fw_acc), (aml_budget, fw_budget))
+
+                # compute performance and organize printing results
+                perf = list(zip((1 - a * b for a, b in acc_budgets)))
+                perf_norms = (
+                    (f"l{p}: {n:.3}/{b} ({n/b:.2%})", f"l{p}: {f:.2%}")
+                    for norms, perf in zip((aml_norm, fw_norm), perf)
+                    for n, b, p, f in zip(norms, budgets, (0, 2, "∞"), perf)
                 )
-                aml_acc = self.model.accuracy(self.x + aml_norm, self.y)
-                fw_acc = self.model.accuracy(fw_adv, self.y)
-                print(f"AML {attack.name} Model Acc: {aml_acc:.2%},", aml_norm_results)
-                print(f"{fw} {attack.name} Model Acc: {fw_acc:.2%},", fw_norm_results)
-                aml_perf = 
-                self.assertLess(advx_acc, self.min_acc)
+                results = zip(("AML", fw), (aml_acc, fw_acc), perf_norms)
+                print(
+                    f"{f} {attack.name} Model Acc: {f:.2%}, "
+                    "Norms: {', '.join(n)}, "
+                    "Performance: {', '.join(perf)}"
+                    for f, a, n in results
+                )
+
+                # compute target norm and assert marginal performance difference
+                norm_map = (aml.surface.l0, aml.surface.l2, aml.surface.linf)
+                aml_perf, fw_perf = perf[norm_map.index(attack.surface.norm)]
+                self.assertLessEqual(aml_perf - self.max_perf_degrad, fw_perf)
         return None
+
+    def test_bim(self):
+        """
+        This method performs a semantic test for BIM (Basic Iterative Method)
+        (https://arxiv.org/pdf/1611.01236.pdf). The supported frameworks
+        for BIM include CleverHans and ART.
+
+        :return: None
+        :rtype: NoneType
+        """
+        if "cleverhans" in self.available:
+            from cleverhans.torch.attacks.projected_gradient_descent import (
+                projected_gradient_descent as basic_iterative_method,
+            )
+
+            print("Producing BIM adversarial examples with CleverHans...")
+            ch_adv = (
+                basic_iterative_method(
+                    model_fn=self.attack_params["model"],
+                    x=self.x,
+                    eps=self.linf,
+                    eps_iter=self.attack_params["alpha"],
+                    nb_iter=self.attack_params["epochs"],
+                    clip_min=self.attack_params["clip"][0].max().item(),
+                    clip_max=self.attack_params_["clip"][1].min().item(),
+                    y=self.y,
+                    targeted=False,
+                    rand_init=False,
+                    rand_minimax=0,
+                    sanity_checks=True,
+                ),
+                "CleverHans",
+            )
+        if "art" in self.available:
+            from art.attacks.evasion import BasicIterativeMethod
+            from art.estimators.classification import PyTorchClassifier
+
+            print("Producing BIM adversarial examples with ART...")
+            art_adv = (
+                BasicIterativeMethod(
+                    classifier=PyTorchClassifier(
+                        model=self.attack_params["model"],
+                        clip_values=(
+                            self.attack_params["clip"][0].max().item(),
+                            self.attack_params["clip"][1].min().item(),
+                        ),
+                        loss=self.attack_params["model"].loss,
+                        optimizer=self.attack_params["model"].optimizer,
+                        input_shape=self.x.shape,
+                        nb_classes=self.attack_params["model"].params["classes"],
+                    ),
+                    eps=self.linf,
+                    eps_step=self.attack_params["alpha"],
+                    max_iter=self.attack_params["epochs"],
+                    targeted=False,
+                    batch_size=self.x.size(0),
+                    verbose=True,
+                ).generate(x=self.x),
+                "ART",
+            )
+        return self.semantic_test(self.attacks["BIM"], (ch_adv, art_adv))
 
     def test_cwl2(self):
         """
@@ -457,9 +536,10 @@ class SemanticTests(unittest.TestCase):
         :return: None
         :rtype: NoneType
         """
-        if cleverhans:
+        if "cleverhans" in self.available:
             from cleverhans.torch.attacks.carlini_wagner_l2 import carlini_wagner_l2
 
+            print("Producing CW-L2 adversarial examples with CleverHans...")
             ch_adv = (
                 carlini_wagner_l2(
                     model_fn=self.attack_params["model"],
@@ -467,30 +547,84 @@ class SemanticTests(unittest.TestCase):
                     n_classes=self.attack_params["model"].params["classes"],
                     y=self.y,
                     lr=self.attack_params["alpha"],
-                    confidence=self.attacks["CW-L2"].surface.loss.c.item(),
+                    confidence=self.attacks["CW-L2"].surface.loss.k,
                     clip_min=self.attack_params["clip"][0].max().item(),
                     clip_max=self.attack_params_["clip"][1].min().item(),
+                    initial_const=self.attacks["CW-L2"].surface.loss.c.item(),
                     binary_search_steps=1,
                     max_iterations=self.attack_params["epochs"],
                 ),
                 "CleverHans",
             )
-        if art:
-            pass
+        if "art" in self.available:
+            from art.attacks.evasion import CarliniL2Method
+            from art.estimators.classification import PyTorchClassifier
 
-        cls.attack_params = {
-            "alpha": alpha,
-            "clip": clip,
-            "epochs": epochs,
-            "model": cls.model,
-        }
-        cls.attacks = {
-            "APGD-CE": aml.attacks.apgdce(**cls.attack_params | {"epsilon": cls.linf}),
-            "APGD-DLR": aml.attacks.apgdce(**cls.attack_params | {"epsilon": cls.linf}),
-            "BIM": aml.attacks.bim(**cls.attack_params | {"epsilon": cls.linf}),
-            "CW-L2": aml.attacks.cwl2(**cls.attack_params | {"epsilon": cls.l2}),
-        }
+            print("Producing CW-L2 adversarial examples with ART...")
+            art_adv = (
+                CarliniL2Method(
+                    classifier=PyTorchClassifier(
+                        model=self.attack_params["model"],
+                        clip_values=(
+                            self.attack_params["clip"][0].max().item(),
+                            self.attack_params["clip"][1].min().item(),
+                        ),
+                        loss=self.attack_params["model"].loss,
+                        optimizer=self.attack_params["model"].optimizer,
+                        input_shape=self.x.shape,
+                        nb_classes=self.attack_params["model"].params["classes"],
+                    ),
+                    confidence=self.attacks["CW-L2"].surface.loss.k,
+                    targeted=False,
+                    learning_rate=self.attack_params["alpha"],
+                    binary_search_steps=1,
+                    max_iter=self.attack_params["epochs"],
+                    initial_const=self.attacks["CW-L2"].surface.loss.c.item(),
+                    max_halving=5,
+                    max_doubling=5,
+                    batch_size=self.x.size(0),
+                    verbose=True,
+                ).generate(x=self.x),
+                "ART",
+            )
         return self.semantic_test(self.attacks["CW-L2"], (ch_adv, art_adv))
+
+    def test_df(self):
+        """
+        This method performs a semantic test for DF (DeepFool)
+        (https://arxiv.org/pdf/1611.01236.pdf). The supported frameworks for DF
+        include ART.
+
+        :return: None
+        :rtype: NoneType
+        """
+        if "art" in self.available:
+            from art.attacks.evasion import DeepFool
+            from art.estimators.classification import PyTorchClassifier
+
+            print("Producing DF adversarial examples with ART...")
+            art_adv = (
+                DeepFool(
+                    classifier=PyTorchClassifier(
+                        model=self.attack_params["model"],
+                        clip_values=(
+                            self.attack_params["clip"][0].max().item(),
+                            self.attack_params["clip"][1].min().item(),
+                        ),
+                        loss=self.attack_params["model"].loss,
+                        optimizer=self.attack_params["model"].optimizer,
+                        input_shape=self.x.shape,
+                        nb_classes=self.attack_params["model"].params["classes"],
+                    ),
+                    max_iter=self.attack_params["epochs"],
+                    epsilon=0,
+                    nb_grads=self.attack_params["model"].params["classes"],
+                    batch_size=self.x.size(0),
+                    verbose=True,
+                ).generate(x=self.x),
+                "ART",
+            )
+        return self.semantic_test(self.attacks["DF"], (art_adv,))
 
 
 class SpecialTest(unittest.TestCase):
