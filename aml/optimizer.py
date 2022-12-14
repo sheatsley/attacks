@@ -74,7 +74,7 @@ class BackwardSGD(torch.optim.Optimizer):
         for group in self.param_groups:
             for p in group["params"]:
                 state = self.state[p]
-                state["beta"] = torch.full((p.size(0),), group["beta"])
+                state["beta"] = torch.full((p.size(0), 1), group["beta"])
 
     @torch.no_grad()
     def step(self):
@@ -93,9 +93,9 @@ class BackwardSGD(torch.optim.Optimizer):
                 state = self.state[p]
 
                 # set beta for misclassified inputs and apply update
-                misclassified = ~group["model"].correct
-                state["beta"] = torch.where(misclassified, state["beta"], 1)
-                p[:] = grad.mul_(state["beta"].unsqueeze(1).mul_(group["lr"]))
+                misclassified = ~group["model"].correct.unsqueeze(1)
+                state["beta"] = torch.where(misclassified, group["beta"], 1)
+                p[:] = grad.mul_(state["beta"].mul_(group["lr"]))
         return None
 
 
