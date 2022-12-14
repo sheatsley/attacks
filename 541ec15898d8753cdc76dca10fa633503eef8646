@@ -1,0 +1,1 @@
+now all tests compile without crashing for real. some pass functional and semantic, none pass identity (definition is too strict). of those that fail semantic, most need debugging, some will pass with a better definition of performance
