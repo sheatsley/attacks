@@ -22,6 +22,7 @@ import torch  # Tensors and Dynamic neural networks in Python with strong GPU ac
 # epsilon and clipping  (min_p, max_p) do not work for l0, maybe l2 as well
 # ^ need to recompute clips at each iteration if we're going to depend on distance "left"
 # add perturbations visualizations in examples directory
+# have option to silence all prints (good for unittest)
 
 
 class Adversary:
