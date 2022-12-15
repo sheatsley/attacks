@@ -17,7 +17,6 @@ import mlds  # Scripts for downloading, preprocessing, and numpy-ifying popular 
 import unittest  # Unit testing framework
 import torch  # Tensors and Dynamic neural networks in Python with strong GPU acceleration
 
-
 # TODO
 # get all functional tests passing
 # implement identity tests
@@ -25,7 +24,8 @@ import torch  # Tensors and Dynamic neural networks in Python with strong GPU ac
 # implement special tests
 # integrate binary search steps for aml cwl2 tests
 # need a better measure of performance for semantic tests (linf always fails bc of budget)
-# need to tweak identity tests (distance should be done at the sample-level and not craftset-level)
+# move identity test failure debug prints into assert msg (need to wrap torch assert into unittest assert)
+# figure out how to get random seeds to be static across all other frameworks
 
 
 class BaseTest(unittest.TestCase):
@@ -291,7 +291,7 @@ class BaseTest(unittest.TestCase):
                     rand_init=False,
                     rand_minmax=0,
                     sanity_checks=True,
-                ),
+                ).detach(),
                 "CleverHans",
             )
         if "art" in self.available:
@@ -343,7 +343,7 @@ class BaseTest(unittest.TestCase):
                     initial_const=self.attacks["cwl2"].surface.loss.c.item(),
                     binary_search_steps=1,
                     max_iterations=self.attack_params["epochs"],
-                ),
+                ).detach(),
                 "CleverHans",
             )
         if "art" in self.available:
@@ -473,7 +473,7 @@ class BaseTest(unittest.TestCase):
                     rand_init=True,
                     rand_minmax=self.linf,
                     sanity_checks=True,
-                ),
+                ).detach(),
                 "CleverHans",
             )
         if "art" in self.available:
@@ -661,8 +661,15 @@ class IdentityTests(BaseTest):
     The following class implements identity tests. Identity correctness tests
     assert that the feature values of aml adversarial examples themselves must
     be at least 99% similar to adversarial examples of other frameworks.
-    Feature values are considered similar if their difference is smaller than ε
-    (defaulted to 0.001).
+    Feature values are considered similar if their difference satifies:
+
+                        |other - aml| ≤ atol + rtol * |aml|
+
+    where other are the perturbations of other frameworks, aml is the
+    perturbations of the aml framework, atol and rtol are absolute and relative
+    tolerance, respectively. The values atol and rtol take depends on the
+    datatype of the underlying tensors, as described in
+    https://pytorch.org/docs/stable/testing.html.
 
     The following frameworks are supported:
         CleverHans (https://github.com/cleverhans-lab/cleverhans)
@@ -693,12 +700,7 @@ class IdentityTests(BaseTest):
     @classmethod
     def setUpClass(cls, max_distance=0.001):
         """
-        This method initializes the identity testing case by setting parameters
-        unique to the tests within this test case. At this time, this sets the
-        maximum allowable distance (measured at the feature-level) between
-        adversarial examples produced by aml and other frameworks such that aml
-        adversarial examples are considered "identical" to adversarial examples
-        produced by attacks in other frameworks.
+        This method initializes the identity testing case.
 
         :param max_distance: the maximum allowable distance between features
         :type max_distance: float
@@ -741,15 +743,27 @@ class IdentityTests(BaseTest):
                 f"{attack.name} AML v. {f}: Min: {mn:.3}, Max {mx:.3},",
                 f"Mean: {me:.3}, Median: {md:.3} SD: {st:.3}",
             )
+        rtol, atol = torch.testing._comparison.default_tolerances(*diffs)
         for fw, diff in zip(fws, diffs):
             with self.subTest(Attack=f"{attack.name} v. {fw}"):
-                close = diff.isclose(torch.zeros_like(diff), atol=1e-05).all(1)
+                close = diff.isclose(torch.zeros_like(diff), atol, rtol).all(1)
                 print(
                     f"{close.sum().item()}/{close.numel()}",
-                    f"({close.sum().div(close.numel()).item():.4%})",
+                    f"({close.sum().div(close.numel()).item():.2%})",
                     f"of {attack.name} aml adversarial examples are close to {fw}.",
                 )
-                self.assertLessEqual(diff.sum().item(), self.max_distance)
+
+                # if the identity test fails, aim to debug why
+                try:
+                    torch.testing.assert_close(diff, torch.zeros_like(diff))
+                except AssertionError:
+                    targets = close == self.model.correct
+                    print(
+                        f"{attack.name} v {fw} Test failed. Post-analysis:\n",
+                        f" - {targets.sum().div(targets.numel()):.2%}",
+                        "of failed inputs were initially misclassified",
+                    )
+                    raise
         return None
 
     def test_apgdce(self):
@@ -779,7 +793,12 @@ class IdentityTests(BaseTest):
         """
         This method performs an identity test for BIM (Basic Iterative Method)
         (https://arxiv.org/pdf/1611.01236.pdf). The supported frameworks for
-        BIM include CleverHans and ART.
+        BIM include CleverHans and ART. Notably, the implementation of BIM in
+        ART ostensibly always fails, given that ART always uses the current
+        model logits in untargetted attacks and thus, *corrects* misclassified
+        inputs such that they are classified correctly. In effect, the
+        difference between ART and aml adversarial examples from BIM is
+        commonly the linf threat model, epsilon.
 
         :return: None
         :rtype: NoneType
@@ -829,6 +848,16 @@ class IdentityTests(BaseTest):
         :rtype: NoneType
         """
         return self.identity_test(*self.jsma())
+
+    def test_pgd(self):
+        """
+        This method performs an identity test for PGD (Projected Gradient
+        Descent) (https://arxiv.org/pdf/1706.06083.pdf).
+
+        :return: None
+        :rtype: NoneType
+        """
+        return self.identity_test(*self.pgd())
 
 
 class SemanticTests(BaseTest):
@@ -1042,6 +1071,16 @@ class SemanticTests(BaseTest):
         :rtype: NoneType
         """
         return self.semantic_test(*self.jsma())
+
+    def test_pgd(self):
+        """
+        This method performs a semantic test for PGD (Projected Gradient
+        Descent) (https://arxiv.org/pdf/1706.06083.pdf).
+
+        :return: None
+        :rtype: NoneType
+        """
+        return self.semantic_test(*self.pgd())
 
 
 class SpecialTest(unittest.TestCase):
