@@ -23,6 +23,7 @@ import torch  # Tensors and Dynamic neural networks in Python with strong GPU ac
 # ^ need to recompute clips at each iteration if we're going to depend on distance "left"
 # add perturbations visualizations in examples directory
 # have option to silence all prints (good for unittest)
+# track details across all components (loss should track loss values, surface acc, norms, etc.)
 
 
 class Adversary:
