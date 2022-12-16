@@ -14,6 +14,7 @@ import aml  # ML robustness evaluations with PyTorch
 import dlm  # pytorch--based deep learning models with scikit-learn-like interfaces
 import importlib  # The implementation of import
 import mlds  # Scripts for downloading, preprocessing, and numpy-ifying popular machine learning datasets
+import numpy as np  # The fundamental package for scientific computing with Python
 import unittest  # Unit testing framework
 import torch  # Tensors and Dynamic neural networks in Python with strong GPU acceleration
 
@@ -23,9 +24,9 @@ import torch  # Tensors and Dynamic neural networks in Python with strong GPU ac
 # implement semantic tests
 # implement special tests
 # integrate binary search steps for aml cwl2 tests
-# need a better measure of performance for semantic tests (linf always fails bc of budget)
-# move identity test failure debug prints into assert msg (need to wrap torch assert into unittest assert)
-# figure out how to get random seeds to be static across all other frameworks
+# rework attack wrapper calls to include adversary layer (inputs need to be in 0-1 when measuring norm)
+# ^ rework max-min logic to account for the above
+# when doing min accuracy, we should only craft adversarial examples on inputs that are classified correctly
 
 
 class BaseTest(unittest.TestCase):
@@ -51,6 +52,7 @@ class BaseTest(unittest.TestCase):
 
     :func:`setUpClass`: initializes the setup for all tests cases
     :func:`build_art_classifier`: instantiates an art pytorch classifier
+    :func:`reset_seeds`: resets seeds for RNGs
     :func:`apgdce`: craft adversarial examples with APGD-CE
     :func:`apgddlr`: craft adversarial examples with APGD-DLR
     :func:`bim`: craft adversarial examples with BIM
@@ -63,14 +65,21 @@ class BaseTest(unittest.TestCase):
 
     @classmethod
     def setUpClass(
-        cls, alpha=0.01, dataset="phishing", debug=False, epochs=30, norm=0.15
+        cls,
+        alpha=0.01,
+        dataset="phishing",
+        debug=False,
+        epochs=30,
+        norm=0.15,
+        seed=5115,
     ):
         """
         This function initializes the setup necessary for all test cases within
         this module. Specifically, this method retrieves data, processes it,
         trains a model, instantiates attacks, imports availabe external
-        libraries (used for semantic and identity tests), and loads PyTorch in
-        debug mode if desired (to assist debugging autograd).
+        libraries (used for semantic and identity tests), loads PyTorch in
+        debug mode if desired (to assist debugging autograd), and sets the seed
+        used to make attacks with randomized components deterministic.
 
         :param alpha: perturbation strength
         :type alpha: float
@@ -82,13 +91,16 @@ class BaseTest(unittest.TestCase):
         :type epochs: int
         :param norm: maximum % of lp-budget consumption
         :type norm: float
+        :param seed: the seed to use to make randomized components determinisitc
+        :type seed: int
         :return: None
         :rtype: NoneType
         """
 
-        # set debug mode, load data (extract training and test sets, if they exist)
+        # set debug, seed, load data (extract training and test sets, if they exist)
         print("Initializing module for all test cases...")
         torch.autograd.set_detect_anomaly(debug)
+        cls.seed = seed
         data = getattr(mlds, dataset)
         try:
             x = torch.from_numpy(data.train.data)
@@ -124,8 +136,11 @@ class BaseTest(unittest.TestCase):
 
         # instantiate attacks and save attack parameters
         cls.l0 = int(cls.x.size(1) * norm)
+        cls.l0_max = cls.x.size(1)
         cls.l2 = maxs.sub(mins).norm(2).item()
+        cls.l2_max = cls.x.size(1) ** 1 / 2
         cls.linf = norm
+        cls.linf_max = 1
         cls.attack_params = {
             "alpha": alpha,
             "clip": clip,
@@ -190,6 +205,19 @@ class BaseTest(unittest.TestCase):
             input_shape=cls.x.shape,
             nb_classes=cls.attack_params["model"].params["classes"],
         )
+
+    @classmethod
+    def reset_seeds(cls):
+        """
+        This method resets the seeds for random number generators used
+        in attacks with randomized components throughtout adversarial machine
+        learning frameworks.
+
+        :return: None
+        :rtype: NoneType
+        """
+        torch.manual_seed(cls.seed)
+        np.random.seed(cls.seed)
 
     def apgdce(self):
         """
@@ -425,6 +453,7 @@ class BaseTest(unittest.TestCase):
         :return: JSMA adversarial examples
         :rtype: tuple of torch Tensor objects (n, m)
         """
+        art_adv = None
         if "art" in self.available:
             from art.attacks.evasion import SaliencyMapMethod
 
@@ -452,12 +481,14 @@ class BaseTest(unittest.TestCase):
         :return: PGD adversarial examples
         :rtype: tuple of torch Tensor objects (n, m)
         """
+        ch_adv = art_adv = None
         if "cleverhans" in self.available:
             from cleverhans.torch.attacks.projected_gradient_descent import (
                 projected_gradient_descent,
             )
 
             print("Producing PGD adversarial examples with CleverHans...")
+            self.reset_seeds()
             ch_adv = (
                 projected_gradient_descent(
                     model_fn=self.attack_params["model"],
@@ -480,6 +511,7 @@ class BaseTest(unittest.TestCase):
             from art.attacks.evasion import ProjectedGradientDescent
 
             print("Producing PGD adversarial examples with ART...")
+            self.reset_seeds()
             art_adv = (
                 torch.from_numpy(
                     ProjectedGradientDescent(
@@ -499,6 +531,7 @@ class BaseTest(unittest.TestCase):
                 ),
                 "ART",
             )
+        self.reset_seeds()
         return self.attacks["pgd"], tuple(
             fw for fw in (ch_adv, art_adv) if fw is not None
         )
@@ -746,24 +779,29 @@ class IdentityTests(BaseTest):
         rtol, atol = torch.testing._comparison.default_tolerances(*diffs)
         for fw, diff in zip(fws, diffs):
             with self.subTest(Attack=f"{attack.name} v. {fw}"):
-                close = diff.isclose(torch.zeros_like(diff), atol, rtol).all(1)
+                close = diff.isclose(torch.zeros_like(diff), atol, rtol)
                 print(
-                    f"{close.sum().item()}/{close.numel()}",
-                    f"({close.sum().div(close.numel()).item():.2%})",
+                    f"{close.all(1).sum().item()}/{close.size(0)}",
+                    f"({close.all(1).sum().div(close.size(0)).item():.2%})",
                     f"of {attack.name} aml adversarial examples are close to {fw}.",
                 )
 
                 # if the identity test fails, aim to debug why
-                try:
-                    torch.testing.assert_close(diff, torch.zeros_like(diff))
-                except AssertionError:
-                    targets = close == self.model.correct
-                    print(
-                        f"{attack.name} v {fw} Test failed. Post-analysis:\n",
-                        f" - {targets.sum().div(targets.numel()):.2%}",
-                        "of failed inputs were initially misclassified",
+                org_msg = torch.testing._comparison.make_tensor_mismatch_msg(
+                    diff, torch.zeros_like(diff), ~close, rtol=rtol, atol=atol
+                )
+                targets = close.all(1) == self.model.correct
+                targets_msg = (
+                    "Percentage of failed inputs that were initially misclassified: "
+                    f"{targets.sum().div(targets.numel()):.2%}"
+                )
+                self.assertIsNone(
+                    torch.testing.assert_close(
+                        diff,
+                        torch.zeros_like(diff),
+                        msg="\n".join((org_msg, targets_msg)),
                     )
-                    raise
+                )
         return None
 
     def test_apgdce(self):
@@ -798,7 +836,9 @@ class IdentityTests(BaseTest):
         model logits in untargetted attacks and thus, *corrects* misclassified
         inputs such that they are classified correctly. In effect, the
         difference between ART and aml adversarial examples from BIM is
-        commonly the linf threat model, epsilon.
+        commonly the linf threat model, epsilon. However, when minimizing model
+        accuracy (instead of maximizing model loss), the identity check should
+        succeed, given that initially misclassified inputs are skipped.
 
         :return: None
         :rtype: NoneType
@@ -852,7 +892,14 @@ class IdentityTests(BaseTest):
     def test_pgd(self):
         """
         This method performs an identity test for PGD (Projected Gradient
-        Descent) (https://arxiv.org/pdf/1706.06083.pdf).
+        Descent) (https://arxiv.org/pdf/1706.06083.pdf). Notably, the
+        implementation of PGD in ART will always fail, given that the current
+        implementation initializes the attaack by drawing from a truncated
+        normal distribution, instead of from a uniform distribution. The
+        motivation for this difference in initialization is sourced by
+        https://arxiv.org/pdf/1611.01236.pdf to assist FGSM-based adversarial
+        training in generalizing across different epsilons. ART claims that the
+        effectiveness of this method is untested with PGD.
 
         :return: None
         :rtype: NoneType
@@ -870,7 +917,7 @@ class SemanticTests(BaseTest):
     adversarial examples are within no worse than 1% of the performance of
     adversarial examples produced by other frameworks. Performance is defined
     as one minus the l2-norm of normalized decrease in model accuracy and
-    normalized utilization of lp-norm budget.
+    normalized lp-norm.
 
     The following frameworks are supported:
         CleverHans (https://github.com/cleverhans-lab/cleverhans)
@@ -905,9 +952,12 @@ class SemanticTests(BaseTest):
         unique to the tests within this test case. At this time, this sets the
         maximum allowable performance degration between adversarial examples
         produced by aml and other frameworks such that the aml attacks are
-        considered to be "semantically" correct. Performance is measured as the
-        one minus the l2-norm of normalized decrease in model accuracy and
-        normalized utilization of lp-norm budget. Notably, if aml attacks are
+        considered to be "semantically" correct. Performance (denoted as 𝒫) is
+        measured as the one minus the l2-norm of normalized decrease in model
+        accuracy and normalized lp-norm, where l0 is normalized by the total
+        number of features, l2 by the square root of the total number of
+        features, and l∞ need not be normalized since, during crafting,
+        feautres are always between 0 and 1. Notably, if aml attacks are
         *better* than other frameworks by greater than the maximum allowable
         performance degradation, the tests still pass (failure can only occurs
         if aml attacks are worse). Finally, this method also instantiates an
@@ -964,17 +1014,18 @@ class SemanticTests(BaseTest):
         acc_dec = tuple(a / self.clean_acc for a in acc_abs)
 
         # compute perturbation budget consumption
-        max_b = (self.l0, self.l2, self.linf)
-        atk_b = ((n / b for n, b in zip(an, max_b)) for an in norms)
+        max_p = (self.l0_max, self.l2_max, self.linf_max)
+        atk_b = ((n / b for n, b in zip(an, max_p)) for an in norms)
 
         # compute performance and organize printing results
+        max_b = (self.l0, self.l2, self.linf)
         perfs = tuple(
             [max(1 - (aa**2 + b**2) ** (1 / 2), 0) for b in ab]
             for ab, aa in zip(atk_b, acc_dec)
         )
         norms_perfs = (
             ", ".join(
-                f"l{p}: {n:.3}/{float(b):.3} ({n/b:.2%}) {f:.1%}"
+                f"l{p}: {n:.3}/{float(b):.3} ({n/b:.2%}) 𝒫: {f:.1%}"
                 for p, n, b, f in zip((0, 2, "∞"), an, max_b, perf)
             )
             for an, perf in zip(norms, perfs)
