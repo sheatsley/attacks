@@ -87,16 +87,17 @@ class DeepFoolSaliency:
         other_logits = loss[~y_hot].view(loss.size(0), -1)
 
         # compute ith class
-        grad_diffs = other_grad.sub(yth_grad)
-        logit_diffs = other_logits.sub(yth_logit).abs_()
+        grad_diffs = yth_grad.sub(other_grad)
+        logit_diffs = yth_logit.sub(other_logits).abs_()
         normed_ith_logit_diff, i = logit_diffs.div(
             grad_diffs.norm(self.q, dim=2).clamp_(minimum)
         ).topk(1, dim=1, largest=False)
 
-        # save normed ith logit differences and return ith gradient differences
-        self.normed_ith_logit_diff = normed_ith_logit_diff
+        # save ith grad signs & normed logit diffs & return absolute ith gradient diffs
         ith_grad_diff = grad_diffs[torch.arange(grad_diffs.size(0)), i.flatten(), :]
-        return ith_grad_diff
+        self.normed_ith_logit_diff = normed_ith_logit_diff
+        self.ith_grad_diff_sign = ith_grad_diff.sign()
+        return ith_grad_diff.abs()
 
     def closure(self, g):
         """
@@ -112,7 +113,7 @@ class DeepFoolSaliency:
         :return: finalized gradients for optimizers to step into
         :rtype: torch Tensor (n, m)
         """
-        return g.mul_(self.normed_ith_logit_diff)
+        return g.mul_(self.normed_ith_logit_diff).mul_(self.ith_grad_diff_sign)
 
 
 class IdentitySaliency:
