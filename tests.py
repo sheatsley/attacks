@@ -26,6 +26,8 @@ import torch  # Tensors and Dynamic neural networks in Python with strong GPU ac
 # integrate binary search steps for aml cwl2 tests
 # rework attack wrapper calls to include adversary layer (inputs need to be in 0-1 when measuring norm)
 # ^ rework max-min logic to account for the above
+# ^ update random-restart params for attacks that would be captured by adversarial layer
+# update FAB parameters when backwardsgd supports alpha_max
 # when doing min accuracy, we should only craft adversarial examples on inputs that are classified correctly
 
 
@@ -39,6 +41,11 @@ class BaseTest(unittest.TestCase):
     some tests (e.g., instantiating objects specific to other adversarial
     machine learning frameworks), and (3) methods to craft adversarial examples
     from aml and other supported adversarial machine learning frameworks.
+
+    The following frameworks are supported:
+        ART (https://github.com/Trusted-AI/adversarial-robustness-toolbox)
+        CleverHans (https://github.com/cleverhans-lab/cleverhans)
+        Torchattacks (https://github.com/Harry24k/adversarial-attacks-pytorch)
 
     The following attacks are supported:
         APGD-CE (Auto-PGD with CE loss) (https://arxiv.org/pdf/2003.01690.pdf)
@@ -125,6 +132,7 @@ class BaseTest(unittest.TestCase):
         )
 
         # train model and save craftset clean accuracy (used for semantic tests)
+        cls.reset_seeds()
         template = getattr(dlm.architectures, dataset)
         cls.model = (
             dlm.CNNClassifier(template=template)
@@ -146,6 +154,7 @@ class BaseTest(unittest.TestCase):
             "clip": clip,
             "epochs": epochs,
             "model": cls.model,
+            "verbosity": 1,
         }
         cls.attacks = {
             "apgdce": aml.attacks.apgdce(**cls.attack_params | {"epsilon": cls.linf}),
@@ -159,7 +168,7 @@ class BaseTest(unittest.TestCase):
         }
 
         # determine available frameworks and set art classifier if needed
-        supported = ("cleverhans", "art")
+        supported = ("art", "cleverhans", "torchattacks")
         cls.available = [f for f in supported if importlib.util.find_spec(f)]
         frameworks = ", ".join(cls.available)
         cls.art_classifier = (
@@ -223,16 +232,17 @@ class BaseTest(unittest.TestCase):
         """
         This method crafts adversarial examples with APGD-CE (Auto-PGD with CE
         loss) (https://arxiv.org/pdf/2003.01690.pdf). The supported frameworks
-        for APGD-CE include ART.
+        for APGD-CE include ART and Torchattacks.
 
         :return: APGD-CE adversarial examples
         :rtype: tuple of torch Tensor objects (n, m)
         """
-        art_adv = None
+        art_adv = ta_adv = None
         if "art" in self.available:
             from art.attacks.evasion import AutoProjectedGradientDescent
 
             print("Producing APGD-CE adversarial examples with ART...")
+            self.reset_seeds()
             art_adv = (
                 torch.from_numpy(
                     AutoProjectedGradientDescent(
@@ -250,14 +260,36 @@ class BaseTest(unittest.TestCase):
                 ),
                 "ART",
             )
-        return self.attacks["apgdce"], tuple(fw for fw in (art_adv,) if fw is not None)
+        if "torchattacks" in self.available:
+            from torchattacks import APGD
+
+            print("Producing APGD-CE adversarial examples with Torchattacks...")
+            self.reset_seeds()
+            ta_adv = (
+                APGD(
+                    model=self.attack_params["model"],
+                    norm="Linf",
+                    eps=self.linf,
+                    n_restarts=1,
+                    seed=self.seed,
+                    loss="ce",
+                    eot_iter=1,
+                    rho=self.attack_params["alpha"],
+                    verbose=True,
+                )(inputs=self.x.clone(), labels=self.y),
+                "Torchattacks",
+            )
+        self.reset_seeds()
+        return self.attacks["apgdce"], tuple(
+            fw for fw in (art_adv, ta_adv) if fw is not None
+        )
 
     def apgddlr(self):
         """
         This method crafts adversarial examples with APGD-DLR (Auto-PGD with
         DLR loss) (https://arxiv.org/pdf/2003.01690.pdf). The supported
-        frameworks for APGD-DLR include ART. Notably, DLR loss is undefined
-        when there are only two classes.
+        frameworks for APGD-DLR include ART and Torchattacks. Notably, DLR loss
+        is undefined when there are only two classes.
 
         :return: APGD-DLR adversarial examples
         :rtype: tuple of torch Tensor objects (n, m)
@@ -266,7 +298,8 @@ class BaseTest(unittest.TestCase):
         if "art" in self.available and self.art_classifier.nb_classes > 2:
             from art.attacks.evasion import AutoProjectedGradientDescent
 
-            print("Producing APGD-CE adversarial examples with ART...")
+            print("Producing APGD-DLR adversarial examples with ART...")
+            self.reset_seeds()
             art_adv = (
                 torch.from_numpy(
                     AutoProjectedGradientDescent(
@@ -284,20 +317,60 @@ class BaseTest(unittest.TestCase):
                 ),
                 "ART",
             )
-        return self.attacks["apgddlr"], tuple(fw for fw in (art_adv,) if fw is not None)
+        if "torchattacks" in self.available:
+            from torchattacks import APGD
+
+            print("Producing APGD-DLR adversarial examples with Torchattacks...")
+            self.reset_seeds()
+            ta_adv = (
+                APGD(
+                    model=self.attack_params["model"],
+                    norm="Linf",
+                    eps=self.linf,
+                    n_restarts=1,
+                    seed=self.seed,
+                    loss="dlr",
+                    eot_iter=1,
+                    rho=self.attack_params["alpha"],
+                    verbose=True,
+                )(inputs=self.x.clone(), labels=self.y),
+                "Torchattacks",
+            )
+        self.reset_seeds()
+        return self.attacks["apgddlr"], tuple(
+            fw for fw in (art_adv, ta_adv) if fw is not None
+        )
 
     def bim(self):
         """
         This method crafts adversarial examples with BIM (Basic Iterative
         Method) (https://arxiv.org/pdf/1611.01236.pdf). The supported
-        frameworks for BIM include CleverHans and ART. Notably, CleverHans does
-        not have an explicit implementation of BIM, so we call PGD, but with
-        random initialization disabled.
+        frameworks for BIM include ART, CleverHans, and Torchattacks. Notably,
+        CleverHans does not have an explicit implementation of BIM, so we call
+        PGD, but with random initialization disabled.
 
         :return: BIM adversarial examples
         :rtype: tuple of torch Tensor objects (n, m)
         """
-        ch_adv = art_adv = None
+        art_adv = ch_adv = ta_adv = None
+        if "art" in self.available:
+            from art.attacks.evasion import BasicIterativeMethod
+
+            print("Producing BIM adversarial examples with ART...")
+            art_adv = (
+                torch.from_numpy(
+                    BasicIterativeMethod(
+                        estimator=self.art_classifier,
+                        eps=self.linf,
+                        eps_step=self.attack_params["alpha"],
+                        max_iter=self.attack_params["epochs"],
+                        targeted=False,
+                        batch_size=self.x.size(0),
+                        verbose=True,
+                    ).generate(x=self.x.clone().numpy())
+                ),
+                "ART",
+            )
         if "cleverhans" in self.available:
             from cleverhans.torch.attacks.projected_gradient_descent import (
                 projected_gradient_descent as basic_iterative_method,
@@ -322,58 +395,33 @@ class BaseTest(unittest.TestCase):
                 ).detach(),
                 "CleverHans",
             )
-        if "art" in self.available:
-            from art.attacks.evasion import BasicIterativeMethod
+        if "torchattacks" in self.available:
+            from torchattacks import BIM
 
-            print("Producing BIM adversarial examples with ART...")
-            art_adv = (
-                torch.from_numpy(
-                    BasicIterativeMethod(
-                        estimator=self.art_classifier,
-                        eps=self.linf,
-                        eps_step=self.attack_params["alpha"],
-                        max_iter=self.attack_params["epochs"],
-                        targeted=False,
-                        batch_size=self.x.size(0),
-                        verbose=True,
-                    ).generate(x=self.x.clone().numpy())
-                ),
-                "ART",
+            print("Producing BIM adversarial examples with Torchattacks...")
+            ta_adv = (
+                BIM(
+                    model=self.attack_params["model"],
+                    eps=self.linf,
+                    alpha=self.attack_params["alpha"],
+                    steps=self.attack_params["epochs"],
+                )(inputs=self.x.clone(), labels=self.y),
+                "Torchattacks",
             )
         return self.attacks["bim"], tuple(
-            fw for fw in (ch_adv, art_adv) if fw is not None
+            fw for fw in (art_adv, ch_adv, ta_adv) if fw is not None
         )
 
     def cwl2(self):
         """
         This method crafts adversariale examples with CW-L2 (Carlini-Wagner
         with l₂ norm) (https://arxiv.org/pdf/1608.04644.pdf). The supported
-        frameworks for CW-L2 include CleverHans and ART.
+        frameworks for CW-L2 include ART, CleverHans, and Torchattacks.
 
         :return: CW-L2 adversarial examples
         :rtype: tuple of torch Tensor objects (n, m)
         """
-        ch_adv = art_adv = None
-        if "cleverhans" in self.available:
-            from cleverhans.torch.attacks.carlini_wagner_l2 import carlini_wagner_l2
-
-            print("Producing CW-L2 adversarial examples with CleverHans...")
-            ch_adv = (
-                carlini_wagner_l2(
-                    model_fn=self.attack_params["model"],
-                    x=self.x.clone(),
-                    n_classes=self.attack_params["model"].params["classes"],
-                    y=self.y,
-                    lr=self.attack_params["alpha"],
-                    confidence=self.attacks["cwl2"].surface.loss.k,
-                    clip_min=self.attack_params["clip"][0].max().item(),
-                    clip_max=self.attack_params["clip"][1].min().item(),
-                    initial_const=self.attacks["cwl2"].surface.loss.c.item(),
-                    binary_search_steps=1,
-                    max_iterations=self.attack_params["epochs"],
-                ).detach(),
-                "CleverHans",
-            )
+        art_adv = ch_adv = ta_adv = None
         if "art" in self.available:
             from art.attacks.evasion import CarliniL2Method
 
@@ -396,22 +444,57 @@ class BaseTest(unittest.TestCase):
                 ),
                 "ART",
             )
+        if "cleverhans" in self.available:
+            from cleverhans.torch.attacks.carlini_wagner_l2 import carlini_wagner_l2
+
+            print("Producing CW-L2 adversarial examples with CleverHans...")
+            ch_adv = (
+                carlini_wagner_l2(
+                    model_fn=self.attack_params["model"],
+                    x=self.x.clone(),
+                    n_classes=self.attack_params["model"].params["classes"],
+                    y=self.y,
+                    lr=self.attack_params["alpha"],
+                    confidence=self.attacks["cwl2"].surface.loss.k,
+                    clip_min=self.attack_params["clip"][0].max().item(),
+                    clip_max=self.attack_params["clip"][1].min().item(),
+                    initial_const=self.attacks["cwl2"].surface.loss.c.item(),
+                    binary_search_steps=1,
+                    max_iterations=self.attack_params["epochs"],
+                ).detach(),
+                "CleverHans",
+            )
+        if "torchattacks" in self.available:
+            from torchattacks import CW
+
+            print("Producing CW-L2 adversarial examples with Torchattacks...")
+            ta_adv = (
+                CW(
+                    model=self.attack_params["model"],
+                    c=self.attacks["cwl2"].surface.loss.c.item(),
+                    kappa=self.attacks["cwl2"].surface.loss.k,
+                    steps=self.attack_params["epochs"],
+                    lr=self.attack_params["alpha"],
+                )(inputs=self.x.clone(), labels=self.y),
+                "Torchattacks",
+            )
         return self.attacks["cwl2"], tuple(
-            fw for fw in (ch_adv, art_adv) if fw is not None
+            fw for fw in (art_adv, ch_adv, ta_adv) if fw is not None
         )
 
     def df(self):
         """
         This method crafts adversarial examples with DF (DeepFool)
         (https://arxiv.org/pdf/1611.01236.pdf). The supported frameworks for DF
-        include ART. Notably, the DF implementation in ART has an overshoot
-        parameter which we set to 0 (not to be confused with the epsilon
-        parameter used in aml, which governs the norm-ball size).
+        include ART and Torchattacks. Notably, the DF implementation in ART and
+        Torchattacks have an overshoot parameter which we set to 0 (not to be
+        confused with the epsilon parameter used in aml, which governs the
+        norm-ball size).
 
         :return: DeepFool adversarial examples
         :rtype: tuple of torch Tensor objects (n, m)
         """
-        art_adv = None
+        art_adv = ta_adv = None
         if "art" in self.available:
             from art.attacks.evasion import DeepFool
 
@@ -429,18 +512,56 @@ class BaseTest(unittest.TestCase):
                 ),
                 "ART",
             )
-        return self.attacks["df"], tuple(fw for fw in (art_adv,) if fw is not None)
+        if "torchattacks" in self.available:
+            from torchattacks import DeepFool
+
+            print("Producing DF adversarial examples with Torchattacks...")
+            ta_adv = (
+                DeepFool(
+                    model=self.attack_params["model"],
+                    steps=self.attack_params["epochs"],
+                    overshoot=0,
+                )(inputs=self.x.clone(), labels=self.y),
+                "Torchattacks",
+            )
+        return self.attacks["df"], tuple(
+            fw for fw in (art_adv, ta_adv) if fw is not None
+        )
 
     def fab(self):
         """
         This method crafts adversarial examples with FAB (Fast Adaptive
-        Boundary) (https://arxiv.org/pdf/1907.02044.pdf). There are no
-        currently supported frameworks.
+        Boundary) (https://arxiv.org/pdf/1907.02044.pdf). The supported
+        frameworks for FAB include Torchattacks.
 
         :return: FAB adversarial examples
         :rtype: tuple of torch Tensor objects (n, m)
         """
-        return self.attacks["fab"], tuple(fw for fw in (None,) if fw is not None)
+        ta_adv = None
+        if "torchattacks" in self.available:
+            from torchattacks import FAB
+
+            print("Producing FAB adversarial examples with Torchattacks...")
+            self.reset_seeds()
+            ta_adv = (
+                FAB(
+                    model=self.attack_params["model"],
+                    norm="L2",
+                    eps=self.l2,
+                    steps=self.attack_params["epochs"],
+                    n_restarts=0,
+                    alpha_max=0,
+                    eta=0,
+                    beta=self.attacks["fab"].traveler.optimizer.param_groups[0]["beta"],
+                    verbose=True,
+                    seed=self.seed,
+                    targeted=False,
+                    n_classes=self.attack_params["model"].params["classes"],
+                )(inputs=self.x.clone(), labels=self.y),
+                "Torchattacks",
+            )
+        self.reset_seeds()
+        return self.attacks["fab"], tuple(fw for fw in (ta_adv,) if fw is not None)
 
     def jsma(self):
         """
@@ -476,12 +597,36 @@ class BaseTest(unittest.TestCase):
         """
         This method crafts adversarial examples with PGD (Projected Gradient
         Descent)) (https://arxiv.org/pdf/1706.06083.pdf). The supported
-        frameworks for PGD include CleverHans and ART.
+        frameworks for PGD include ART, CleverHans, and Torchattacks.
 
         :return: PGD adversarial examples
         :rtype: tuple of torch Tensor objects (n, m)
         """
-        ch_adv = art_adv = None
+        art_adv = ch_adv = ta_adv = None
+        if "art" in self.available:
+            from art.attacks.evasion import ProjectedGradientDescent
+
+            print("Producing PGD adversarial examples with ART...")
+            self.reset_seeds()
+            art_adv = (
+                torch.from_numpy(
+                    ProjectedGradientDescent(
+                        estimator=self.art_classifier,
+                        norm="inf",
+                        eps=self.linf,
+                        eps_step=self.attack_params["alpha"],
+                        decay=None,
+                        max_iter=self.attack_params["epochs"],
+                        targeted=False,
+                        num_random_init=1,
+                        batch_size=self.x.size(0),
+                        random_eps=True,
+                        summary_writer=False,
+                        verbose=True,
+                    ).generate(x=self.x.clone().numpy())
+                ),
+                "ART",
+            )
         if "cleverhans" in self.available:
             from cleverhans.torch.attacks.projected_gradient_descent import (
                 projected_gradient_descent,
@@ -507,33 +652,24 @@ class BaseTest(unittest.TestCase):
                 ).detach(),
                 "CleverHans",
             )
-        if "art" in self.available:
-            from art.attacks.evasion import ProjectedGradientDescent
+        if "torchattacks" in self.available:
+            from torchattacks import PGD
 
-            print("Producing PGD adversarial examples with ART...")
+            print("Producing PGD adversarial examples with Torchattacks...")
             self.reset_seeds()
-            art_adv = (
-                torch.from_numpy(
-                    ProjectedGradientDescent(
-                        estimator=self.art_classifier,
-                        norm="inf",
-                        eps=self.linf,
-                        eps_step=self.attack_params["alpha"],
-                        decay=None,
-                        max_iter=self.attack_params["epochs"],
-                        targeted=False,
-                        num_random_init=1,
-                        batch_size=self.x.size(0),
-                        random_eps=True,
-                        summary_writer=False,
-                        verbose=True,
-                    ).generate(x=self.x.clone().numpy())
-                ),
-                "ART",
+            ta_adv = (
+                PGD(
+                    model=self.attack_params["model"],
+                    eps=self.linf,
+                    alpha=self.attack_params["alpha"],
+                    steps=self.attack_params["epochs"],
+                    random_start=True,
+                )(inputs=self.x.clone(), labels=self.y),
+                "Torchattacks",
             )
         self.reset_seeds()
         return self.attacks["pgd"], tuple(
-            fw for fw in (ch_adv, art_adv) if fw is not None
+            fw for fw in (art_adv, ch_adv, ta_adv) if fw is not None
         )
 
 
@@ -705,8 +841,9 @@ class IdentityTests(BaseTest):
     https://pytorch.org/docs/stable/testing.html.
 
     The following frameworks are supported:
-        CleverHans (https://github.com/cleverhans-lab/cleverhans)
         ART (https://github.com/Trusted-AI/adversarial-robustness-toolbox)
+        CleverHans (https://github.com/cleverhans-lab/cleverhans)
+        Torchattacks (https://github.com/Harry24k/adversarial-attacks-pytorch)
 
     The following attacks are supported:
         APGD-CE (Auto-PGD with CE loss) (https://arxiv.org/pdf/2003.01690.pdf)
@@ -773,7 +910,7 @@ class IdentityTests(BaseTest):
         # print results and assert adversarial example similarity
         for (mn, mx, me, md, st), f in zip(diff_stats, fws):
             print(
-                f"{attack.name} AML v. {f}: Min: {mn:.3}, Max {mx:.3},",
+                f"{attack.name} aml v. {f}: Min: {mn:.3}, Max {mx:.3},",
                 f"Mean: {me:.3}, Median: {md:.3} SD: {st:.3}",
             )
         rtol, atol = torch.testing._comparison.default_tolerances(*diffs)
@@ -807,8 +944,7 @@ class IdentityTests(BaseTest):
     def test_apgdce(self):
         """
         This method performs an identity test for APGD-CE (Auto-PGD with CE
-        loss) (https://arxiv.org/pdf/2003.01690.pdf). The supported frameworks
-        for APGD-CE include ART.
+        loss) (https://arxiv.org/pdf/2003.01690.pdf).
 
         :return: None
         :rtype: NoneType
@@ -818,9 +954,8 @@ class IdentityTests(BaseTest):
     def test_apgddlr(self):
         """
         This method performs an identity test for APGD-DLR (Auto-PGD with DLR
-        loss) (https://arxiv.org/pdf/2003.01690.pdf). The supported frameworks
-        for APGD-DLR include ART. Notably, DLR loss is undefined when there are
-        only two classes.
+        loss) (https://arxiv.org/pdf/2003.01690.pdf). Notably, DLR loss is
+        undefined when there are only two classes.
 
         :return: None
         :rtype: NoneType
@@ -830,15 +965,15 @@ class IdentityTests(BaseTest):
     def test_bim(self):
         """
         This method performs an identity test for BIM (Basic Iterative Method)
-        (https://arxiv.org/pdf/1611.01236.pdf). The supported frameworks for
-        BIM include CleverHans and ART. Notably, the implementation of BIM in
-        ART ostensibly always fails, given that ART always uses the current
-        model logits in untargetted attacks and thus, *corrects* misclassified
-        inputs such that they are classified correctly. In effect, the
-        difference between ART and aml adversarial examples from BIM is
-        commonly the linf threat model, epsilon. However, when minimizing model
-        accuracy (instead of maximizing model loss), the identity check should
-        succeed, given that initially misclassified inputs are skipped.
+        (https://arxiv.org/pdf/1611.01236.pdf). Notably, the implementation of
+        BIM in ART ostensibly always fails, given that ART always uses the
+        current model logits in untargetted attacks and thus, *corrects*
+        misclassified inputs such that they are classified correctly. In
+        effect, the difference between ART and aml adversarial examples from
+        BIM is commonly the linf threat model, epsilon. However, when
+        minimizing model accuracy (instead of maximizing model loss), the
+        identity check should succeed, given that initially misclassified
+        inputs are skipped.
 
         :return: None
         :rtype: NoneType
@@ -848,8 +983,7 @@ class IdentityTests(BaseTest):
     def test_cwl2(self):
         """
         This method performs an identity test for CW-L2 (Carlini-Wagner with l₂
-        norm) (https://arxiv.org/pdf/1608.04644.pdf). The supported frameworks
-        for CW-L2 include CleverHans and ART.
+        norm) (https://arxiv.org/pdf/1608.04644.pdf).
 
         :return: None
         :rtype: NoneType
@@ -859,19 +993,22 @@ class IdentityTests(BaseTest):
     def test_df(self):
         """
         This method performs an identity test for DF (DeepFool)
-        (https://arxiv.org/pdf/1611.01236.pdf). The supported frameworks for DF
-        include ART.
+        (https://arxiv.org/pdf/1611.01236.pdf). Notably, since alpha is not a
+        parameter for other implementations of deepfool attacks, we override
+        the value of alpha to be 1 so the tests are passsed.
 
         :return: None
         :rtype: NoneType
         """
-        return self.identity_test(*self.df())
+        attack, fws = self.df()
+        return self.identity_test(
+            aml.attacks.df(**self.attack_params | {"alpha": 1, "epsilon": self.l2}), fws
+        )
 
     def test_fab(self):
         """
         This method performs an identity test for FAB (Fast Adaptive Boundary)
-        (https://arxiv.org/pdf/1907.02044.pdf). The supported frameworks for DF
-        include ART.
+        (https://arxiv.org/pdf/1907.02044.pdf).
 
         :return: None
         :rtype: NoneType
@@ -881,8 +1018,7 @@ class IdentityTests(BaseTest):
     def test_jsma(self):
         """
         This method performs an identity test for JSMA (Jacobian Saliency Map
-        Approach) (https://arxiv.org/pdf/1511.07528.pdf). The supported
-        frameworks for the JSMA include ART.
+        Approach) (https://arxiv.org/pdf/1511.07528.pdf).
 
         :return: None
         :rtype: NoneType
@@ -920,8 +1056,9 @@ class SemanticTests(BaseTest):
     normalized lp-norm.
 
     The following frameworks are supported:
-        CleverHans (https://github.com/cleverhans-lab/cleverhans)
         ART (https://github.com/Trusted-AI/adversarial-robustness-toolbox)
+        CleverHans (https://github.com/cleverhans-lab/cleverhans)
+        Torchattacks (https://github.com/Harry24k/adversarial-attacks-pytorch)
 
     The following attacks are supported:
         APGD-CE (Auto-PGD with CE loss) (https://arxiv.org/pdf/2003.01690.pdf)
@@ -1048,8 +1185,7 @@ class SemanticTests(BaseTest):
     def test_apgdce(self):
         """
         This method performs a semantic test for APGD-CE (Auto-PGD with CE
-        loss) (https://arxiv.org/pdf/2003.01690.pdf). The supported frameworks
-        for APGD-CE include ART.
+        loss) (https://arxiv.org/pdf/2003.01690.pdf).
 
         :return: None
         :rtype: NoneType
@@ -1059,9 +1195,8 @@ class SemanticTests(BaseTest):
     def test_apgddlr(self):
         """
         This method performs a semantic test for APGD-DLR (Auto-PGD with DLR
-        loss) (https://arxiv.org/pdf/2003.01690.pdf). The supported frameworks
-        for APGD-DLR include ART. Notably, DLR loss is undefined when there are
-        only two classes.
+        loss) (https://arxiv.org/pdf/2003.01690.pdf). Notably, DLR loss is
+        undefined when there are only two classes.
 
         :return: None
         :rtype: NoneType
@@ -1071,8 +1206,7 @@ class SemanticTests(BaseTest):
     def test_bim(self):
         """
         This method performs a semantic test for BIM (Basic Iterative Method)
-        (https://arxiv.org/pdf/1611.01236.pdf). The supported frameworks for
-        BIM include CleverHans and ART.
+        (https://arxiv.org/pdf/1611.01236.pdf).
 
         :return: None
         :rtype: NoneType
@@ -1082,8 +1216,7 @@ class SemanticTests(BaseTest):
     def test_cwl2(self):
         """
         This method performs a semantic test for CW-L2 (Carlini-Wagner with l₂
-        norm) (https://arxiv.org/pdf/1608.04644.pdf). The supported frameworks
-        for CW-L2 include CleverHans and ART.
+        norm) (https://arxiv.org/pdf/1608.04644.pdf).
 
         :return: None
         :rtype: NoneType
@@ -1093,8 +1226,7 @@ class SemanticTests(BaseTest):
     def test_df(self):
         """
         This method performs a semantic test for DF (DeepFool)
-        (https://arxiv.org/pdf/1611.01236.pdf). The supported frameworks for DF
-        include ART.
+        (https://arxiv.org/pdf/1611.01236.pdf).
 
         :return: None
         :rtype: NoneType
@@ -1104,8 +1236,7 @@ class SemanticTests(BaseTest):
     def test_fab(self):
         """
         This method performs a semantic test for FAB (Fast Adaptive Boundary)
-        (https://arxiv.org/pdf/1907.02044.pdf). The supported frameworks for DF
-        include ART.
+        (https://arxiv.org/pdf/1907.02044.pdf).
 
         :return: None
         :rtype: NoneType
@@ -1115,8 +1246,7 @@ class SemanticTests(BaseTest):
     def test_jsma(self):
         """
         This method performs a semantic test for JSMA (Jacobian Saliency Map
-        Approach) (https://arxiv.org/pdf/1511.07528.pdf). The supported
-        frameworks for the JSMA include ART.
+        Approach) (https://arxiv.org/pdf/1511.07528.pdf).
 
         :return: None
         :rtype: NoneType
