@@ -23,7 +23,7 @@ import torch  # Tensors and Dynamic neural networks in Python with strong GPU ac
 # ^ need to recompute clips at each iteration if we're going to depend on distance "left"
 # add perturbations visualizations in examples directory
 # have option to silence all prints (good for unittest)
-# track details across all components (loss should track loss values, surface acc, norms, etc.)
+# address statistics tracking when batch size isn't -1
 
 
 class Adversary:
@@ -279,6 +279,7 @@ class Attack:
     :func:`__init__`: instantiates Attack objects
     :func:`__repr__`: returns the attack name (based on the components)
     :func:`craft`: returns a batch of adversarial examples
+    :func:`statistics`: prep misc statistics to be printed
     """
 
     def __init__(
@@ -295,6 +296,7 @@ class Attack:
         random_restart,
         saliency_map,
         batch_size=-1,
+        verbosity=0.25,
     ):
         """
         This method instantiates an Attack object with a variety of parameters
@@ -310,6 +312,8 @@ class Attack:
         :type epochs: int
         :param epsilon: lp-norm ball threat model
         :type epsilon: float
+        :param verbosity: print attack statistics every verbosity%
+        :type verbosity: float
 
         These subsequent parameters define the components of a Traveler object:
 
@@ -345,11 +349,12 @@ class Attack:
         :rtype: Attack object
         """
 
-        # save attack parameters and build short attack name
+        # save attack parameters, and build short attack name
         self.batch_size = batch_size
         self.epochs = epochs
         self.epsilon = epsilon
         self.clip = clip
+        self.verbosity = max(1, int(epochs * verbosity))
         self.components = {
             "change of variables": change_of_variables,
             "loss function": loss_func.__name__,
@@ -475,11 +480,38 @@ class Attack:
             self.traveler.initialize(xb, pb)
             pb.clamp_(min_p, max_p)
             for epoch in range(self.epochs):
-                print(f"On epoch {epoch}... ({epoch/self.epochs:.1%})", end="\r")
                 self.surface(xb, yb, pb)
                 self.traveler()
                 pb.clamp_(min_p, max_p)
+                print(
+                    f"Epoch {epoch + 1:{len(str(self.epochs))}}/{self.epochs}",
+                    self.statistics(),
+                ) if not (epoch + 1) % self.verbosity else print(
+                    f"Epoch {epoch}... ({epoch/self.epochs:.1%})", end="\r"
+                )
         return p
+
+    def statistics(self):
+        """
+        This method returns a formatted string describing various statistics of
+        the crafting process. Specifically, this computes the following at each
+        epoch (and the change since the last epoch): (1) model accuracy, (2) model
+        loss, (3) attack loss, (3) l0, l2, and l∞ norms.
+
+        :return: print-ready statistics
+        :rtype: str
+        """
+        acc, attack_loss, model_loss, l0, l2, linf = self.surface.stats.values()
+        return (
+            f"Accuracy: {acc[-1]:.1%} ({acc[-1] - sum(acc[-2:-1]):+.1%}) "
+            f"Model Loss: {model_loss[-1]:.2f} "
+            f"({model_loss[-1] - sum(model_loss[-2:-1]):+6.2f}) "
+            f"{self.name} Loss: {attack_loss[-1]:.2f} "
+            f"({attack_loss[-1] - sum(attack_loss[-2:-1]):+6.2f}) "
+            f"l0: {l0[-1]:.2} ({l0[-1] - sum(l0[-2:-1]):+.2}) "
+            f"l2: {l2[-1]:.2} ({l2[-1] - sum(l2[-2:-1]):+.2}) "
+            f"l∞: {linf[-1]:.2} ({linf[-1] - sum(linf[-2:-1]):+.2})"
+        )
 
 
 def attack_builder(
@@ -503,6 +535,7 @@ def attack_builder(
         saliency.JacobianSaliency,
         saliency.IdentitySaliency,
     ),
+    verbosity=1,
 ):
     """
     As shown in https://arxiv.org/pdf/2209.04521.pdf, seminal attacks in
@@ -537,6 +570,8 @@ def attack_builder(
     :param epsilon: lp-norm ball threat model
     :type epsilon: float
     :param model: neural network
+    :param verbosity: print attack statistics every verbosity%
+    :type verbosity: float
     :type model: scikit-torch LinearClassifier-inherited object
     :return: a generator yielding attack combinations
     :rtype: generator of Attack objects
@@ -553,35 +588,35 @@ def attack_builder(
     )
     print(f"Yielding {num_attacks} attacks...")
     for (
-        optimizer_alg,
-        random_restart,
         change_of_variables,
         loss_func,
-        saliency_map,
         norm,
-        jacobian,
+        optimizer_alg,
+        random_restart,
+        saliency_map,
     ) in itertools.product(
-        optimizers,
-        random_restart_enabled,
         change_of_variables_enabled,
         losses,
-        saliency_maps,
         norms,
+        optimizers,
+        random_restart_enabled,
+        saliency_maps,
     ):
         yield Attack(
-            epochs=epochs,
-            optimizer=optimizer_alg,
             alpha=alpha,
-            random_restart=random_restart,
             change_of_variables=change_of_variables,
-            model=model,
-            saliency_map=saliency_map,
+            epochs=epochs,
             loss=loss_func,
+            model=model,
             norm=norm,
+            optimizer=optimizer_alg,
+            random_restart=random_restart,
+            saliency_map=saliency_map,
+            verbosity=verbosity,
         )
 
 
-def apgdce(alpha=None, clip=None, epochs=None, epsilon=None, model=None):
+def apgdce(alpha=None, clip=None, epochs=None, epsilon=None, model=None, verbosity=1):
     """
     This function serves as an alias to build Auto-PGD with Cross-Entropy loss
     (APGD-CE), as shown in https://arxiv.org/abs/2003.01690. Specifically,
@@ -599,6 +634,8 @@ def apgdce(alpha=None, clip=None, epochs=None, epsilon=None, model=None):
     :type epsilon: float
     :param model: neural network
     :type model: scikit-torch LinearClassifier-inherited object
+    :param verbosity: print attack statistics every verbosity%
+    :type verbosity: float
     :return: APGD-CE attack
     :rtype: Attack objects
     """
@@ -614,10 +651,11 @@ def apgdce(alpha=None, clip=None, epochs=None, epsilon=None, model=None):
         loss_func=loss.CELoss,
         norm=surface.linf,
         saliency_map=saliency.IdentitySaliency,
+        verbosity=verbosity,
     )
 
 
-def apgddlr(alpha=None, clip=None, epochs=None, epsilon=None, model=None):
+def apgddlr(alpha=None, clip=None, epochs=None, epsilon=None, model=None, verbosity=1):
     """
     This function serves as an alias to build Auto-PGD with the Difference of
     Logits Ratio loss (APGD-DLR), as shown in
@@ -636,6 +674,8 @@ def apgddlr(alpha=None, clip=None, epochs=None, epsilon=None, model=None):
     :type epsilon: float
     :param model: neural network
     :type model: scikit-torch LinearClassifier-inherited object
+    :param verbosity: print attack statistics every verbosity%
+    :type verbosity: float
     :return: APGD-DLR attack
     :rtype: Attack objects
     """
@@ -651,10 +691,11 @@ def apgddlr(alpha=None, clip=None, epochs=None, epsilon=None, model=None):
         optimizer_alg=optimizer.MomentumBestStart,
         random_restart=True,
         saliency_map=saliency.IdentitySaliency,
+        verbosity=verbosity,
     )
 
 
-def bim(alpha=None, clip=None, epochs=None, epsilon=None, model=None):
+def bim(alpha=None, clip=None, epochs=None, epsilon=None, model=None, verbosity=1):
     """
     This function serves as an alias to build the Basic Iterative Method (BIM),
     as shown in (https://arxiv.org/pdf/1611.01236.pdf) Specifically, BIM: does
@@ -672,6 +713,8 @@ def bim(alpha=None, clip=None, epochs=None, epsilon=None, model=None):
     :type epsilon: float
     :param model: neural network
     :type model: scikit-torch LinearClassifier-inherited object
+    :param verbosity: print attack statistics every verbosity%
+    :type verbosity: float
     :return: BIM attack
     :rtype: Attack objects
     """
@@ -687,10 +730,11 @@ def bim(alpha=None, clip=None, epochs=None, epsilon=None, model=None):
         optimizer_alg=optimizer.SGD,
         random_restart=False,
         saliency_map=saliency.IdentitySaliency,
+        verbosity=verbosity,
     )
 
 
-def cwl2(alpha=None, clip=None, epochs=None, epsilon=None, model=None):
+def cwl2(alpha=None, clip=None, epochs=None, epsilon=None, model=None, verbosity=1):
     """
     This function serves as an alias to build Carlini-Wagner l₂ (CW-L2), as
     shown in (https://arxiv.org/pdf/1608.04644.pdf) Specifically, CW-L2: uses
@@ -707,6 +751,8 @@ def cwl2(alpha=None, clip=None, epochs=None, epsilon=None, model=None):
     :type epsilon: float
     :param model: neural network
     :type model: scikit-torch LinearClassifier-inherited object
+    :param verbosity: print attack statistics every verbosity%
+    :type verbosity: float
     :return: Carlini-Wagner l₂ attack
     :rtype: Attack objects
     """
@@ -722,10 +768,11 @@ def cwl2(alpha=None, clip=None, epochs=None, epsilon=None, model=None):
         optimizer_alg=optimizer.Adam,
         random_restart=False,
         saliency_map=saliency.IdentitySaliency,
+        verbosity=verbosity,
     )
 
 
-def df(alpha=None, clip=None, epochs=None, epsilon=None, model=None):
+def df(alpha=None, clip=None, epochs=None, epsilon=None, model=None, verbosity=1):
     """
     This function serves as an alias to build DeepFool (DF), as shown in
     (https://arxiv.org/pdf/1511.04599.pdf) Specifically, DF: does not use
@@ -743,6 +790,8 @@ def df(alpha=None, clip=None, epochs=None, epsilon=None, model=None):
     :type epsilon: float
     :param model: neural network
     :type model: scikit-torch LinearClassifier-inherited object
+    :param verbosity: print attack statistics every verbosity%
+    :type verbosity: float
     :return: DeepFool attack
     :rtype: Attack objects
     """
@@ -758,10 +807,11 @@ def df(alpha=None, clip=None, epochs=None, epsilon=None, model=None):
         optimizer_alg=optimizer.SGD,
         random_restart=False,
         saliency_map=saliency.DeepFoolSaliency,
+        verbosity=verbosity,
     )
 
 
-def fab(alpha=None, clip=None, epochs=None, epsilon=None, model=None):
+def fab(alpha=None, clip=None, epochs=None, epsilon=None, model=None, verbosity=1):
     """
     This function serves as an alias to build Fast Adaptive Boundary (FAB), as
     shown in (https://arxiv.org/pdf/1907.02044.pdf) Specifically, FAB: does not
@@ -779,6 +829,8 @@ def fab(alpha=None, clip=None, epochs=None, epsilon=None, model=None):
     :type epsilon: float
     :param model: neural network
     :type model: scikit-torch LinearClassifier-inherited object
+    :param verbosity: print attack statistics every verbosity%
+    :type verbosity: float
     :return: DeepFool attack
     :rtype: Attack objects
     """
@@ -794,10 +846,11 @@ def fab(alpha=None, clip=None, epochs=None, epsilon=None, model=None):
         optimizer_alg=optimizer.BackwardSGD,
         random_restart=False,
         saliency_map=saliency.DeepFoolSaliency,
+        verbosity=verbosity,
     )
 
 
-def pgd(alpha=None, clip=None, epochs=None, epsilon=None, model=None):
+def pgd(alpha=None, clip=None, epochs=None, epsilon=None, model=None, verbosity=1):
     """
     This function serves as an alias to build Projected Gradient Descent (PGD),
     as shown in (https://arxiv.org/pdf/1706.06083.pdf) Specifically, PGD: does
@@ -815,6 +868,8 @@ def pgd(alpha=None, clip=None, epochs=None, epsilon=None, model=None):
     :type epsilon: float
     :param model: neural network
     :type model: scikit-torch LinearClassifier-inherited object
+    :param verbosity: print attack statistics every verbosity%
+    :type verbosity: float
     :return: DeepFool attack
     :rtype: Attack objects
     """
@@ -830,10 +885,11 @@ def pgd(alpha=None, clip=None, epochs=None, epsilon=None, model=None):
         optimizer_alg=optimizer.SGD,
         random_restart=True,
         saliency_map=saliency.IdentitySaliency,
+        verbosity=verbosity,
     )
 
 
-def jsma(alpha=None, clip=None, epochs=None, epsilon=None, model=None):
+def jsma(alpha=None, clip=None, epochs=None, epsilon=None, model=None, verbosity=1):
     """
     This function serves as an alias to build the Jacobian-based Saliency Map
     Approach (JSMA), as shown in (https://arxiv.org/pdf/1511.07528.pdf)
@@ -851,6 +907,8 @@ def jsma(alpha=None, clip=None, epochs=None, epsilon=None, model=None):
     :type epsilon: float
     :param model: neural network
     :type model: scikit-torch LinearClassifier-inherited object
+    :param verbosity: print attack statistics every verbosity%
+    :type verbosity: float
     :return: DeepFool attack
     :rtype: Attack objects
     """
@@ -866,6 +924,7 @@ def jsma(alpha=None, clip=None, epochs=None, epsilon=None, model=None):
         optimizer_alg=optimizer.SGD,
         random_restart=False,
         saliency_map=saliency.JacobianSaliency,
+        verbosity=verbosity,
     )
 
 
