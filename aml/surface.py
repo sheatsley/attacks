@@ -74,6 +74,15 @@ class Surface:
             "lp": norm.__name__,
             "smap": type(saliency_map).__name__,
         }
+        self.stats = {
+            "acc": [],
+            "attack_loss": [],
+            "model_loss": [],
+            "l0": [],
+            "l2": [],
+            "linf": [],
+        }
+        self.statistics = ""
         return None
 
     def __call__(self, x, y, p):
@@ -133,6 +142,21 @@ class Surface:
         # call closure subroutines and attach grads to the perturbation vector
         [comp.closure(final_grads) for comp in self.closure]
         p.grad = final_grads
+
+        # collect progress statistics and set update string
+        logits = self.model(self.change_of_variables(x + p), False)
+        acc = logits.argmax(1).eq(y).sum().div(y.numel()).item()
+        attack_loss = self.loss(logits, y).sum().item()
+        model_loss = self.model.loss(logits, y).item()
+        l0_norm = p.norm(0, 1).mean().item()
+        l2_norm = p.norm(2, 1).mean().item()
+        linf_norm = p.norm(torch.inf, 1).mean().item()
+        self.stats["acc"].append(acc)
+        self.stats["attack_loss"].append(attack_loss)
+        self.stats["model_loss"].append(model_loss)
+        self.stats["l0"].append(l0_norm)
+        self.stats["l2"].append(l2_norm)
+        self.stats["linf"].append(linf_norm)
         return None
 
     def __repr__(self):
