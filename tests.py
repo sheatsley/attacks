@@ -29,6 +29,7 @@ import torch  # Tensors and Dynamic neural networks in Python with strong GPU ac
 # ^ update random-restart params for attacks that would be captured by adversarial layer
 # update FAB parameters when backwardsgd supports alpha_max
 # when doing min accuracy, we should only craft adversarial examples on inputs that are classified correctly
+# confirm out-of-place op changes to tanh map work well after implementing early termination
 
 
 class BaseTest(unittest.TestCase):
@@ -583,7 +584,7 @@ class BaseTest(unittest.TestCase):
                 torch.from_numpy(
                     SaliencyMapMethod(
                         classifier=self.art_classifier,
-                        theta=self.attack_params["alpha"] + 1,
+                        theta=self.attack_params["alpha"],
                         gamma=self.linf,
                         batch_size=self.x.size(0),
                         verbose=True,
@@ -1168,7 +1169,7 @@ class SemanticTests(BaseTest):
             for an, perf in zip(norms, perfs)
         )
         acc_diff = (a - self.clean_acc for a in acc_abs)
-        results = zip(("AML", *fws), acc_abs, acc_diff, norms_perfs)
+        results = zip(("aml", *fws), acc_abs, acc_diff, norms_perfs)
         for f, a, d, n in results:
             print(f"{f} {attack.name} Model Acc: {a:.2%} ({d:.2%}), Results: {n}")
 
