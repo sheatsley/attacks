@@ -1,0 +1,1 @@
+Like the previous iteration, CW *technically* passes tests (did bugfixes for cleverhans when computing l2 norm, removed early termination logic, and now it matches exactly with our implementation -- need to confirm this with early termination support)
