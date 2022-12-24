@@ -24,6 +24,8 @@ import torch  # Tensors and Dynamic neural networks in Python with strong GPU ac
 # add perturbations visualizations in examples directory
 # have option to silence all prints (good for unittest)
 # address statistics tracking when batch size isn't -1
+# l2 rr should be normlized by l2-norm and l0 norm should pick max l0 random features
+# write l0, l2, and linf specialized clamps (eg, project l2 vector to budget instead of 1)
 
 
 class Adversary:
@@ -351,10 +353,12 @@ class Attack:
 
         # save attack parameters, and build short attack name
         self.batch_size = batch_size
+        self.change_of_variables = change_of_variables
+        self.clip = (-torch.inf, torch.inf) if change_of_variables else clip
         self.epochs = epochs
         self.epsilon = epsilon
-        self.clip = clip
         self.verbosity = max(1, int(epochs * verbosity))
+        self.results = {m: [] for m in ("acc", "aloss", "mloss", "l0", "l2", "linf")}
         self.components = {
             "change of variables": change_of_variables,
             "loss function": loss_func.__name__,
@@ -459,7 +463,8 @@ class Attack:
         """
 
         # clone inputs, setup perturbation vector, chunks, epsilon, and clip
-        x = x.detach().clone()
+        org_x = x.detach()
+        x = org_x.clone()
         p = x.new_zeros(x.size())
         batch_size = x.size(0) if self.batch_size == -1 else self.batch_size
         num_batches = -(-x.size(0) // batch_size)
@@ -485,32 +490,63 @@ class Attack:
                 pb.clamp_(min_p, max_p)
                 print(
                     f"Epoch {epoch + 1:{len(str(self.epochs))}}/{self.epochs}",
-                    self.statistics(),
+                    self.progress(epoch, xb, yb, pb),
                 ) if not (epoch + 1) % self.verbosity else print(
                     f"Epoch {epoch}... ({epoch/self.epochs:.1%})", end="\r"
                 )
+
+        # compute final perturbation if using cov and average statistics
+        p = traveler.tanh_space(x + p).sub(org_x) if self.change_of_variables else p
+        for m in ("acc", "l0", "l2", "linf"):
+            self.results[m] = [s / y.numel() for s in self.results[m]]
         return p
 
-    def statistics(self):
+    def progress(self, epoch, xb, yb, pb):
         """
-        This method returns a formatted string describing various statistics of
-        the crafting process. Specifically, this computes the following at each
-        epoch (and the change since the last epoch): (1) model accuracy, (2) model
-        loss, (3) attack loss, (3) l0, l2, and l∞ norms.
+        This method records various statistics on the adversarial example
+        crafting process and returns a formatted string concisely representing
+        the state of the attack. pecifically, this computes the following at
+        each epoch (and the change since the last epoch): (1) model accuracy,
+        (2) model loss, (3) attack loss, (3) l0, l2, and l∞ norms.
 
+        :param epoch: current epoch
+        :type epoch: int
+        :param xb: current batch of inputs
+        :type xb: torch Tensor object (n, m)
+        :param yb: current batch of labels
+        :type yb: torch Tensor object (n,)
+        :param pb: current batch of perturbations
+        :type pb: torch Tensor object (n, m)
         :return: print-ready statistics
         :rtype: str
         """
-        acc, attack_loss, model_loss, l0, l2, linf = self.surface.stats.values()
+
+        # compute absolute statistics (averaged at the end)
+        logits = self.surface.model(traveler.tanh_space(xb + pb), False)
+        acc = logits.argmax(1).eq(yb).sum().item()
+        aloss = self.surface.loss(logits, yb).sum().item()
+        mloss = self.surface.model.loss(logits, yb).item()
+        norms = [pb.norm(n, 1).sum().item() for n in (0, 2, torch.inf)]
+        for m, s in zip(self.results.keys(), (acc, aloss, mloss, *norms)):
+            try:
+                self.results[m][epoch] += s
+            except IndexError:
+                self.results[m].append(s)
+
+        # build str representation and return
         return (
-            f"Accuracy: {acc[-1]:.1%} ({acc[-1] - sum(acc[-2:-1]):+.1%}) "
-            f"Model Loss: {model_loss[-1]:.2f} "
-            f"({model_loss[-1] - sum(model_loss[-2:-1]):+6.2f}) "
-            f"{self.name} Loss: {attack_loss[-1]:.2f} "
-            f"({attack_loss[-1] - sum(attack_loss[-2:-1]):+6.2f}) "
-            f"l0: {l0[-1]:.2} ({l0[-1] - sum(l0[-2:-1]):+.2}) "
-            f"l2: {l2[-1]:.2} ({l2[-1] - sum(l2[-2:-1]):+.2}) "
-            f"l∞: {linf[-1]:.2} ({linf[-1] - sum(linf[-2:-1]):+.2})"
+            f"Accuracy: {acc / yb.numel():.1%} "
+            f"({(acc - sum(self.results['acc'][-2:-1])) / yb.numel():+.1%}) "
+            f"Model Loss: {mloss:.2f} "
+            f"({mloss - sum(self.results['mloss'][-2:-1]):+6.2f}) "
+            f"{self.name} Loss: {aloss:.2f} "
+            f"({aloss - sum(self.results['aloss'][-2:-1]):+6.2f}) "
+            f"l0: {norms[0] / yb.numel():.2f} "
+            f"({(norms[0] - sum(self.results['l0'][-2:-1])) / yb.numel():+.2f}) "
+            f"l2: {norms[1] / yb.numel():.2f} "
+            f"({(norms[1] - sum(self.results['l2'][-2:-1])) / yb.numel():+.2f}) "
+            f"l∞: {norms[2] / yb.numel():.2f} "
+            f"({(norms[2] - sum(self.results['linf'][-2:-1])) / yb.numel():+.2f})"
         )
 
 
