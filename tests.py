@@ -80,6 +80,7 @@ class BaseTest(unittest.TestCase):
         epochs=30,
         norm=0.15,
         seed=5115,
+        verbosity=1,
     ):
         """
         This function initializes the setup necessary for all test cases within
@@ -101,6 +102,8 @@ class BaseTest(unittest.TestCase):
         :type norm: float
         :param seed: the seed to use to make randomized components determinisitc
         :type seed: int
+        :param verbosity: print attack statistics every verbosity%
+        :type verbosity: float
         :return: None
         :rtype: NoneType
         """
@@ -144,18 +147,18 @@ class BaseTest(unittest.TestCase):
         cls.clean_acc = cls.model.accuracy(cls.x, cls.y).item()
 
         # instantiate attacks and save attack parameters
-        cls.l0 = int(cls.x.size(1) * norm)
         cls.l0_max = cls.x.size(1)
-        cls.l2 = maxs.sub(mins).norm(2).item()
-        cls.l2_max = cls.x.size(1) ** 1 / 2
-        cls.linf = norm
+        cls.l0 = int(cls.l0_max * norm) + 1
+        cls.l2_max = maxs.sub(mins).norm(2).item()
+        cls.l2 = cls.l2_max * norm
         cls.linf_max = 1
+        cls.linf = norm
         cls.attack_params = {
             "alpha": alpha,
             "clip": clip,
             "epochs": epochs,
             "model": cls.model,
-            "verbosity": 1,
+            "verbosity": verbosity,
         }
         cls.attacks = {
             "apgdce": aml.attacks.apgdce(**cls.attack_params | {"epsilon": cls.linf}),
