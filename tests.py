@@ -108,7 +108,7 @@ class BaseTest(unittest.TestCase):
         :rtype: NoneType
         """
 
-        # set debug, seed, load data (extract training and test sets, if they exist)
+        # set debug, seed, and load appropriate data partitions
         print("Initializing module for all test cases...")
         torch.autograd.set_detect_anomaly(debug)
         cls.seed = seed
@@ -124,18 +124,27 @@ class BaseTest(unittest.TestCase):
             cls.x = torch.from_numpy(data.dataset.data)
             cls.y = torch.from_numpy(data.dataset.labels).long()
 
-        # determine clipping range (datasets need not be between 0 and 1)
-        mins, idx = cls.x.min(0)
-        maxs, idx = cls.x.max(0)
+        # ensure image dataset dimensions are pytorch-compliant
+        shape = (
+            data.orgfshape[::-1]
+            if len(data.orgfshape) == 3
+            else (1,) + data.orgfshape
+            if len(data.orgfshape) == 2
+            else None
+        )
+
+        # determine clipping range (non-image datasets may not be 0-1)
+        mins, idx = (torch.zeros(cls.x.size(1)), None) if shape else cls.x.min(0)
+        maxs, idx = (torch.ones(cls.x.size(1)), None) if shape else cls.x.max(0)
         clip = (mins, maxs)
         clip_info = (
             (mins[0].item(), maxs[0].item())
             if (mins[0].eq(mins).all() and maxs[0].eq(maxs).all())
-            else f"(({mins.min().item()}, ..., {mins.max()}.item()),"
-            "({maxs.min().item()}, ..., {maxs.max().item()}))"
+            else f"(({mins.min().item()}, ..., {mins.max().item()}),"
+            f"({maxs.min().item()}, ..., {maxs.max().item()}))"
         )
 
-        # train model and save craftset clean accuracy (used for semantic tests)
+        # train model and save craftset clean accuracy (for semantic tests)
         cls.reset_seeds()
         template = getattr(dlm.architectures, dataset)
         cls.model = (
@@ -143,7 +152,7 @@ class BaseTest(unittest.TestCase):
             if template.CNNClassifier is not None
             else dlm.MLPClassifier(template=template)
         )
-        cls.model.fit(*(x, y) if has_test else (cls.x, cls.y))
+        cls.model.fit(*(x, y) if has_test else (cls.x, cls.y), shape=shape)
         cls.clean_acc = cls.model.accuracy(cls.x, cls.y).item()
 
         # instantiate attacks and save attack parameters
