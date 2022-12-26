@@ -23,10 +23,9 @@ import torch  # Tensors and Dynamic neural networks in Python with strong GPU ac
 # ^ need to recompute clips at each iteration if we're going to depend on distance "left"
 # add perturbations visualizations in examples directory
 # have option to silence all prints (good for unittest)
-# address statistics tracking when batch size isn't -1 (confirm working)
 # l2 rr should be normlized by l2-norm and l0 norm should pick max l0 random features
-# write l0, l2, and linf specialized clamps (eg, project l2 vector to budget instead of 1)
 # for l0 clamp, need to check if cov makes 0s a very small number (check on prev_p == 0 would fail)
+# consider setting a min in tanh_p (like l2 norm) to mitigate underflow
 
 
 class Adversary:
@@ -282,9 +281,9 @@ class Attack:
     :func:`__init__`: instantiates Attack objects
     :func:`__repr__`: returns the attack name (based on the components)
     :func:`craft`: returns a batch of adversarial examples
+    :func:`linf`: clamps inputs to domain and linf threat model
     :func:`l0`: clamps inputs to domain and l0 threat model
     :func:`l2`: clamps inputs to domain and l2 threat model
-    :func:`linf`: clamps inputs to domain and linf threat model
     :func:`progress`: record various statistics on crafting progress
     :func:`tanh_p`: extracts perturbation from input when using CoV
     """
@@ -482,29 +481,61 @@ class Attack:
 
         # craft adversarial examples per batch
         print(f"Crafting {x.size(0)} adversarial examples with {self}...")
-        xi, yi, pi, oi, cni, cxi = (t.split(batch_size) for t in (x, y, p, o_x, *clip))
-        for b, (xb, yb, pb, ob, cnb, cxb) in enumerate(zip(xi, yi, pi, oi, cni, cxi)):
-            print(f"On batch {b + 1} of {num_batches} {b + 1/ num_batches:.1%}...")
-            self.surface.initialize((cnb, cxb), pb)
+        xi, yi, pi, oi = (t.split(batch_size) for t in (x, y, p, o_x))
+        for b, (xb, yb, pb, ob) in enumerate(zip(xi, yi, pi, oi)):
+            print(f"On batch {b + 1} of {num_batches} {(b + 1) / num_batches:.1%}...")
+            cnb, cmb = (c.sub(xb) for c in clip)
+            self.surface.initialize((cnb, cmb), pb)
             self.traveler.initialize(xb, pb)
-            p.clamp_(*clip)
+            pb.clamp_(cnb, cmb)
             proj_args = (xb, ob) if self.change_of_variables else (None, None)
             self.project(pb, *proj_args)
             for epoch in range(self.epochs):
                 self.surface(xb, yb, pb)
                 self.traveler()
+                pb.clamp_(cnb, cmb)
                 self.project(pb, *proj_args)
                 print(
                     f"Epoch {epoch + 1:{len(str(self.epochs))}} / {self.epochs}",
-                    self.progress(epoch, xb, yb, pb, ob),
+                    self.progress(b, epoch, xb, yb, pb, ob),
                 ) if not (epoch + 1) % self.verbosity else print(
                     f"Epoch {epoch}... ({epoch / self.epochs:.1%})", end="\r"
                 )
 
-        # average statistics and get final perturbation if using cov
-        for m in ("acc", "l0", "l2", "linf"):
-            self.results[m] = [s / y.numel() for s in self.results[m]]
+        # compute final statistics and get perturbation vector if using cov
+        avg = ("acc", "l0", "l2", "linf")
+        for m in self.results:
+            self.results[m] = [
+                sum(s) / (y.numel() if m in avg else 1) for s in zip(*self.results[m])
+            ]
         return self.tanh_p(x + p, o_x) if self.change_of_variables else p
+
+    def linf(self, p, x=None, o_x=None):
+        """
+        This method projects perturbation vectors so that they are complaint
+        with the specified l∞ threat model (i.e., epsilon). Specifically,
+        perturbation vectors whose l∞-norms exceed the threat model are
+        projected back onto the l∞-ball. This is done by clipping perturbation
+        vectors by ±epsilon. Notably, when using change of variables, we map
+        clipped perturbation vectors into the tanh space and set the vectors to
+        the computed result. In other words, after p is clipped according to
+        ±epsilon, it is then set to:
+
+                    p = ArcTanh((p - x) * 2 - 1) - (Tanh(x) + 1) / 2
+
+        :param p: perturbation vectors
+        :type p: torch Tensor object (n, m)
+        :param x: adversarial examples in tanh-space
+        :type x: torch Tensor object (n, m)
+        :param o_x: original inputs
+        :type o_x: torch tensor object (n, m)
+        :return: None
+        :rtype: NoneType
+        """
+        p_real = self.tanh_p(x + p, o_x) if self.change_of_variables else p
+        p_real.clamp_(-self.epsilon, self.epsilon)
+        p[:] = self.tanh_p(x, p.add(o_x), True) if self.change_of_variables else p
+        return None
 
     def l0(self, p, clip, x=None, o_x=None):
         """
@@ -523,7 +554,7 @@ class Attack:
         :param x: adversarial examples in tanh-space (unused)
         :type x: torch Tensor object (n, m)
         :param o_x: original inputs (unused)
-        :type o_x: torhc tensor object (n, m)
+        :type o_x: torch tensor object (n, m)
         :return: None
         :rtype: NoneType
         """
@@ -550,47 +581,18 @@ class Attack:
         :param x: adversarial examples in tanh-space
         :type x: torch Tensor object (n, m)
         :param o_x: original inputs
-        :type o_x: torhc tensor object (n, m)
+        :type o_x: torch tensor object (n, m)
         :return: None
         :rtype: NoneType
         """
-        p[:] = self.tanh_p(x + p, o_x) if self.change_of_variables else p
-        norm = p.norm(2, 1, True)
-        p[:] = p.where(norm <= self.epsilon, p.div(norm).mul(self.epsilon))
+        p_real = self.tanh_p(x + p, o_x) if self.change_of_variables else p
+        norm = p_real.norm(2, 1, True)
+        p[:] = p.where(norm <= self.epsilon, p_real.div(norm).mul(self.epsilon))
         if self.change_of_variables:
-            p.add_(o_x).mul_(2).sub_(1).arctanh_().sub_(x)
+            p[:] = p.where(norm <= self.epsilon, self.tanh_p(x, p.add(o_x), True))
         return None
 
-    def linf(self, p, x=None, o_x=None):
-        """
-        This method projects perturbation vectors so that they are complaint
-        with the specified l∞ threat model (i.e., epsilon). Specifically,
-        perturbation vectors whose l∞-norms exceed the threat model are
-        projected back onto the l∞-ball. This is done by clipping perturbation
-        vectors by ±epsilon. Notably, when using change of variables, we map
-        clipped perturbation vectors into the tanh space and set the vectors to
-        the computed result. In other words, after p is clipped according to
-        ±epsilon, it is then set to:
-
-                    p = ArcTanh((p - x) * 2 - 1) - (Tanh(x) + 1) / 2
-
-        :param p: perturbation vectors
-        :type p: torch Tensor object (n, m)
-        :param x: adversarial examples in tanh-space
-        :type x: torch Tensor object (n, m)
-        :param o_x: original inputs
-        :type o_x: torhc tensor object (n, m)
-        :return: None
-        :rtype: NoneType
-        """
-        p[:] = self.tanh_p(x + p, o_x) if self.change_of_variables else p
-        p.clamp_(-self.epsilon, self.epsilon)
-        traveler.tanh_space(p.sub_(o_x), True).sub_(
-            x
-        ) if self.change_of_variables else p
-        return None
-
-    def progress(self, epoch, xb, yb, pb, oi):
+    def progress(self, batch, epoch, xb, yb, pb, oi):
         """
         This method records various statistics on the adversarial example
         crafting process and returns a formatted string concisely representing
@@ -598,6 +600,8 @@ class Attack:
         each epoch (and the change since the last epoch): (1) model accuracy,
         (2) model loss, (3) attack loss, (3) l0, l2, and l∞ norms.
 
+        :param batch: current batch number
+        :type batch: int
         :param epoch: current epoch
         :type epoch: int
         :param xb: current batch of inputs
@@ -620,47 +624,58 @@ class Attack:
 
         # extract perturbation vectors from tanh-space if using cov
         pb = self.tanh_p(xb + pb, oi) if self.change_of_variables else pb
-        norms = [pb.norm(n, 1).sum().item() for n in (0, 2, torch.inf)]
-        for m, s in zip(self.results.keys(), (acc, aloss, mloss, *norms)):
+        nb = [pb.norm(n, 1).sum().item() for n in (0, 2, torch.inf)]
+
+        # extend result lists; first by batch, then by epoch
+        for m, s in zip(self.results.keys(), (acc, aloss, mloss, *nb)):
             try:
-                self.results[m][epoch] += s
+                self.results[m][batch].append(s)
             except IndexError:
-                self.results[m].append(s)
+                self.results[m].append([s])
 
         # build str representation and return
         return (
             f"Accuracy: {acc / yb.numel():.1%} "
-            f"({(acc - sum(self.results['acc'][-2:-1])) / yb.numel():+.1%}) "
+            f"({(acc - sum(self.results['acc'][batch][-2:-1])) / yb.numel():+.1%}) "
             f"Model Loss: {mloss:.2f} "
-            f"({mloss - sum(self.results['mloss'][-2:-1]):+6.2f}) "
+            f"({mloss - sum(self.results['mloss'][batch][-2:-1]):+6.2f}) "
             f"{self.name} Loss: {aloss:.2f} "
-            f"({aloss - sum(self.results['aloss'][-2:-1]):+6.2f}) "
-            f"l0: {norms[0] / yb.numel():.2f} "
-            f"({(norms[0] - sum(self.results['l0'][-2:-1])) / yb.numel():+.2f}) "
-            f"l2: {norms[1] / yb.numel():.2f} "
-            f"({(norms[1] - sum(self.results['l2'][-2:-1])) / yb.numel():+.2f}) "
-            f"l∞: {norms[2] / yb.numel():.2f} "
-            f"({(norms[2] - sum(self.results['linf'][-2:-1])) / yb.numel():+.2f})"
+            f"({aloss - sum(self.results['aloss'][batch][-2:-1]):+6.2f}) "
+            f"l0: {nb[0] / yb.numel():.2f} "
+            f"({(nb[0] - sum(self.results['l0'][batch][-2:-1])) / yb.numel():+.2f}) "
+            f"l2: {nb[1] / yb.numel():.2f} "
+            f"({(nb[1] - sum(self.results['l2'][batch][-2:-1])) / yb.numel():+.2f}) "
+            f"l∞: {nb[2] / yb.numel():.2f} "
+            f"({(nb[2] - sum(self.results['linf'][batch][-2:-1])) / yb.numel():+.2f})"
         )
 
-    def tanh_p(self, x, o_x):
+    def tanh_p(self, x, o_x, into=False):
         """
         This method extracts the perturbation vector when using change of
         variables. When using the technique, the computed perturbation is in
         the tanh-space (which is convenient when returning adversarial examples
-        directly). To properly compute progress statistics as well as projecting
-        onto l2-norm balls (parameterized by epsilon), this method extracts the
-        perturbation vector in the real space by first mapping the current input
-        out of the tanh-space and subtracting it from the original input.
+        directly). To properly compute progress statistics as well as
+        projecting onto l2-norm balls (parameterized by epsilon), this method
+        extracts the perturbation vector in the real space by first mapping the
+        current input out of the tanh-space and subtracting it from the
+        original input. Moreover, to facilitate mapping perturbations into the
+        tanh-space, this also supports an out-of-place-non-scaled version of
+        the procedure defined in tanh_map.
 
         :param x: adversarial examples in tanh-space
         :type x: torch Tensor object (n, m)
         :param o_x: original inputs
-        :type o_x: torhc tensor object (n, m)
+        :type o_x: torch tensor object (n, m)
+        :param into: whether to map into (or out of) the tanh-space
+        :type into: bool
         :return: perturbation vector mapped out of tanh-space
         :rtype: torch Tensor object (n, m)
         """
-        return traveler.tanh_space(x).sub(o_x)
+        return (
+            o_x.mul(2).sub(1).arctanh().sub(x)
+            if into
+            else traveler.tanh_space(x).sub(o_x)
+        )
 
 
 def attack_builder(
