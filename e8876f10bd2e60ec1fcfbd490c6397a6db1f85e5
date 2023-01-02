@@ -1,0 +1,1 @@
+jsma now passes both functional and semantic tests (for semantic, either set alpha to 0.01 and go for 360 iterations or set alpha to 1 and go for 4 iterations; notably, remove early termination from ART for this test to pass (line 184))
