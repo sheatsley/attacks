@@ -74,15 +74,6 @@ class Surface:
             "lp": norm.__name__,
             "smap": type(saliency_map).__name__,
         }
-        self.stats = {
-            "acc": [],
-            "attack_loss": [],
-            "model_loss": [],
-            "l0": [],
-            "l2": [],
-            "linf": [],
-        }
-        self.statistics = ""
         return None
 
     def __call__(self, x, y, p):
@@ -133,8 +124,9 @@ class Surface:
             loss=loss.view(-1, c_j),
             y=y,
         )
+        dist = (c.sub(p).abs() for c in self.clip)
         final_grads = (
-            self.norm(smap_grads, self.clip, self.loss.max_obj)
+            self.norm(smap_grads, dist, self.loss.max_obj)
             if self.norm is l0
             else self.norm(smap_grads)
         )
@@ -142,21 +134,6 @@ class Surface:
         # call closure subroutines and attach grads to the perturbation vector
         [comp.closure(final_grads) for comp in self.closure]
         p.grad = final_grads
-
-        # collect progress statistics and set update string
-        logits = self.model(self.change_of_variables(x + p), False)
-        acc = logits.argmax(1).eq(y).sum().div(y.numel()).item()
-        attack_loss = self.loss(logits, y).sum().item()
-        model_loss = self.model.loss(logits, y).item()
-        l0_norm = p.norm(0, 1).mean().item()
-        l2_norm = p.norm(2, 1).mean().item()
-        linf_norm = p.norm(torch.inf, 1).mean().item()
-        self.stats["acc"].append(acc)
-        self.stats["attack_loss"].append(attack_loss)
-        self.stats["model_loss"].append(model_loss)
-        self.stats["l0"].append(l0_norm)
-        self.stats["l2"].append(l2_norm)
-        self.stats["linf"].append(linf_norm)
         return None
 
     def __repr__(self):
@@ -211,7 +188,7 @@ def linf(g):
     return g.sign_()
 
 
-def l0(g, clip, max_obj):
+def l0(g, dist, max_obj):
     """
     This function projects gradients into the l0-norm space. Specifically,
     features are scored by the product of their gradients and the distance
@@ -222,16 +199,16 @@ def l0(g, clip, max_obj):
 
     :param g: the gradients of the perturbation vector
     :type g: torch Tensor object (n, m)
-    :param clip: the range of allowable values for the perturbation vector
-    :type clip: tuple of torch Tensor objects (n, m)
+    :param dist: distance remaining for the perturbation vector
+    :type dist: tuple of torch Tensor objects (n, m)
     :param max_obj: whether the used loss function is to be maximized
     :type max_obj: bool
     :return: gradients projected into the l0-norm space
     :rtype: torch Tensor object (n, m)
     """
-    component_direction = g.sign().mul_(1 if max_obj else -1).add_(1).div_(2).bool()
-    g.mul_(torch.where(component_direction, *clip))
-    bottom_k = g.abs_().topk(int(g.size(1) * 0.99), dim=1, largest=False)
+    min_clip = g.sign().mul_(-1 if max_obj else 1).add_(1).div_(2).bool()
+    g.mul_(torch.where(min_clip, *dist))
+    bottom_k = g.abs().topk(int(g.size(1) * 0.99), dim=1, largest=False)
     return g.scatter_(dim=1, index=bottom_k.indices, value=0).sign_()
 
 
