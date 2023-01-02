@@ -163,17 +163,23 @@ class JacobianSaliency:
     https://arxiv.org/pdf/1511.07528.pdf. Specifically, the Jacobian saliency
     map as used in https://arxiv.org/pdf/2209.04521.pdf is defined as:
 
-         |J_y| * Σ_[i ≠ y] J_i if sign(J_y) ≠ sign(Σ_[i ≠ y] J_i) else 0
+         J_y * |Σ_[i ≠ y]| J_i if sign(J_y) ≠ sign(Σ_[i ≠ y] J_i) else 0
 
     where J is the model Jacobian, y is the true class, and i are all other
     classes. Algorithmically, the Jacobian saliency map aggregates gradients in
     each row (i.e., class) such that each column (i.e., feature) is set equal
-    to the negative of the product of the yth row and the sum of non-yth rows
-    (i.e., i) if and only if the signs of the yth row and sum of non-yth rows
-    is different. Conceptually, this prioritizes features whose gradients both:
-    (1) point away from the true class, and (2) point towards non-true classes.
-    Finally, this class defines the jac_req attribute to signal Surface objects
-    that this class expects a full model Jacobian.
+    to the product of the yth row and the sum of non-yth rows (i.e., i) if and
+    only if the signs of the yth row and sum of non-yth rows is different.
+    Conceptually, this prioritizes features whose gradients both: (1) point
+    away from the true class, and (2) point towards non-true classes. Finally,
+    this class defines the jac_req attribute to signal Surface objects that
+    this class expects a full model Jacobian. Notably, in this formulation, the
+    absolute value is taken on the sum of non-yth rows (as opposed to the yth
+    row, as done in https://arxiv.org/pdf/2209.04521.pdf). This change is to
+    provide a conceptually similar saliency map to DeepFool (in that
+    subtracting the DeepFool saliency map reduces model accuracy) given that
+    PyTorch optimizers now directly support maximizing or minimizing objective
+    functions since 1.31.
 
     :func:`__init__`: instantiates JacobianSaliency objects.
     :func:`__call__`: applies a JSMA-like heuristic
@@ -214,7 +220,7 @@ class JacobianSaliency:
         ith_row = g.sum(1).sub(yth_row)
 
         # zero out components whose yth and ith signs are equal and compute product
-        smap = (yth_row.sign() != ith_row.sign()).mul(yth_row.abs()).mul(ith_row)
+        smap = (yth_row.sign() != ith_row.sign()).mul(yth_row).mul(ith_row.abs())
         return smap
 
 
