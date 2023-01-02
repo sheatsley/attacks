@@ -559,7 +559,7 @@ class Attack:
         :rtype: NoneType
         """
         i = p.norm(0, 1) > self.epsilon
-        p[i] = self.prevp_p[i].where(self.prev_p[i] == 0, p[i]) if i.any() else 0.0
+        p[i] = self.prev_p[i].where(self.prev_p[i] == 0, p[i]) if i.any() else 0.0
         self.prev_p = p.detach().clone()
         return None
 
