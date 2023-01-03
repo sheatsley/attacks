@@ -15,6 +15,8 @@ import dlm  # pytorch--based deep learning models with scikit-learn-like interfa
 import importlib  # The implementation of import
 import mlds  # Scripts for downloading, preprocessing, and numpy-ifying popular machine learning datasets
 import numpy as np  # The fundamental package for scientific computing with Python
+import pathlib  # Object-oriented filesystem paths
+import pickle  # Python object serialization
 import unittest  # Unit testing framework
 import torch  # Tensors and Dynamic neural networks in Python with strong GPU acceleration
 
@@ -144,15 +146,35 @@ class BaseTest(unittest.TestCase):
             f"({maxs.min().item()}, ..., {maxs.max().item()}))"
         )
 
-        # train model and save craftset clean accuracy (for semantic tests)
+        # load model hyperparameters
         cls.reset_seeds()
         template = getattr(dlm.architectures, dataset)
         cls.model = (
-            dlm.CNNClassifier(template=template)
+            dlm.CNNClassifier(**template.CNNClassifier)
             if template.CNNClassifier is not None
-            else dlm.MLPClassifier(template=template)
+            else dlm.MLPClassifier(**template.MLPClassifier)
         )
-        cls.model.fit(*(x, y) if has_test else (cls.x, cls.y), shape=shape)
+
+        # train (or load) model and save craftset accuracy (for semantic tests)
+        try:
+            path = pathlib.Path(f"/tmp/aml_trained_{dataset}_model.pkl")
+            with path.open("rb") as f:
+                state = pickle.load(f)
+            temp_to_apply = getattr(template, cls.model.__class__.__name__)
+            assert state["template"] == temp_to_apply, "Hyperparameters have changed"
+            assert state["seed"] == seed, f"Seed changed: {state['seed']} != {seed}"
+            cls.model = state["model"]
+            print(f"Using pretrained {dataset} model from {path}")
+        except (FileNotFoundError, AssertionError) as e:
+            print(f"Training new model... ({e})")
+            cls.model.fit(*(x, y) if has_test else (cls.x, cls.y), shape=shape)
+            state = {
+                "model": cls.model,
+                "template": getattr(template, cls.model.__class__.__name__),
+                "seed": seed,
+            }
+            with path.open("wb") as f:
+                pickle.dump(state, f)
         cls.clean_acc = cls.model.accuracy(cls.x, cls.y).item()
 
         # instantiate attacks and save attack parameters
@@ -224,7 +246,7 @@ class BaseTest(unittest.TestCase):
             ),
             loss=cls.attack_params["model"].loss,
             optimizer=cls.attack_params["model"].optimizer,
-            input_shape=cls.x.shape,
+            input_shape=(cls.x.size(1),),
             nb_classes=cls.attack_params["model"].params["classes"],
         )
 
@@ -245,7 +267,8 @@ class BaseTest(unittest.TestCase):
         """
         This method crafts adversarial examples with APGD-CE (Auto-PGD with CE
         loss) (https://arxiv.org/pdf/2003.01690.pdf). The supported frameworks
-        for APGD-CE include ART and Torchattacks.
+        for APGD-CE include ART and Torchattacks. Notably, the Torchattacks
+        implementation assumes an image (batches, channels, width, height).
 
         :return: APGD-CE adversarial examples
         :rtype: tuple of torch Tensor objects (n, m)
@@ -273,23 +296,30 @@ class BaseTest(unittest.TestCase):
                 ),
                 "ART",
             )
-        if "torchattacks" in self.available:
+        if (
+            "torchattacks" in self.available
+            and "shape" in self.attack_params["model"].params
+        ):
             from torchattacks import APGD
 
             print("Producing APGD-CE adversarial examples with Torchattacks...")
             self.reset_seeds()
+            ta_x = self.x.clone().unflatten(
+                1, self.attack_params["model"].params["shape"]
+            )
             ta_adv = (
                 APGD(
                     model=self.attack_params["model"],
                     norm="Linf",
                     eps=self.linf,
+                    steps=self.attack_params["epochs"],
                     n_restarts=1,
                     seed=self.seed,
                     loss="ce",
                     eot_iter=1,
                     rho=self.attack_params["alpha"],
                     verbose=True,
-                )(inputs=self.x.clone(), labels=self.y),
+                )(inputs=ta_x, labels=self.y,).flatten(1),
                 "Torchattacks",
             )
         self.reset_seeds()
@@ -302,12 +332,14 @@ class BaseTest(unittest.TestCase):
         This method crafts adversarial examples with APGD-DLR (Auto-PGD with
         DLR loss) (https://arxiv.org/pdf/2003.01690.pdf). The supported
         frameworks for APGD-DLR include ART and Torchattacks. Notably, DLR loss
-        is undefined when there are only two classes.
+        is undefined when there are only two classes. Moreover, the
+        Torchattacks implementation assumes an image (batches, channels, width,
+        height).
 
         :return: APGD-DLR adversarial examples
         :rtype: tuple of torch Tensor objects (n, m)
         """
-        art_adv = None
+        art_adv = ta_adv = None
         if "art" in self.available and self.art_classifier.nb_classes > 2:
             from art.attacks.evasion import AutoProjectedGradientDescent
 
@@ -330,23 +362,31 @@ class BaseTest(unittest.TestCase):
                 ),
                 "ART",
             )
-        if "torchattacks" in self.available:
+        if (
+            "torchattacks" in self.available
+            and self.art_classifier.nb_classes > 2
+            and "shape" in self.attack_params["model"].params
+        ):
             from torchattacks import APGD
 
             print("Producing APGD-DLR adversarial examples with Torchattacks...")
             self.reset_seeds()
+            ta_x = self.x.clone().unflatten(
+                1, self.attack_params["model"].params["shape"]
+            )
             ta_adv = (
                 APGD(
                     model=self.attack_params["model"],
                     norm="Linf",
                     eps=self.linf,
+                    steps=self.attack_params["epochs"],
                     n_restarts=1,
                     seed=self.seed,
                     loss="dlr",
                     eot_iter=1,
                     rho=self.attack_params["alpha"],
                     verbose=True,
-                )(inputs=self.x.clone(), labels=self.y),
+                )(inputs=ta_x, labels=self.y).flatten(1),
                 "Torchattacks",
             )
         self.reset_seeds()
@@ -1120,20 +1160,6 @@ class SemanticTests(BaseTest):
         """
         super().setUpClass()
         cls.max_perf_degrad = max_perf_degrad
-        if "art" in cls.available:
-            from art.estimators.classification import PyTorchClassifier
-
-            cls.art_classifier = PyTorchClassifier(
-                model=cls.attack_params["model"].model,
-                clip_values=(
-                    cls.attack_params["clip"][0].max().item(),
-                    cls.attack_params["clip"][1].min().item(),
-                ),
-                loss=cls.attack_params["model"].loss,
-                optimizer=cls.attack_params["model"].optimizer,
-                input_shape=cls.x.shape,
-                nb_classes=cls.attack_params["model"].params["classes"],
-            )
         return None
 
     def semantic_test(self, attack, fws):
