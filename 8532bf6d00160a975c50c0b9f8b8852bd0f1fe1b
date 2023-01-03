@@ -1,0 +1,1 @@
+APGDCE is passing semantic tests and DLR is close. At this time, the only attack left to be validated is FAB. Next step is to step through APGDCE in torchattacks to see where the divergence is (There is logic in TA for early termination and EoT)
