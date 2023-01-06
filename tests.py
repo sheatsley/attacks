@@ -317,7 +317,9 @@ class BaseTest(unittest.TestCase):
                     seed=self.seed,
                     loss="ce",
                     eot_iter=1,
-                    rho=self.attack_params["alpha"],
+                    rho=self.attacks["apgdce"].traveler.optimizer.param_groups[0][
+                        "rho"
+                    ],
                     verbose=True,
                 )(inputs=ta_x, labels=self.y,).flatten(1),
                 "Torchattacks",
