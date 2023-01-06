@@ -90,7 +90,7 @@ class Traveler:
         """
         return f"Traveler({self.params})"
 
-    def initialize(self, x, p):
+    def initialize(self, cnb, cmb, x, p):
         """
         This method performs any preprocessing and initialization steps prior
         to crafting adversarial examples. Specifically, some attacks (1)
@@ -125,6 +125,9 @@ class Traveler:
         # last subroutine: reinstantiate the optimizer with the perturbation vector
         print(f"Attaching perturbation vector to {type(self.optimizer).__name__}...")
         self.optimizer.__init__([p], **self.optimizer.defaults)
+        self.optimizer.x = x
+        self.optimizer.cnb = cnb
+        self.optimizer.cmb = cmb
         return None
 
 
