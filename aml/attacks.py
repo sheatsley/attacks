@@ -484,36 +484,17 @@ class Attack:
         xi, yi, pi, oi = (t.split(batch_size) for t in (x, y, p, o_x))
         for b, (xb, yb, pb, ob) in enumerate(zip(xi, yi, pi, oi)):
             print(f"On batch {b + 1} of {num_batches} {(b + 1) / num_batches:.1%}...")
-            cnb, cmb = (c.sub(xb) for c in clip)
-            self.surface.initialize((cnb, cmb), pb)
-            self.traveler.initialize(cnb, cmb, xb, pb)
-            pb.clamp_(cnb, cmb)
+            cnb, cxb = (c.sub(xb) for c in clip)
+            self.surface.initialize((cnb, cxb), pb)
+            self.traveler.initialize(xb, pb)
+            pb.clamp_(cnb, cxb)
             proj_args = (xb, ob) if self.change_of_variables else (None, None)
             self.project(pb, *proj_args)
             for epoch in range(self.epochs):
                 self.surface(xb, yb, pb)
                 self.traveler()
-                # pb.clamp_(cnb, cmb)
-                pb[:] = (
-                    torch.clamp(
-                        torch.min(torch.max(xb + pb, xb - 0.15), xb + 0.15),
-                        0.0,
-                        1.0,
-                    )
-                    - xb
-                )
-                # self.project(pb, *proj_args)
-                print(
-                    f"e={epoch} current momentum buff:",
-                    (
-                        xb
-                        + pb
-                        - (xb + self.traveler.optimizer.state[pb]["momentum_buffer"])
-                    )
-                    .sum()
-                    .item(),
-                )
-                print(f"e={epoch} adv after clip proj sum:", (xb + pb).sum().item())
+                pb.clamp_(cnb, cxb)
+                self.project(pb, *proj_args)
                 print(
                     f"Epoch {epoch + 1:{len(str(self.epochs))}} / {self.epochs}",
                     self.progress(b, epoch, xb, yb, pb, ob),
@@ -522,7 +503,6 @@ class Attack:
                 )
 
         # compute final statistics and get perturbation vector if using cov
-        # breakpoint()
         avg = ("acc", "l0", "l2", "linf")
         for m in self.results:
             self.results[m] = [
