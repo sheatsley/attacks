@@ -219,7 +219,7 @@ class MomentumBestStart(torch.optim.Optimizer):
                 state["lr"] = torch.full((p.size(0), 1), 2 * group["epsilon"])
                 state["lr_updated"] = torch.zeros(p.size(0), dtype=torch.bool)
                 state["num_loss_updates"] = torch.zeros(p.size(0), dtype=torch.int)
-                state["max_loss"] = torch.zeros(p.size(0))
+                state["max_loss"] = torch.full((p.size(0),), -torch.inf)
                 state["max_loss_updated"] = torch.zeros(p.size(0), dtype=torch.bool)
                 state["momentum_buffer"] = p.clone()
                 state["prev_loss"] = torch.zeros(p.size(0))
