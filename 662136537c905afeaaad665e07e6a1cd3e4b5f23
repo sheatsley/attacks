@@ -1,0 +1,1 @@
+finalized apgdce implementation. even using torchattacks repo as-is, we are now at 4.2% accuracy (removing clipping within step actually helped). turns out the original update rule was nearly correct... subtracting tensors is not fun... momentum step was largely incorrect, but things weren't too far off.
