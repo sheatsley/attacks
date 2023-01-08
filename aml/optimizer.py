@@ -153,8 +153,8 @@ class MomentumBestStart(torch.optim.Optimizer):
         epsilon,
         maximize,
         alpha=0.75,
-        min_plen=0.06,
         pdecay=0.03,
+        pmin=0.06,
         rho=0.75,
         **kwargs,
     ):
@@ -179,10 +179,10 @@ class MomentumBestStart(torch.optim.Optimizer):
         :type epsilon: float
         :param pdecay: period length decay
         :type pdecay: float
+        :param pmin: minimum period length
+        :type pmin: float
         :param maximize: whether to maximize or minimize the objective function
         :type maximize: bool
-        :param min_plen: minimum period length
-        :type min_plen: float
         :param params: the parameters to optimize over
         :type params: tuple of torch Tensor objects (n, m)
         :param rho: minimum percentage of successful updates between checkpoints
@@ -191,33 +191,17 @@ class MomentumBestStart(torch.optim.Optimizer):
         :rtype: MomentumBestStart object
         """
 
-        # precompute checkpoints
-        pj = [0, 0.22]
-        while pj[-1] < 1:
-            pj.append(pj[-1] + max(pj[-1] - pj[-2] - pdecay, min_plen))
+        # precompute checkpoints (first checkpoint is initialized to 22%)
+        wdecay, wmin, wj = (max(int(epochs * w), 1) for w in (pdecay, pmin, 0.22))
+        wj = [0, wj]
+        while wj[-1] < epochs:
+            wj.append(wj[-1] + max(wj[-1] - wj[-2] - wdecay, wmin))
         super().__init__(
             params,
             {
                 "atk_loss": atk_loss,
                 "alpha": alpha,
-                # "checkpoints": {-int(-p * epochs) for p in pj[1:-1]},
-                "checkpoints": {
-                    6,
-                    11,
-                    15,
-                    18,
-                    20,
-                    21,
-                    22,
-                    23,
-                    24,
-                    25,
-                    26,
-                    27,
-                    28,
-                    29,
-                    30,
-                },
+                "checkpoints": {w for w in wj[:-1]},
                 "epochs": epochs,
                 "epsilon": epsilon,
                 "maximize": maximize,
@@ -229,16 +213,16 @@ class MomentumBestStart(torch.optim.Optimizer):
         for group in self.param_groups:
             for p in group["params"]:
                 state = self.state[p]
-                state["best_p"] = p.detach().clone()
-                state["best_p_grad"] = torch.zeros_like(p)
+                state["best_p"] = p.clone()
+                state["best_grad"] = torch.zeros_like(p)
                 state["epoch"] = 0
-                state["lr"] = torch.full((p.size(0),), 2 * group["epsilon"])
-                state["lr_updated"] = torch.full(state["lr"].size(), False)
-                state["num_loss_updates"] = torch.zeros(state["lr"].size())
-                state["max_loss"] = torch.zeros(state["lr"].size())
-                state["max_loss_updated"] = torch.full(state["lr"].size(), False)
-                state["momentum_buffer"] = p.detach().clone()
-                state["prev_loss"] = torch.zeros(state["lr"].size())
+                state["lr"] = torch.full((p.size(0), 1), 2 * group["epsilon"])
+                state["lr_updated"] = torch.zeros(p.size(0), dtype=torch.bool)
+                state["num_loss_updates"] = torch.zeros(p.size(0), dtype=torch.int)
+                state["max_loss"] = torch.zeros(p.size(0))
+                state["max_loss_updated"] = torch.zeros(p.size(0), dtype=torch.bool)
+                state["momentum_buffer"] = p.clone()
+                state["prev_loss"] = torch.zeros(p.size(0))
                 state["step"] = 0
         return None
 
@@ -261,124 +245,45 @@ class MomentumBestStart(torch.optim.Optimizer):
                 grad = p.grad.data if group["maximize"] else -p.grad.data
                 state = self.state[p]
 
-                # update max loss and best perturbations, element-wise
+                # save max loss with perturbations and gradients (saves a pass)
                 max_loss_inc = curr_loss.gt(state["max_loss"])
                 state["max_loss"][max_loss_inc] = curr_loss[max_loss_inc]
-                state["best_p"][max_loss_inc] = p[max_loss_inc].detach().clone()
-                state["best_p_grad"][max_loss_inc] = grad[max_loss_inc].clone()
-
-                # apply perturbation and momoentum steps
-                print(f"e={state['epoch']} best loss:", state["max_loss"])
-                print(
-                    f"e={state['epoch']} current adv @ basic step:",
-                    (self.x + p + grad * state["lr"].unsqueeze(1)).sum().item(),
-                )
-                # breakpoint()
-                talpha = group["alpha"] if state["epoch"] > 0 else 1
-                """
-                mb_to_p = p.sub(state["momentum_buffer"]).mul(1 - talpha)
-                state["momentum_buffer"] = p.detach().clone()
-                # state["momentum_buffer"].mul_(1 - talpha)
-                # grad.mul_(state["lr"].mul(talpha).unsqueeze(1))
-                grad.mul_(state["lr"].unsqueeze(1)).sub_(p).mul_(talpha)
-                # p.mul_(2).add_(state["momentum_buffer"]).add_(grad)
-                p.mul_(2).add_(mb_to_p).add_(grad)
-                """
-                """
-                mb_to_p = state["momentum_buffer"].mul(1 - talpha)
-                state["momentum_buffer"] = p.detach().clone()
-                grad.mul_(state["lr"].unsqueeze(1)).sub_(p).mul_(talpha)
-                p.mul_(2).add_(mb_to_p).add_(grad)
-                """
-                """
-                mb_to_p = p.sub(state["momentum_buffer"]).mul(1 - talpha)
-                state["momentum_buffer"] = p.detach().clone()
-                grad.mul_(state["lr"].unsqueeze(1)).mul_(talpha)
-                p.add_(grad).add_(mb_to_p)
-                """
-                # breakpoint()
-                """
-                mb_to_p = p.sub(state["momentum_buffer"]).mul(1 - talpha)
-                state["momentum_buffer"] = p.detach().clone()
-                # breakpoint()
-                first_grad = grad.mul(state["lr"].unsqueeze(1)) + p
-                first_grad = (
-                    torch.clamp(
-                        torch.min(
-                            torch.max(self.x + first_grad, self.x - 0.15), self.x + 0.15
-                        ),
-                        0.0,
-                        1.0,
-                    )
-                    - self.x
-                )
-                """
-                """
-                first_grad = (
-                    grad.mul(state["lr"].unsqueeze(1))
-                    .add(p)
-                    .clamp(-0.15, 0.15)
-                    # .clamp(self.cnb, self.cmb)
-                )
-                first_grad = (self.x + first_grad).clamp(0, 1).sub(self.x)
-                """
-                # second_grad = first_grad.sub(p).mul(talpha)
-                # p.add_(second_grad).add_(mb_to_p)
+                state["best_p"][max_loss_inc] = p[max_loss_inc].clone()
+                state["best_grad"][max_loss_inc] = grad[max_loss_inc].clone()
 
                 # perform checkpoint subroutines (and update associated info)
                 loss_inc = curr_loss.gt(state["prev_loss"])
                 state["num_loss_updates"][loss_inc] += 1
                 state["max_loss_updated"][max_loss_inc] = True
                 state["prev_loss"] = curr_loss
-                state["step"] += 1
                 if state["epoch"] in group["checkpoints"]:
-                    print("CHECKPOINT:", state["epoch"])
 
                     # loss increased <rho% or lr and max loss stayed the same?
                     c1 = state["num_loss_updates"].lt(group["rho"] * state["step"])
-                    c2 = (~state["lr_updated"]).logical_and(~state["max_loss_updated"])
+                    c2 = ~(state["lr_updated"].logical_or(state["max_loss_updated"]))
                     update = c1.logical_or(c2)
-                    print("NUM UPDATES:", update.sum().item(), update)
-                    if update.sum():
-                        # breakpoint()
-                        pass
 
                     # if so, half learning rate and reset perturbation to max loss
                     state["lr"][update] /= 2
-                    p[update] = state["best_p"][update]
-                    grad[update] = state["best_p_grad"][update]
+                    p[update] = state["best_p"][update].clone()
+                    grad[update] = state["best_grad"][update].clone()
 
                     # update checkpoint subroutine state
                     state["step"] = 0
                     state["lr_updated"][update] = True
                     state["lr_updated"][~update] = False
-                    state["num_loss_updates"].mul_(0)
-                    state["max_loss_updated"].mul_(False)
+                    state["num_loss_updates"].fill_(0)
+                    state["max_loss_updated"].fill_(False)
 
-                    # maybe check subroutines first, then do the update???
-                    # consider here that, for those updated, give them a step
-                mb_to_p = p.sub(state["momentum_buffer"]).mul(1 - talpha)
-                state["momentum_buffer"] = p.detach().clone()
-                # breakpoint()
-                first_grad = grad.mul(state["lr"].unsqueeze(1)) + p
-                first_grad = (
-                    torch.clamp(
-                        torch.min(
-                            torch.max(self.x + first_grad, self.x - 0.15),
-                            self.x + 0.15,
-                        ),
-                        0.0,
-                        1.0,
-                    )
-                    - self.x
-                )
-                second_grad = first_grad.sub(p).mul(talpha)
-                p.add_(second_grad).add_(mb_to_p)
+                # apply update step (simplified to mitigate underflow)
+                momentum = state["momentum_buffer"].mul_(group["alpha"] - 1)
+                state["momentum_buffer"] = p.clone()
+                grad.mul_(state["lr"]).mul_(group["alpha"])
+                p.mul_(2 - group["alpha"]).add_(grad).add_(momentum)
 
                 # update optimizer state
-                # state["momentum_buffer"] = p.detach().clone()
+                state["step"] += 1
                 state["epoch"] += 1
-                # state["step"] += 1
         return None
 
 
