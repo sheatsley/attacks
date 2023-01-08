@@ -32,6 +32,8 @@ import torch  # Tensors and Dynamic neural networks in Python with strong GPU ac
 # update FAB parameters when backwardsgd supports alpha_max
 # when doing min accuracy, we should only craft adversarial examples on inputs that are classified correctly
 # confirm out-of-place op changes to tanh map work well after implementing early termination
+# add adv torch
+# add foolbox
 
 
 class BaseTest(unittest.TestCase):
@@ -386,7 +388,9 @@ class BaseTest(unittest.TestCase):
                     seed=self.seed,
                     loss="dlr",
                     eot_iter=1,
-                    rho=self.attack_params["alpha"],
+                    rho=self.attacks["apgdce"].traveler.optimizer.param_groups[0][
+                        "rho"
+                    ],
                     verbose=True,
                 )(inputs=ta_x, labels=self.y).flatten(1),
                 "Torchattacks",
