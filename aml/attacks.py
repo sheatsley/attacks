@@ -19,8 +19,6 @@ import torch  # Tensors and Dynamic neural networks in Python with strong GPU ac
 # implement DDN (implement alternating SGD optimizer)
 # cleanup hparam updates
 # consider merging min_norm and carlini interfaces
-# epsilon and clipping  (min_p, max_p) do not work for l0, maybe l2 as well
-# ^ need to recompute clips at each iteration if we're going to depend on distance "left"
 # add perturbations visualizations in examples directory
 # have option to silence all prints (good for unittest)
 # l2 rr should be normlized by l2-norm and l0 norm should pick max l0 random features
@@ -293,6 +291,7 @@ class Attack:
         alpha,
         change_of_variables,
         clip,
+        early_termination,
         epochs,
         epsilon,
         loss_func,
@@ -312,6 +311,8 @@ class Attack:
 
         :param batch_size: crafting batch size (-1 for 1 batch)
         :type batch_size: int
+        :param early_termination: whether misclassified inputs are perturbed
+        :type early_termination: bool
         :param clip: range of allowable values for the domain
         :type clip: tuple of floats or tuple of torch Tensor object (n, m)
         :param epochs: number of optimization steps to perform
@@ -339,7 +340,7 @@ class Attack:
         :param norm: lp-space to project gradients into
         :type norm: surface module callable
         :param model: neural network
-        :type model: scikit-torch LinearClassifier-inherited object
+        :type model: dlm LinearClassifier-inherited object
         :param saliency_map: desired saliency map heuristic
         :type saliency_map: saliency module class
 
@@ -424,8 +425,11 @@ class Attack:
             loss_func, model, norm, saliency_map, change_of_variables
         )
 
-        # collect any registered hyperparameters
+        # collect any registered hyperparameters & configure early termination
         self.hparams = self.traveler.hparams | self.surface.hparams
+        self.et = (
+            lambda x, y: model(x, False).argmax(1).eq(y) if early_termination else True
+        )
         return None
 
     def __repr__(self):
@@ -467,21 +471,22 @@ class Attack:
         :rtype: torch Tensor object (n, m)
         """
 
-        # clone inputs, setup perturbation vector, chunks, epsilon, and clip
-        o_x = x.detach()
-        x = o_x.clone()
+        # configure inputs, perturbation vector, chunks, epsilon, and clips
+        et = self.et(x, y)
+        ox = x[et].detach()
+        x = x[et].detach()
         p = x.new_zeros(x.size())
         batch_size = x.size(0) if self.batch_size == -1 else self.batch_size
         num_batches = -(-x.size(0) // batch_size)
         clip = (
-            self.clip
+            (self.clip[0][et], self.clip[1][et])
             if all(isinstance(c, torch.Tensor) for c in self.clip)
             else tuple(torch.full_like(x, c) for c in self.clip)
         )
 
         # craft adversarial examples per batch
         print(f"Crafting {x.size(0)} adversarial examples with {self}...")
-        xi, yi, pi, oi = (t.split(batch_size) for t in (x, y, p, o_x))
+        xi, yi, pi, oi = (t.split(batch_size) for t in (x, y, p, ox))
         for b, (xb, yb, pb, ob) in enumerate(zip(xi, yi, pi, oi)):
             print(f"On batch {b + 1} of {num_batches} {(b + 1) / num_batches:.1%}...")
             cnb, cxb = (c.sub(xb) for c in clip)
@@ -491,7 +496,8 @@ class Attack:
             proj_args = (xb, ob) if self.change_of_variables else (None, None)
             self.project(pb, *proj_args)
             for epoch in range(self.epochs):
-                self.surface(xb, yb, pb)
+                et = self.et(xb, yb)
+                self.surface(xb[et], yb[et], pb[et])
                 self.traveler()
                 pb.clamp_(cnb, cxb)
                 self.project(pb, *proj_args)
@@ -508,7 +514,7 @@ class Attack:
             self.results[m] = [
                 sum(s) / (y.numel() if m in avg else 1) for s in zip(*self.results[m])
             ]
-        return self.tanh_p(x + p, o_x) if self.change_of_variables else p
+        return self.tanh_p(x + p, ox) if self.change_of_variables else p
 
     def linf(self, p, x=None, o_x=None):
         """
@@ -596,7 +602,7 @@ class Attack:
         """
         This method records various statistics on the adversarial example
         crafting process and returns a formatted string concisely representing
-        the state of the attack. pecifically, this computes the following at
+        the state of the attack. Specifically, this computes the following at
         each epoch (and the change since the last epoch): (1) model accuracy,
         (2) model loss, (3) attack loss, (3) l0, l2, and l∞ norms.
 
@@ -649,7 +655,7 @@ class Attack:
             f"({(nb[2] - sum(self.results['linf'][batch][-2:-1])) / yb.numel():+.2f})"
         )
 
-    def tanh_p(self, x, o_x, into=False):
+    def tanh_p(self, x, ox, into=False):
         """
         This method extracts the perturbation vector when using change of
         variables. When using the technique, the computed perturbation is in
@@ -664,17 +670,17 @@ class Attack:
 
         :param x: adversarial examples in tanh-space
         :type x: torch Tensor object (n, m)
-        :param o_x: original inputs
-        :type o_x: torch tensor object (n, m)
+        :param ox: original inputs
+        :type ox: torch tensor object (n, m)
         :param into: whether to map into (or out of) the tanh-space
         :type into: bool
         :return: perturbation vector mapped out of tanh-space
         :rtype: torch Tensor object (n, m)
         """
         return (
-            o_x.mul(2).sub(1).arctanh().sub(x)
+            ox.mul(2).sub(1).arctanh().sub(x)
             if into
-            else traveler.tanh_space(x).sub(o_x)
+            else traveler.tanh_space(x).sub(ox)
         )
 
 
@@ -682,6 +688,7 @@ def attack_builder(
     alpha=None,
     clip=None,
     epochs=None,
+    early_termination=None,
     epsilon=None,
     model=None,
     change_of_variables_enabled=(True, False),
@@ -729,6 +736,8 @@ def attack_builder(
     :type alpha: float
     :param clip: permissible values for the domain
     :type clip: tuple of floats or torch Tensor object (n, m)
+    :param early_termination: whether misclassified inputs are perturbed
+    :type early_termination: bool
     :param epochs: number of optimization steps to perform
     :type epochs: int
     :param epsilon: lp-norm ball threat model
@@ -736,7 +745,7 @@ def attack_builder(
     :param model: neural network
     :param verbosity: print attack statistics every verbosity%
     :type verbosity: float
-    :type model: scikit-torch LinearClassifier-inherited object
+    :type model: dlm LinearClassifier-inherited object
     :return: a generator yielding attack combinations
     :rtype: generator of Attack objects
     """
@@ -769,6 +778,7 @@ def attack_builder(
         yield Attack(
             alpha=alpha,
             change_of_variables=change_of_variables,
+            early_termination=early_termination,
             epochs=epochs,
             loss=loss_func,
             model=model,
@@ -792,12 +802,14 @@ def apgdce(alpha=None, clip=None, epochs=None, epsilon=None, model=None, verbosi
     :type alpha: float
     :param clip: range of allowable values for the domain
     :type clip: tuple of floats or torch Tensor object (n, m)
+    :param early_termination: whether misclassified inputs are perturbed
+    :type early_termination: bool
     :param epochs: number of optimization steps to perform
     :type epochs: int
     :param epsilon: lp-norm ball threat model
     :type epsilon: float
     :param model: neural network
-    :type model: scikit-torch LinearClassifier-inherited object
+    :type model: dlm LinearClassifier-inherited object
     :param verbosity: print attack statistics every verbosity%
     :type verbosity: float
     :return: APGD-CE attack
@@ -806,6 +818,7 @@ def apgdce(alpha=None, clip=None, epochs=None, epsilon=None, model=None, verbosi
     return Attack(
         alpha=alpha,
         clip=clip,
+        early_termination=False,
         epochs=epochs,
         epsilon=epsilon,
         model=model,
@@ -832,12 +845,14 @@ def apgddlr(alpha=None, clip=None, epochs=None, epsilon=None, model=None, verbos
     :type alpha: float
     :param clip: range of allowable values for the domain
     :type clip: tuple of floats or torch Tensor object (n, m)
+    :param early_termination: whether misclassified inputs are perturbed
+    :type early_termination: bool
     :param epochs: number of optimization steps to perform
     :type epochs: int
     :param epsilon: lp-norm ball threat model
     :type epsilon: float
     :param model: neural network
-    :type model: scikit-torch LinearClassifier-inherited object
+    :type model: dlm LinearClassifier-inherited object
     :param verbosity: print attack statistics every verbosity%
     :type verbosity: float
     :return: APGD-DLR attack
@@ -847,6 +862,7 @@ def apgddlr(alpha=None, clip=None, epochs=None, epsilon=None, model=None, verbos
         alpha=alpha,
         change_of_variables=False,
         clip=clip,
+        early_termination=False,
         epochs=epochs,
         epsilon=epsilon,
         loss_func=loss.DLRLoss,
@@ -871,12 +887,14 @@ def bim(alpha=None, clip=None, epochs=None, epsilon=None, model=None, verbosity=
     :type alpha: float
     :param clip: range of allowable values for the domain
     :type clip: tuple of floats or torch Tensor object (n, m)
+    :param early_termination: whether misclassified inputs are perturbed
+    :type early_termination: bool
     :param epochs: number of optimization steps to perform
     :type epochs: int
     :param epsilon: lp-norm ball threat model
     :type epsilon: float
     :param model: neural network
-    :type model: scikit-torch LinearClassifier-inherited object
+    :type model: dlm LinearClassifier-inherited object
     :param verbosity: print attack statistics every verbosity%
     :type verbosity: float
     :return: BIM attack
@@ -886,6 +904,7 @@ def bim(alpha=None, clip=None, epochs=None, epsilon=None, model=None, verbosity=
         alpha=alpha,
         change_of_variables=False,
         clip=clip,
+        early_termination=False,
         epochs=epochs,
         epsilon=epsilon,
         loss_func=loss.CELoss,
@@ -909,12 +928,14 @@ def cwl2(alpha=None, clip=None, epochs=None, epsilon=None, model=None, verbosity
     :type alpha: float
     :param clip: range of allowable values for the domain
     :type clip: tuple of floats or torch Tensor object (n, m)
+    :param early_termination: whether misclassified inputs are perturbed
+    :type early_termination: bool
     :param epochs: number of optimization steps to perform
     :type epochs: int
     :param epsilon: lp-norm ball threat model
     :type epsilon: float
     :param model: neural network
-    :type model: scikit-torch LinearClassifier-inherited object
+    :type model: dlm LinearClassifier-inherited object
     :param verbosity: print attack statistics every verbosity%
     :type verbosity: float
     :return: Carlini-Wagner l₂ attack
@@ -924,6 +945,7 @@ def cwl2(alpha=None, clip=None, epochs=None, epsilon=None, model=None, verbosity
         alpha=alpha,
         change_of_variables=True,
         clip=clip,
+        early_termination=True,
         epochs=epochs,
         epsilon=epsilon,
         loss_func=loss.CWLoss,
@@ -948,12 +970,14 @@ def df(alpha=None, clip=None, epochs=None, epsilon=None, model=None, verbosity=1
     :type alpha: float
     :param clip: range of allowable values for the domain
     :type clip: tuple of floats or torch Tensor object (n, m)
+    :param early_termination: whether misclassified inputs are perturbed
+    :type early_termination: bool
     :param epochs: number of optimization steps to perform
     :type epochs: int
     :param epsilon: lp-norm ball threat model
     :type epsilon: float
     :param model: neural network
-    :type model: scikit-torch LinearClassifier-inherited object
+    :type model: dlm LinearClassifier-inherited object
     :param verbosity: print attack statistics every verbosity%
     :type verbosity: float
     :return: DeepFool attack
@@ -963,6 +987,7 @@ def df(alpha=None, clip=None, epochs=None, epsilon=None, model=None, verbosity=1
         alpha=alpha,
         change_of_variables=False,
         clip=clip,
+        early_termination=True,
         epochs=epochs,
         epsilon=epsilon,
         loss_func=loss.IdentityLoss,
@@ -987,12 +1012,14 @@ def fab(alpha=None, clip=None, epochs=None, epsilon=None, model=None, verbosity=
     :type alpha: float
     :param clip: range of allowable values for the domain
     :type clip: tuple of floats or torch Tensor object (n, m)
+    :param early_termination: whether misclassified inputs are perturbed
+    :type early_termination: bool
     :param epochs: number of optimization steps to perform
     :type epochs: int
     :param epsilon: lp-norm ball threat model
     :type epsilon: float
     :param model: neural network
-    :type model: scikit-torch LinearClassifier-inherited object
+    :type model: dlm LinearClassifier-inherited object
     :param verbosity: print attack statistics every verbosity%
     :type verbosity: float
     :return: DeepFool attack
@@ -1002,6 +1029,7 @@ def fab(alpha=None, clip=None, epochs=None, epsilon=None, model=None, verbosity=
         alpha=alpha,
         change_of_variables=False,
         clip=clip,
+        early_termination=True,
         epochs=epochs,
         epsilon=epsilon,
         loss_func=loss.IdentityLoss,
@@ -1031,7 +1059,7 @@ def pgd(alpha=None, clip=None, epochs=None, epsilon=None, model=None, verbosity=
     :param epsilon: lp-norm ball threat model
     :type epsilon: float
     :param model: neural network
-    :type model: scikit-torch LinearClassifier-inherited object
+    :type model: dlm LinearClassifier-inherited object
     :param verbosity: print attack statistics every verbosity%
     :type verbosity: float
     :return: DeepFool attack
@@ -1041,6 +1069,7 @@ def pgd(alpha=None, clip=None, epochs=None, epsilon=None, model=None, verbosity=
         alpha=alpha,
         change_of_variables=False,
         clip=clip,
+        early_termination=False,
         epochs=epochs,
         epsilon=epsilon,
         loss_func=loss.CELoss,
@@ -1070,7 +1099,7 @@ def jsma(alpha=None, clip=None, epochs=None, epsilon=None, model=None, verbosity
     :param epsilon: lp-norm ball threat model
     :type epsilon: float
     :param model: neural network
-    :type model: scikit-torch LinearClassifier-inherited object
+    :type model: dlm LinearClassifier-inherited object
     :param verbosity: print attack statistics every verbosity%
     :type verbosity: float
     :return: DeepFool attack
@@ -1079,6 +1108,7 @@ def jsma(alpha=None, clip=None, epochs=None, epsilon=None, model=None, verbosity
     return Attack(
         alpha=alpha,
         clip=clip,
+        early_termination=True,
         epochs=epochs,
         change_of_variables=False,
         epsilon=epsilon,
