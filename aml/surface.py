@@ -31,11 +31,11 @@ class Surface:
         necessary for the remaining methods in this class. Conceputally,
         Surfaces are responsible for producing gradients from inputs, and thus,
         the following attributes are collected: (1) a PyTorch-based loss object
-        from the loss module, (2) a PyTorch-based model object from
-        scikit-torch (https://github.com/sheatsley/scikit-torch), (3) the
-        lp-norm to project gradients into, (4) the saliency map to apply, (5) a
-        tuple of callables to run on the input passed in to __call__. Notably,
-        the change_of_variables argument (configured in the traveler module)
+        from the loss module, (2) a PyTorch-based model object from dlm
+        (https://github.com/sheatsley/models), (3) the lp-norm to project
+        gradients into, (4) the saliency map to apply, (5) a tuple of callables
+        to run on the input passed in to __call__. Notably, the
+        change_of_variables argument (configured in the traveler module)
         determines if inputs should be mapped out of the tanh-space before
         passed into models, and (6) any component that has advertised
         optimizable hyperparameters.
@@ -44,7 +44,7 @@ class Surface:
         :param loss: objective function to differentiate
         :type loss: loss module object
         :param model: feedforward differentiable neural network
-        :type model: scikit-torch LinearClassifier-inherited object
+        :type model: dlm LinearClassifier-inherited object
         :param norm: lp-space to project gradients into
         :type norm: surface module callable
         :param saliency_map: desired saliency map heuristic
