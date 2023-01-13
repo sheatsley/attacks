@@ -58,9 +58,7 @@ class Surface:
         self.model = model
         self.norm = norm
         self.saliency_map = saliency_map
-        self.change_of_variables = (
-            traveler.tanh_space if change_of_variables else lambda x: x
-        )
+        self.cov = traveler.tanh_space if change_of_variables else lambda x: x
         self.closure = [
             comp for c in vars(self) if hasattr(comp := getattr(self, c), "closure")
         ]
@@ -113,7 +111,7 @@ class Surface:
 
         # map out of tanh-space, perform forward & backward passes
         p_j.requires_grad = True
-        loss = self.loss(self.model(self.change_of_variables(x_j + p_j)), y_j)
+        loss = self.loss(self.model(self.cov(x_j + p_j)), y_j)
         grad = torch.autograd.grad(loss, p_j, torch.ones_like(loss))[0]
         loss = loss.detach()
         p_j.requires_grad = False
@@ -170,7 +168,6 @@ class Surface:
 
         # subroutine (2): attach the perturbation vector to loss objects
         if self.loss.del_req:
-            print(f"Attaching perturbation vector to {type(self.loss).__name__}...")
             self.loss.attach(p)
         return None
 
