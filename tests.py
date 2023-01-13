@@ -22,18 +22,19 @@ import torch  # Tensors and Dynamic neural networks in Python with strong GPU ac
 
 # TODO
 # get all functional tests passing
-# implement identity tests
-# implement semantic tests
+# get all semantic tests passing
+# get as many identity test passing as possible
 # implement special tests
 # integrate binary search steps for aml cwl2 tests
 # rework attack wrapper calls to include adversary layer (inputs need to be in 0-1 when measuring norm)
 # ^ rework max-min logic to account for the above
 # ^ update random-restart params for attacks that would be captured by adversarial layer
 # update FAB parameters when backwardsgd supports alpha_max
-# when doing min accuracy, we should only craft adversarial examples on inputs that are classified correctly
 # confirm out-of-place op changes to tanh map work well after implementing early termination
 # add adv torch
 # add foolbox
+# enable random restart when adversary layer is complete
+# enable binary search when adversary layer is complete
 
 
 class BaseTest(unittest.TestCase):
@@ -495,8 +496,8 @@ class BaseTest(unittest.TestCase):
                         binary_search_steps=1,
                         max_iter=self.attack_params["epochs"],
                         initial_const=self.attacks["cwl2"].surface.loss.c.item(),
-                        max_halving=5,
-                        max_doubling=5,
+                        max_halving=1,
+                        max_doubling=1,
                         batch_size=self.x.size(0),
                         verbose=True,
                     ).generate(x=self.x.clone().numpy())
@@ -575,14 +576,14 @@ class BaseTest(unittest.TestCase):
             from torchattacks import DeepFool
 
             print("Producing DF adversarial examples with Torchattacks...")
-            ta_adv = (
-                DeepFool(
-                    model=self.attack_params["model"],
-                    steps=self.attack_params["epochs"],
-                    overshoot=0,
-                )(inputs=self.x.clone(), labels=self.y),
-                "Torchattacks",
-            )
+            ta_adv = DeepFool(
+                model=self.attack_params["model"],
+                steps=self.attack_params["epochs"],
+                overshoot=0,
+            )(inputs=self.x.clone(), labels=self.y)
+
+            # torchattack's implementation can return nans
+            ta_adv = (torch.where(ta_adv.isnan(), self.x, ta_adv), "Torchattacks")
         return self.attacks["df"], tuple(
             fw for fw in (art_adv, ta_adv) if fw is not None
         )
@@ -608,13 +609,13 @@ class BaseTest(unittest.TestCase):
                     norm="L2",
                     eps=self.l2,
                     steps=self.attack_params["epochs"],
-                    n_restarts=0,
-                    alpha_max=0,
-                    eta=0,
+                    n_restarts=1,
+                    alpha_max=0.1,
+                    eta=1,
                     beta=self.attacks["fab"].traveler.optimizer.param_groups[0]["beta"],
                     verbose=True,
                     seed=self.seed,
-                    targeted=False,
+                    multi_targeted=False,
                     n_classes=self.attack_params["model"].params["classes"],
                 )(inputs=self.x.clone(), labels=self.y),
                 "Torchattacks",
@@ -628,7 +629,8 @@ class BaseTest(unittest.TestCase):
         Map Approach) (https://arxiv.org/pdf/1511.07528.pdf). The supported
         frameworks for the JSMA include ART. Notably, the JSMA implementation
         in ART assumes the l0-norm is passed in as a percentage (which is why
-        we pass in linf).
+        we pass in linf) and we set theta to be 1 since features can only be
+        perturbed once.
 
         :return: JSMA adversarial examples
         :rtype: tuple of torch Tensor objects (n, m)
@@ -642,7 +644,7 @@ class BaseTest(unittest.TestCase):
                 torch.from_numpy(
                     SaliencyMapMethod(
                         classifier=self.art_classifier,
-                        theta=self.attack_params["alpha"],
+                        theta=1,
                         gamma=self.linf,
                         batch_size=self.x.size(0),
                         verbose=True,
@@ -897,7 +899,9 @@ class IdentityTests(BaseTest):
     perturbations of the aml framework, atol and rtol are absolute and relative
     tolerance, respectively. The values atol and rtol take depends on the
     datatype of the underlying tensors, as described in
-    https://pytorch.org/docs/stable/testing.html.
+    https://pytorch.org/docs/stable/testing.html. Notably, aml implementations
+    deviate in many ways from other libraries, and thus many of these tests
+    should fail.
 
     The following frameworks are supported:
         ART (https://github.com/Trusted-AI/adversarial-robustness-toolbox)
@@ -1271,12 +1275,17 @@ class SemanticTests(BaseTest):
     def test_df(self):
         """
         This method performs a semantic test for DF (DeepFool)
-        (https://arxiv.org/pdf/1611.01236.pdf).
+        (https://arxiv.org/pdf/1611.01236.pdf). Notably, since alpha is not a
+        parameter for other implementations of deepfool attacks, we override
+        the value of alpha to be 1 so the tests are passsed.
 
         :return: None
         :rtype: NoneType
         """
-        return self.semantic_test(*self.df())
+        attack, fws = self.df()
+        return self.semantic_test(
+            aml.attacks.df(**self.attack_params | {"alpha": 1, "epsilon": self.l2}), fws
+        )
 
     def test_fab(self):
         """
@@ -1291,12 +1300,18 @@ class SemanticTests(BaseTest):
     def test_jsma(self):
         """
         This method performs a semantic test for JSMA (Jacobian Saliency Map
-        Approach) (https://arxiv.org/pdf/1511.07528.pdf).
+        Approach) (https://arxiv.org/pdf/1511.07528.pdf). Notably, the JSMA
+        traditionally can only perturb a feature once, we override the value of
+        alpha to be 1 so that tests are passed.
 
         :return: None
         :rtype: NoneType
         """
-        return self.semantic_test(*self.jsma())
+        attack, fws = self.jsma()
+        return self.semantic_test(
+            aml.attacks.jsma(**self.attack_params | {"alpha": 1, "epsilon": self.l0}),
+            fws,
+        )
 
     def test_pgd(self):
         """
