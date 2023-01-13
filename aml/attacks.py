@@ -15,11 +15,9 @@ import torch  # Tensors and Dynamic neural networks in Python with strong GPU ac
 
 # TODO
 # implement unit test
-# add early termination support
 # cleanup hparam updates
 # consider merging min_norm and carlini interfaces
 # add perturbations visualizations in examples directory
-# have option to silence all prints (good for unittest)
 # l2 rr should be normlized by l2-norm and l0 norm should pick max l0 random features
 # for l0 clamp, need to check if cov makes 0s a very small number (check on prev_p == 0 would fail)
 # consider setting a min in tanh_p (like l2 norm) to mitigate underflow
@@ -120,11 +118,11 @@ class Adversary:
         criterion callables can require arbitrary arguments, it is assumed all
         such callables accept keyword arguments.
 
-        :param x: the batch of inputs to produce adversarial examples from
+        :param x: inputs to produce adversarial examples from
         :type x: torch Tensor object (n, m)
         :param y: the labels (or initial predictions) of x
         :type y: Pytorch Tensor object (n,)
-        :return: a batch of adversarial examples
+        :return: adversarial examples
         :rtype: torch Tensor object (n, m)
         """
 
@@ -184,11 +182,11 @@ class Adversary:
         norm than the previous iterate, then decrease the hyperparameter
         emphasizing misclassification, otherwise increase it.
 
-        :param x: the batch of inputs to produce adversarial examples from
+        :param x: inputs to produce adversarial examples from
         :type x: torch Tensor object (n, m)
-        :param curr_p: the current batch of perturbation vectors
+        :param curr_p: the current set of perturbation vectors
         :type curr_p: torch Tensor object (n, m)
-        :param prev_p: the previous  batch of perturbation vectors
+        :param prev_p: the previous set of perturbation vectors
         :type prev_p: torch Tensor object (n, m)
         :param y: the labels (or initial predictions) of x
         :type y: Pytorch Tensor object (n,)
@@ -205,11 +203,11 @@ class Adversary:
         https://arxiv.org/pdf/1706.06083.pdf. Specifically, it returns the set
         of perturbations whose loss is maximal.
 
-        :param x: the batch of inputs to produce adversarial examples from
+        :param x: inputs to produce adversarial examples from
         :type x: torch Tensor object (n, m)
-        :param curr_p: the current batch of perturbation vectors
+        :param curr_p: the current set of perturbation vectors
         :type curr_p: torch Tensor object (n, m)
-        :param best_p: the previous  batch of perturbation vectors
+        :param best_p: the previous set of perturbation vectors
         :type best_p: torch Tensor object (n, m )
         :param y: the labels (or initial predictions) of x
         :type y: Pytorch Tensor object (n,)
@@ -227,11 +225,11 @@ class Adversary:
         of perturbations whose norm is minimal (while still being
         misclassified).
 
-        :param x: the batch of inputs to produce adversarial examples from
+        :param x: inputs to produce adversarial examples from
         :type x: torch Tensor object (n, m)
-        :param curr_p: the current batch of perturbation vectors
+        :param curr_p: the current set of perturbation vectors
         :type curr_p: torch Tensor object (n, m)
-        :param best_p: the previous  batch of perturbation vectors
+        :param best_p: the previous set of perturbation vectors
         :type best_p: torch Tensor object (n, m )
         :param y: the labels (or initial predictions) of x
         :type y: Pytorch Tensor object (n,)
@@ -251,10 +249,10 @@ class Adversary:
         always return numpy arrays, this method additionally casts these inputs
         back as PyTorch tensors with the original data type.
 
-        :param x: the batch of inputs to scale
+        :param x: inputs to scale
         :type x: torch Tensor object (n, m)
         :param transform: performs the transformation if true; the inverse if false
-        :return: a batch of scaled inputs
+        :return: scaled inputs
         :rtype: torch Tensor object (n, m)
         """
         if transform:
@@ -277,7 +275,7 @@ class Attack:
 
     :func:`__init__`: instantiates Attack objects
     :func:`__repr__`: returns the attack name (based on the components)
-    :func:`craft`: returns a batch of adversarial examples
+    :func:`craft`: returns a set of adversarial examples
     :func:`linf`: clamps inputs to domain and linf threat model
     :func:`l0`: clamps inputs to domain and l0 threat model
     :func:`l2`: clamps inputs to domain and l2 threat model
@@ -364,6 +362,7 @@ class Attack:
         self.et = early_termination
         self.verbosity = max(1, int(epochs * verbosity))
         self.project = getattr(self, norm.__name__)
+        self.lp = {surface.l0: 0, surface.l2: 2, surface.linf: torch.inf}[norm]
         self.results = {m: [] for m in ("acc", "aloss", "mloss", "l0", "l2", "linf")}
         self.components = {
             "change of variables": change_of_variables,
@@ -460,38 +459,41 @@ class Attack:
         initilizations (i.e., change of variables and random restart), and
         iterates an epoch number of times.
 
-        :param x: the batch of inputs to produce adversarial examples from
+        :param x: inputs to produce adversarial examples from
         :type x: torch Tensor object (n, m)
         :param y: the labels (or initial predictions) of x
         :type y: Pytorch Tensor object (n,)
-        :return: the batch of perturbation vectors
+        :return: set of perturbation vectors
         :rtype: torch Tensor object (n, m)
         """
 
-        # initialize perturbation vectors, batches, early termination, & clips
+        # initialize perturbation vectors, batches, and clips
         x = x.detach().clone()
         p = x.new_zeros(x.size())
-        po = x.new_zeros(x.size())
         batch_size = x.size(0) if self.batch_size == -1 else self.batch_size
         num_batches = -(-x.size(0) // batch_size)
-        et = torch.full((y.numel(), 1), torch.nan)
         clip = (
             self.clip
             if all(isinstance(c, torch.Tensor) for c in self.clip)
             else tuple(torch.full_like(x, c) for c in self.clip)
         )
+        o = torch.where(
+            self.surface.model(x).argmax(1).ne(y).unsqueeze(1),
+            torch.zeros(x.size()),
+            torch.full(x.size(), torch.inf),
+        )
 
         # configure batches, attach objects, & apply perturbation inits
         print(f"Crafting {x.size(0)} adversarial examples with {self}...")
-        xi, yi, pi, oi, ei = (t.split(batch_size) for t in (x, y, p, po, et))
-        for b, (xb, yb, pb, ob, eb) in enumerate(zip(xi, yi, pi, oi, ei)):
+        xi, yi, pi, oi = (t.split(batch_size) for t in (x, y, p, o))
+        for b, (xb, yb, pb, ob) in enumerate(zip(xi, yi, pi, oi)):
             print(f"On batch {b + 1} of {num_batches} {(b + 1) / num_batches:.1%}...")
             cnb, cxb = (c.sub(xb) for c in clip)
             self.surface.initialize((cnb, cxb), pb)
             self.traveler.initialize(xb, pb)
             pb.clamp_(cnb, cxb)
             self.project(xb, pb)
-            self.progress(b, 0, xb, yb, pb, eb)
+            self.progress(b, 0, xb, yb, pb, ob)
 
             # compute peturbation updates, record progress, & update early termination
             for e in range(1, self.epochs + 1):
@@ -499,24 +501,18 @@ class Attack:
                 self.traveler()
                 pb.clamp_(cnb, cxb)
                 self.project(xb, pb)
-                progress = self.progress(b, e, xb, yb, pb, eb)
-                update = ((eb == e).add(not self.et)).flatten()
-                ob[update] = (
-                    self.tanh_p(xb[update], pb[update])
-                    if self.change_of_variables
-                    else p[update]
-                )
+                progress = self.progress(b, e, xb, yb, pb, ob)
                 print(
                     f"Epoch {e:{len(str(self.epochs))}} / {self.epochs} {progress}"
-                    if not e % self.verbosity
-                    else f"Epoch {e}... ({e / self.epochs:.1%})\r",
+                ) if not e % self.verbosity else print(
+                    f"Epoch {e}... ({e / self.epochs:.1%})", end="\r"
                 )
 
         # compute final statistics and get perturbation vector if using cov
         for m in self.results:
             d = y.numel() if m in ("acc", "l0", "l2", "linf") else 1
             self.results[m] = [sum(s) / d for s in zip(*self.results[m])]
-        return po
+        return o.nan_to_num_(nan=None, posinf=0)
 
     def linf(self, x, p):
         """
@@ -594,13 +590,14 @@ class Attack:
             p.copy_(p.where(norm <= self.epsilon, self.tanh_p(x, p, True)))
         return None
 
-    def progress(self, batch, epoch, xb, yb, pb, eb):
+    def progress(self, batch, epoch, xb, yb, pb, ob):
         """
         This method records various statistics on the adversarial example
-        crafting process and returns a formatted string concisely representing
-        the state of the attack. Specifically, this computes the following at
-        each epoch (and the change since the last epoch): (1) model accuracy,
-        (2) model loss, (3) attack loss, (3) l0, l2, and l∞ norms. Moreover, it
+        crafting process, updates final perturbations when using early
+        termination, and returns a formatted string concisely representing the
+        state of the attack. Specifically, this computes the following at each
+        epoch (and the change since the last epoch): (1) model accuracy, (2)
+        model loss, (3) attack loss, (3) l0, l2, and l∞ norms. Moreover, it
         also updates the early termination state of the current batch since
         model accuracy is computed.
 
@@ -614,26 +611,36 @@ class Attack:
         :type yb: torch Tensor object (n,)
         :param pb: current batch of perturbations
         :type pb: torch Tensor object (n, m)
-        :param eb: current early termination state
-        :type eb: torch Tensor object (n,)
+        :param ob: final batch of perturbations (when using early termination)
+        :type ob: torch Tensor object (n, m)
         :return: print-ready statistics
         :rtype: str
         """
 
         # compute absolute stats (averaged on exit) & update early termination
-        logits = self.surface.model(self.surface.change_of_variables(xb + pb), False)
+        logits = self.surface.model(self.surface.cov(xb + pb))
+        mloss = self.surface.model.loss(logits, yb).item()
+        ali = self.surface.loss(logits, yb)
+        aloss = ali.sum().item()
         correct = logits.argmax(1).eq(yb)
         acc = correct.sum().item()
-        aloss = self.surface.loss(logits, yb).sum().item()
-        mloss = self.surface.model.loss(logits, yb).item()
-        eb[(~correct).logical_and_(eb.isnan().flatten())] = epoch
 
         # extract perturbation vectors from tanh-space if using cov
         pb = self.tanh_p(xb, pb) if self.change_of_variables else pb
         nb = [pb.norm(n, 1).sum().item() for n in (0, 2, torch.inf)]
 
+        # update early termination and output buffer
+        if self.et:
+            smaller = pb.norm(self.lp, 1).lt(ob.norm(self.lp, 1))
+            update = (~correct).logical_and_(smaller)
+        else:
+            ologits = self.surface.model(self.surface.cov(xb) + ob.nan_to_num(posinf=0))
+            oloss = self.surface.loss(ologits, yb)
+            update = oloss.lt(ali) if self.surface.loss.max_obj else oloss.gt(ali)
+        ob[update] = pb[update]
+
         # extend result lists; first by batch, then by epoch
-        for m, s in zip(self.results.keys(), (acc, aloss, mloss, *nb)):
+        for m, s in zip(self.results.keys(), (acc, mloss, aloss, *nb)):
             try:
                 self.results[m][batch].append(s)
             except IndexError:
