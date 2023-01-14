@@ -35,6 +35,8 @@ import torch  # Tensors and Dynamic neural networks in Python with strong GPU ac
 # add foolbox
 # enable random restart when adversary layer is complete
 # enable binary search when adversary layer is complete
+# configure verbosity level to be binary for all frameworks
+# adjust prints to be based on longest framework string
 
 
 class BaseTest(unittest.TestCase):
@@ -49,8 +51,11 @@ class BaseTest(unittest.TestCase):
     from aml and other supported adversarial machine learning frameworks.
 
     The following frameworks are supported:
+        AdverTorch (https://github.com/BorealisAI/advertorch)
         ART (https://github.com/Trusted-AI/adversarial-robustness-toolbox)
         CleverHans (https://github.com/cleverhans-lab/cleverhans)
+        DeepRobust (https://github.com/DSE-MSU/DeepRobust)
+        Foolbox (https://github.com/bethgelab/foolbox)
         Torchattacks (https://github.com/Harry24k/adversarial-attacks-pytorch)
 
     The following attacks are supported:
@@ -205,14 +210,17 @@ class BaseTest(unittest.TestCase):
             "pgd": aml.attacks.pgd(**cls.attack_params | {"epsilon": cls.linf}),
         }
 
-        # determine available frameworks and set art classifier if needed
-        supported = ("art", "cleverhans", "torchattacks")
+        # determine available frameworks and set both art & foolbox classifiers
+        supported = ("advertorch", "art", "cleverhans", "foolbox", "torchattacks")
         cls.available = [f for f in supported if importlib.util.find_spec(f)]
         frameworks = ", ".join(cls.available)
         cls.art_classifier = (
             cls.build_art_classifier()
             if cls in (IdentityTests, SemanticTests)
             else None
+        )
+        cls.fb_classifier = (
+            cls.build_fb_classifier() if cls in (IdentityTests, SemanticTests) else None
         )
         print(
             "Module Setup complete. Testing Parameters:",
@@ -251,6 +259,25 @@ class BaseTest(unittest.TestCase):
             optimizer=cls.attack_params["model"].optimizer,
             input_shape=(cls.x.size(1),),
             nb_classes=cls.attack_params["model"].params["classes"],
+        )
+
+    @classmethod
+    def build_fb_classifier(cls):
+        """
+        This method instantiates an art (pytorch) classifier (as required by foolbox
+        evasion attacks).
+
+        :return: an art (pytorch) classifier
+        :rtype: art PyTorchClassifier object
+        """
+        from foolbox import PyTorchModel
+
+        return PyTorchModel(
+            model=cls.attack_params["model"].model,
+            bounds=(
+                cls.attack_params["clip"][0].max().item(),
+                cls.attack_params["clip"][1].min().item(),
+            ),
         )
 
     @classmethod
@@ -405,14 +432,32 @@ class BaseTest(unittest.TestCase):
         """
         This method crafts adversarial examples with BIM (Basic Iterative
         Method) (https://arxiv.org/pdf/1611.01236.pdf). The supported
-        frameworks for BIM include ART, CleverHans, and Torchattacks. Notably,
-        CleverHans does not have an explicit implementation of BIM, so we call
-        PGD, but with random initialization disabled.
+        frameworks for BIM include AdverTorch, ART, CleverHans, Foolbox, and
+        Torchattacks. Notably, CleverHans does not have an explicit
+        implementation of BIM, so we call PGD, but with random initialization
+        disabled.
 
         :return: BIM adversarial examples
         :rtype: tuple of torch Tensor objects (n, m)
         """
-        art_adv = ch_adv = ta_adv = None
+        at_adv = art_adv = ch_adv = fb_adv = ta_adv = None
+        if "advertorch" in self.available:
+            from advertorch.attacks import LinfBasicIterativeAttack
+
+            print("Producing BIM adversarial examples with AdverTorch...")
+            at_adv = (
+                LinfBasicIterativeAttack(
+                    predict=self.attack_params["model"],
+                    loss_fn=torch.nn.CrossEntropyLoss(reduction="sum"),
+                    eps=self.linf,
+                    nb_iter=self.attack_params["epochs"],
+                    eps_iter=self.attack_params["alpha"],
+                    clip_min=self.attack_params["clip"][0],
+                    clip_max=self.attack_params["clip"][1],
+                    targeted=False,
+                ).perturb(x=self.x.clone(), y=self.y.clone()),
+                "AdverTorch",
+            )
         if "art" in self.available:
             from art.attacks.evasion import BasicIterativeMethod
 
@@ -455,6 +500,22 @@ class BaseTest(unittest.TestCase):
                 ).detach(),
                 "CleverHans",
             )
+        if "foolbox" in self.available:
+            from foolbox.attacks import LinfBasicIterativeAttack
+
+            print("Producing BIM adversarial examples with Foolbox...")
+            _, fb_adv, _ = LinfBasicIterativeAttack(
+                rel_stepsize=None,
+                abs_stepsize=self.attack_params["alpha"],
+                steps=self.attack_params["epochs"],
+                random_start=False,
+            )(
+                self.fb_classifier,
+                self.x.clone(),
+                self.y.clone(),
+                epsilons=self.linf,
+            )
+            fb_adv = (fb_adv, "Foolbox")
         if "torchattacks" in self.available:
             from torchattacks import BIM
 
@@ -469,19 +530,40 @@ class BaseTest(unittest.TestCase):
                 "Torchattacks",
             )
         return self.attacks["bim"], tuple(
-            fw for fw in (art_adv, ch_adv, ta_adv) if fw is not None
+            fw for fw in (at_adv, art_adv, ch_adv, fb_adv, ta_adv) if fw is not None
         )
 
     def cwl2(self):
         """
         This method crafts adversariale examples with CW-L2 (Carlini-Wagner
         with l₂ norm) (https://arxiv.org/pdf/1608.04644.pdf). The supported
-        frameworks for CW-L2 include ART, CleverHans, and Torchattacks.
+        frameworks for CW-L2 include AdverTorch, ART, CleverHans, Foolbox, and
+        Torchattacks.
 
         :return: CW-L2 adversarial examples
         :rtype: tuple of torch Tensor objects (n, m)
         """
-        art_adv = ch_adv = ta_adv = None
+        at_adv = art_adv = ch_adv = fb_adv = ta_adv = None
+        if "advertorch" in self.available:
+            from advertorch.attacks import CarliniWagnerL2Attack
+
+            print("Producing CW-L2 adversarial examples with AdverTorch...")
+            at_adv = (
+                CarliniWagnerL2Attack(
+                    predict=self.attack_params["model"],
+                    num_classes=self.attack_params["model"].params["classes"],
+                    confidence=self.attacks["cwl2"].surface.loss.k,
+                    targeted=False,
+                    learning_rate=self.attack_params["alpha"],
+                    binary_search_steps=1,
+                    max_iterations=self.attack_params["epochs"],
+                    abort_early=True,
+                    initial_const=self.attacks["cwl2"].surface.loss.c.item(),
+                    clip_min=self.attack_params["clip"][0],
+                    clip_max=self.attack_params["clip"][1],
+                ).perturb(x=self.x.clone(), y=self.y.clone()),
+                "AdverTorch",
+            )
         if "art" in self.available:
             from art.attacks.evasion import CarliniL2Method
 
@@ -524,6 +606,24 @@ class BaseTest(unittest.TestCase):
                 ).detach(),
                 "CleverHans",
             )
+        if "foolbox" in self.available:
+            from foolbox.attacks import L2CarliniWagnerAttack
+
+            print("Producing CW-L2 adversarial examples with Foolbox...")
+            _, fb_adv, _ = L2CarliniWagnerAttack(
+                binary_search_steps=1,
+                steps=self.attack_params["epochs"],
+                stepsize=self.attack_params["alpha"],
+                confidence=self.attacks["cwl2"].surface.loss.k,
+                initial_const=self.attacks["cwl2"].surface.loss.c.item(),
+                abort_early=True,
+            )(
+                self.fb_classifier,
+                self.x.clone(),
+                self.y.clone(),
+                epsilons=self.l2,
+            )
+            fb_adv = (fb_adv, "Foolbox")
         if "torchattacks" in self.available:
             from torchattacks import CW
 
@@ -539,23 +639,23 @@ class BaseTest(unittest.TestCase):
                 "Torchattacks",
             )
         return self.attacks["cwl2"], tuple(
-            fw for fw in (art_adv, ch_adv, ta_adv) if fw is not None
+            fw for fw in (at_adv, art_adv, ch_adv, fb_adv, ta_adv) if fw is not None
         )
 
     def df(self):
         """
         This method crafts adversarial examples with DF (DeepFool)
         (https://arxiv.org/pdf/1611.01236.pdf). The supported frameworks for DF
-        include ART and Torchattacks. Notably, the DF implementation in ART and
-        Torchattacks have an overshoot parameter which we set to 0 (not to be
-        confused with the epsilon parameter used in aml, which governs the
-        norm-ball size).
+        include ART, Foolbox, and Torchattacks. Notably, the DF implementation
+        in ART, Foolbox, and Torchattacks have an overshoot parameter which we
+        set to 0 (not to be confused with the epsilon parameter used in aml,
+        which governs the norm-ball size).
 
         :return: DeepFool adversarial examples
         :rtype: tuple of torch Tensor objects (n, m)
         """
-        art_adv = ta_adv = None
-        if "art" in self.available:
+        art_adv = fb_adv = ta_adv = None
+        if "art" not in self.available:
             from art.attacks.evasion import DeepFool
 
             print("Producing DF adversarial examples with ART...")
@@ -572,7 +672,23 @@ class BaseTest(unittest.TestCase):
                 ),
                 "ART",
             )
-        if "torchattacks" in self.available:
+        if "foolbox" in self.available:
+            from foolbox.attacks import L2DeepFoolAttack
+
+            print("Producing DF adversarial examples with Foolbox...")
+            _, fb_adv, _ = L2DeepFoolAttack(
+                steps=self.attack_params["epochs"],
+                candidates=self.attack_params["model"].params["classes"],
+                overshoot=0,
+                loss="logits",
+            )(
+                self.fb_classifier,
+                self.x.clone(),
+                self.y.clone(),
+                epsilons=self.l2,
+            )
+            fb_adv = (fb_adv, "Foolbox")
+        if "torchattacks" not in self.available:
             from torchattacks import DeepFool
 
             print("Producing DF adversarial examples with Torchattacks...")
@@ -585,19 +701,37 @@ class BaseTest(unittest.TestCase):
             # torchattack's implementation can return nans
             ta_adv = (torch.where(ta_adv.isnan(), self.x, ta_adv), "Torchattacks")
         return self.attacks["df"], tuple(
-            fw for fw in (art_adv, ta_adv) if fw is not None
+            fw for fw in (art_adv, fb_adv, ta_adv) if fw is not None
         )
 
     def fab(self):
         """
         This method crafts adversarial examples with FAB (Fast Adaptive
         Boundary) (https://arxiv.org/pdf/1907.02044.pdf). The supported
-        frameworks for FAB include Torchattacks.
+        frameworks for FAB include AdverTorch and Torchattacks.
 
         :return: FAB adversarial examples
         :rtype: tuple of torch Tensor objects (n, m)
         """
-        ta_adv = None
+        at_adv = ta_adv = None
+        if "advertorch" in self.available:
+            from advertorch.attacks import L2FABAttack
+
+            print("Producing FAB adversarial examples with AdverTorch...")
+            self.reset_seeds()
+            at_adv = (
+                L2FABAttack(
+                    predict=self.attack_params["model"],
+                    n_restarts=1,
+                    n_iter=self.attack_params["epochs"],
+                    eps=None,
+                    alpha_max=0.1,
+                    eta=1,
+                    beta=self.attacks["fab"].traveler.optimizer.param_groups[0]["beta"],
+                    verbose=True,
+                ).perturb(x=self.x.clone(), y=self.y.clone()),
+                "AdverTorch",
+            )
         if "torchattacks" in self.available:
             from torchattacks import FAB
 
@@ -621,21 +755,38 @@ class BaseTest(unittest.TestCase):
                 "Torchattacks",
             )
         self.reset_seeds()
-        return self.attacks["fab"], tuple(fw for fw in (ta_adv,) if fw is not None)
+        return self.attacks["fab"], tuple(
+            fw for fw in (at_adv, ta_adv) if fw is not None
+        )
 
     def jsma(self):
         """
         This method crafts adversarial examples with JSMA (Jacobian Saliency
         Map Approach) (https://arxiv.org/pdf/1511.07528.pdf). The supported
-        frameworks for the JSMA include ART. Notably, the JSMA implementation
-        in ART assumes the l0-norm is passed in as a percentage (which is why
-        we pass in linf) and we set theta to be 1 since features can only be
-        perturbed once.
+        frameworks for the JSMA include AdverTorch and ART. Notably, the JSMA
+        implementation in AdverTorch and ART both assume the l0-norm is passed
+        in as a percentage (which is why we pass in linf) and we set theta to
+        be 1 since features can only be perturbed once.
 
         :return: JSMA adversarial examples
         :rtype: tuple of torch Tensor objects (n, m)
         """
-        art_adv = None
+        at_adv = art_adv = None
+        if "advertorch" in self.available:
+            from advertorch.attacks import JacobianSaliencyMapAttack
+
+            print("Producing JSMA adversarial examples with AdverTorch...")
+            at_adv = (
+                JacobianSaliencyMapAttack(
+                    predict=self.attack_params["model"],
+                    num_classes=self.attack_params["model"].params["classes"],
+                    clip_min=self.attack_params["clip"][0],
+                    clip_max=self.attack_params["clip"][1],
+                    gamma=self.linf,
+                    theta=1,
+                ).perturb(x=self.x.clone(), y=self.y.clone()),
+                "AdverTorch",
+            )
         if "art" in self.available:
             from art.attacks.evasion import SaliencyMapMethod
 
@@ -652,18 +803,40 @@ class BaseTest(unittest.TestCase):
                 ),
                 "ART",
             )
-        return self.attacks["jsma"], tuple(fw for fw in (art_adv,) if fw is not None)
+        return self.attacks["jsma"], tuple(
+            fw for fw in (at_adv, art_adv) if fw is not None
+        )
 
     def pgd(self):
         """
         This method crafts adversarial examples with PGD (Projected Gradient
         Descent)) (https://arxiv.org/pdf/1706.06083.pdf). The supported
-        frameworks for PGD include ART, CleverHans, and Torchattacks.
+        frameworks for PGD include AdverTorch, ART, CleverHans, and
+        Torchattacks.
 
         :return: PGD adversarial examples
         :rtype: tuple of torch Tensor objects (n, m)
         """
-        art_adv = ch_adv = ta_adv = None
+        at_adv = art_adv = ch_adv = fb_adv = ta_adv = None
+        if "advertorch" in self.available:
+            from advertorch.attacks import LinfPGDAttack
+
+            print("Producing PGD adversarial examples with AdverTorch...")
+            self.reset_seeds()
+            at_adv = (
+                LinfPGDAttack(
+                    predict=self.attack_params["model"],
+                    loss_fn=torch.nn.CrossEntropyLoss(reduction="sum"),
+                    eps=self.linf,
+                    nb_iter=self.attack_params["epochs"],
+                    eps_iter=self.attack_params["alpha"],
+                    rand_init=True,
+                    clip_min=self.attack_params["clip"][0],
+                    clip_max=self.attack_params["clip"][1],
+                    targeted=False,
+                ).perturb(x=self.x.clone(), y=self.y.clone()),
+                "AdverTorch",
+            )
         if "art" in self.available:
             from art.attacks.evasion import ProjectedGradientDescent
 
@@ -713,6 +886,23 @@ class BaseTest(unittest.TestCase):
                 ).detach(),
                 "CleverHans",
             )
+        if "foolbox" in self.available:
+            from foolbox.attacks import LinfProjectedGradientDescentAttack
+
+            print("Producing PGD adversarial examples with Foolbox...")
+            self.reset_seeds()
+            _, fb_adv, _ = LinfProjectedGradientDescentAttack(
+                rel_stepsize=None,
+                abs_stepsize=self.attack_params["alpha"],
+                steps=self.attack_params["epochs"],
+                random_start=True,
+            )(
+                self.fb_classifier,
+                self.x.clone(),
+                self.y.clone(),
+                epsilons=self.linf,
+            )
+            fb_adv = (fb_adv, "Foolbox")
         if "torchattacks" in self.available:
             from torchattacks import PGD
 
@@ -730,7 +920,7 @@ class BaseTest(unittest.TestCase):
             )
         self.reset_seeds()
         return self.attacks["pgd"], tuple(
-            fw for fw in (art_adv, ch_adv, ta_adv) if fw is not None
+            fw for fw in (at_adv, art_adv, ch_adv, fb_adv, ta_adv) if fw is not None
         )
 
 
