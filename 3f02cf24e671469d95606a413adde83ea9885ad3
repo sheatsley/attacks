@@ -1,0 +1,1 @@
+with the addition for advertorch and foolbox, nothing changes (that is, fab and cwl2 are the only attacks that fail right now since fab isnt complete and cwl2 needs the adversary layer to binary search on c), with one exception: apparently foolboxes df implementation is suprassing ours (with a huge increase in norm). need to investigate where this is coming from
