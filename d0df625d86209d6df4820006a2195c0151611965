@@ -1,0 +1,1 @@
+df now surpasses foolbox. apparently, division is a bit more unstable than I believed. Just adding a constant (even less than what fb does) apparently does the trick.
