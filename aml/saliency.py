@@ -54,7 +54,7 @@ class DeepFoolSaliency:
         self.q = q
         return None
 
-    def __call__(self, g, loss, y, minimum=torch.tensor(1e-8), **kwargs):
+    def __call__(self, g, loss, y, minimum=torch.tensor(1e-5), **kwargs):
         """
         This method applies the heuristic defined above. Specifically, this
         computes the logit and gradient differences between the true class
@@ -89,9 +89,11 @@ class DeepFoolSaliency:
         # compute ith class
         grad_diffs = yth_grad.sub(other_grad)
         logit_diffs = yth_logit.sub(other_logits).abs_()
-        normed_ith_logit_diff, i = logit_diffs.div(
-            grad_diffs.norm(self.q, dim=2).clamp_(minimum)
-        ).topk(1, dim=1, largest=False)
+        normed_ith_logit_diff, i = (
+            logit_diffs.div(grad_diffs.norm(self.q, dim=2).clamp(minimum))
+            .add_(minimum)
+            .topk(1, dim=1, largest=False)
+        )
 
         # save ith grad signs & normed logit diffs & return absolute ith gradient diffs
         ith_grad_diff = grad_diffs[torch.arange(grad_diffs.size(0)), i.flatten(), :]
