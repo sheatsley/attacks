@@ -32,18 +32,18 @@ class BackwardSGD(torch.optim.Optimizer):
                         ß_(k+1) = ß if ∇f(x + Δ_k) ≠ c else 1
                         Δ_(k+1) = ß_(k+1) * η * ∇f(x + Δ_k)
 
-    where k is the current iteration, ß is a consant in [0, 1], Δ is the
+    where k is the current iteration, ß is a constant in [0, 1], Δ is the
     current perturbation vector to produce adversarial example, ∇f is the
     gradient of the model with respect to Δ, x is the original input, c is the
     label, and η is the learning rate. Conceputally, ß enables adversaires to
-    dampen the learning rate when the inputs is already misclassified, ensuring
-    x + Δ is as close to x as possible (while achieving adversarial goals).
+    dampen the learning rate when inputs are already misclassified, ensuring x
+    + Δ is as close to x as possible (while achieving adversarial goals).
 
     :func:`__init__`: instantiates BackwardSGD objects
     :func:`step`: applies one optimization step
     """
 
-    def __init__(self, params, lr, maximize, model, beta=0.9, **kwargs):
+    def __init__(self, params, lr, maximize, model, alpha_max=0.1, beta=0.9, **kwargs):
         """
         This method instanties a Backward SGD object. It requires a learning
         rate, ß, and a reference to a dlm LinearClassifier-inherited object (as
@@ -68,14 +68,21 @@ class BackwardSGD(torch.optim.Optimizer):
         """
         super().__init__(
             params,
-            {"lr": lr, "beta": beta, "maximize": maximize, "model": model},
+            {
+                "lr": lr,
+                "alpha_max": alpha_max,
+                "beta": beta,
+                "maximize": maximize,
+                "model": model,
+            },
         )
 
         # initialize state
         for group in self.param_groups:
             for p in group["params"]:
                 state = self.state[p]
-                state["beta"] = torch.full((p.size(0), 1), group["beta"])
+                state["step"] = 0
+                state["delta_org"] = p.new_zeros(p.size())
 
     @torch.no_grad()
     def step(self):
@@ -93,10 +100,27 @@ class BackwardSGD(torch.optim.Optimizer):
                 grad = p.grad.data if group["maximize"] else -p.grad.data
                 state = self.state[p]
 
-                # set beta for misclassified inputs and apply update
-                misclassified = ~group["model"].correct.unsqueeze(1)
-                state["beta"] = torch.where(misclassified, group["beta"], 1)
-                p[:] = grad.mul_(state["beta"].mul_(group["lr"]))
+                # perform a backwardstep step for misclassified inputs
+                misclassified = ~group["model"].correct
+                p[misclassified] = p[misclassified].mul_(group["beta"])
+
+                # save the first gradient to bias subsequent perturbations
+                if not state["step"]:
+                    state["delta_org"] = grad.clone()
+
+                # compute alpha, biased projection, and apply update step
+                grad_norm = grad.norm(2, 1, keepdim=True)
+                alpha = (
+                    grad_norm.div(
+                        grad_norm.add(state["delta_org"].norm(2, 1, keepdim=True))
+                    )
+                ).clamp(max=group["alpha_max"])
+                bias = state["delta_org"].mul(group["lr"]).mul(alpha)
+                grad.mul_(group["lr"]).mul_(alpha.mul_(-1).add_(1)).add_(bias)
+                p.add_(grad)
+
+                # update optimizer state
+                state["step"] += 1
         return None
 
 
@@ -219,7 +243,9 @@ class MomentumBestStart(torch.optim.Optimizer):
                 state["lr"] = torch.full((p.size(0), 1), 2 * group["epsilon"])
                 state["lr_updated"] = torch.zeros(p.size(0), dtype=torch.bool)
                 state["num_loss_updates"] = torch.zeros(p.size(0), dtype=torch.int)
-                state["max_loss"] = torch.full((p.size(0),), -torch.inf)
+                state["max_loss"] = torch.full(
+                    (p.size(0),), -torch.inf if maximize else torch.inf
+                )
                 state["max_loss_updated"] = torch.zeros(p.size(0), dtype=torch.bool)
                 state["momentum_buffer"] = p.clone()
                 state["prev_loss"] = torch.zeros(p.size(0))
