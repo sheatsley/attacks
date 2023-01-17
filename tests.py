@@ -29,14 +29,12 @@ import torch  # Tensors and Dynamic neural networks in Python with strong GPU ac
 # rework attack wrapper calls to include adversary layer (inputs need to be in 0-1 when measuring norm)
 # ^ rework max-min logic to account for the above
 # ^ update random-restart params for attacks that would be captured by adversarial layer
-# update FAB parameters when backwardsgd supports alpha_max
 # confirm out-of-place op changes to tanh map work well after implementing early termination
-# add adv torch
-# add foolbox
 # enable random restart when adversary layer is complete
 # enable binary search when adversary layer is complete
 # configure verbosity level to be binary for all frameworks
 # adjust prints to be based on longest framework string
+# update DF and FAB functional docstrings
 
 
 class BaseTest(unittest.TestCase):
@@ -54,7 +52,6 @@ class BaseTest(unittest.TestCase):
         AdverTorch (https://github.com/BorealisAI/advertorch)
         ART (https://github.com/Trusted-AI/adversarial-robustness-toolbox)
         CleverHans (https://github.com/cleverhans-lab/cleverhans)
-        DeepRobust (https://github.com/DSE-MSU/DeepRobust)
         Foolbox (https://github.com/bethgelab/foolbox)
         Torchattacks (https://github.com/Harry24k/adversarial-attacks-pytorch)
 
@@ -1047,7 +1044,9 @@ class FunctionalTests(BaseTest):
         :return: None
         :rtype: NoneType
         """
-        return self.functional_test(self.attacks["df"])
+        return self.functional_test(
+            aml.attacks.df(**self.attack_params | {"alpha": 1, "epsilon": self.l2})
+        )
 
     def test_fab(self):
         """
@@ -1057,7 +1056,9 @@ class FunctionalTests(BaseTest):
         :return: None
         :rtype: NoneType
         """
-        return self.functional_test(self.attacks["fab"])
+        return self.functional_test(
+            aml.attacks.fab(**self.attack_params | {"alpha": 1, "epsilon": self.l2})
+        )
 
     def test_jsma(self):
         """
