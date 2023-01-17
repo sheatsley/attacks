@@ -21,6 +21,7 @@ import torch  # Tensors and Dynamic neural networks in Python with strong GPU ac
 # l2 rr should be normlized by l2-norm and l0 norm should pick max l0 random features
 # for l0 clamp, need to check if cov makes 0s a very small number (check on prev_p == 0 would fail)
 # consider setting a min in tanh_p (like l2 norm) to mitigate underflow
+# update progress to call model.accuracy and reference model.correct for stats
 
 
 class Adversary:
@@ -397,7 +398,7 @@ class Attack:
         norm_map = {surface.l0: 0, surface.linf: 1, surface.l2: 2}
         saliency_map = (
             saliency_map(norm_map[norm])
-            if saliency_map is saliency.DeepFoolSaliency
+            if saliency_map in {saliency.DeepFoolSaliency, saliency.FabSaliency}
             else saliency_map()
         )
         loss_func = loss_func()
@@ -495,7 +496,7 @@ class Attack:
             self.project(xb, pb)
             self.progress(b, 0, xb, yb, pb, ob)
 
-            # compute peturbation updates, record progress, & update early termination
+            # compute peturbation updates and record progress
             for e in range(1, self.epochs + 1):
                 self.surface(xb, yb, pb)
                 self.traveler()
@@ -508,7 +509,7 @@ class Attack:
                     f"Epoch {e}... ({e / self.epochs:.1%})", end="\r"
                 )
 
-        # compute final statistics and get perturbation vector if using cov
+        # compute final statistics, set failed perturbations to zero, & return
         for m in self.results:
             d = y.numel() if m in ("acc", "l0", "l2", "linf") else 1
             self.results[m] = [sum(s) / d for s in zip(*self.results[m])]
@@ -546,10 +547,7 @@ class Attack:
         method sets any newly perturbed component of perturbation vectors to
         zero if such a perturbation exceeds the specified l0-threat model. To
         know which components are "newly" perturbed, we save a reference to the
-        perturbation vector computed at the iteration prior. Finally, this
-        method accepts two additional arguments x and o_x to provide a
-        homogenous interface across projection methods even though they are not
-        needed for l0 projections.
+        perturbation vector computed at the iteration prior.
 
         :param x: adversarial examples in tanh-space (unused)
         :type x: torch Tensor object (n, m)
@@ -1044,7 +1042,7 @@ def fab(alpha=None, clip=None, epochs=None, epsilon=None, model=None, verbosity=
         norm=surface.l2,
         optimizer_alg=optimizer.BackwardSGD,
         random_restart=False,
-        saliency_map=saliency.DeepFoolSaliency,
+        saliency_map=saliency.FabSaliency,
         verbosity=verbosity,
     )
 
