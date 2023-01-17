@@ -104,9 +104,12 @@ class BackwardSGD(torch.optim.Optimizer):
                 misclassified = ~group["model"].correct
                 p[misclassified] = p[misclassified].mul_(group["beta"])
 
+                # NEGATE GRAD FOR FAB
+                grad = -grad
+
                 # save the first gradient to bias subsequent perturbations
-                if not state["step"]:
-                    state["delta_org"] = grad.clone()
+                if state["step"] < 2:
+                    state["delta_org"] = p.clone()
 
                 # compute alpha, biased projection, and apply update step
                 grad_norm = grad.norm(2, 1, keepdim=True)
@@ -117,6 +120,7 @@ class BackwardSGD(torch.optim.Optimizer):
                 ).clamp(max=group["alpha_max"])
                 bias = state["delta_org"].mul(group["lr"]).mul(alpha)
                 grad.mul_(group["lr"]).mul_(alpha.mul_(-1).add_(1)).add_(bias)
+                # p.add_(grad).add_(1e-20 * grad.sign())
                 p.add_(grad)
 
                 # update optimizer state
