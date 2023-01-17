@@ -13,6 +13,7 @@ from torch.optim import SGD  # Implements stochasitc gradient descent
 # add unit tests to confirm correctness
 # find better way to update p in BackwardSGD
 # add alpha_max to backward SGD
+# consider masked_fill_ for all tensors
 
 
 class BackwardSGD(torch.optim.Optimizer):
@@ -95,33 +96,35 @@ class BackwardSGD(torch.optim.Optimizer):
         :return: None
         :rtype: NoneType
         """
+        mini = 1e-4
         for group in self.param_groups:
             for p in group["params"]:
                 grad = p.grad.data if group["maximize"] else -p.grad.data
                 state = self.state[p]
 
-                # perform a backwardstep step for misclassified inputs
-                misclassified = ~group["model"].correct
-                p[misclassified] = p[misclassified].mul_(group["beta"])
-
-                # NEGATE GRAD FOR FAB
-                grad = -grad
-
                 # save the first gradient to bias subsequent perturbations
-                if state["step"] < 2:
-                    state["delta_org"] = p.clone()
+                state["delta_org"] = -self.saveme.clone()
 
                 # compute alpha, biased projection, and apply update step
                 grad_norm = grad.norm(2, 1, keepdim=True)
                 alpha = (
                     grad_norm.div(
-                        grad_norm.add(state["delta_org"].norm(2, 1, keepdim=True))
-                    )
+                        grad_norm.add(
+                            state["delta_org"].norm(2, 1, keepdim=True).clamp(mini)
+                        )
+                    ).add(mini)
                 ).clamp(max=group["alpha_max"])
                 bias = state["delta_org"].mul(group["lr"]).mul(alpha)
-                grad.mul_(group["lr"]).mul_(alpha.mul_(-1).add_(1)).add_(bias)
-                # p.add_(grad).add_(1e-20 * grad.sign())
+                # grad.mul_(group["lr"]).mul_(alpha.mul_(-1).add_(1)).add_(bias)
+                grad.mul_(group["lr"]).mul_(1 - alpha).add_(bias)
+                # p.add_(grad).add_(1e-8 * grad.sign())
                 p.add_(grad)
+                # p.add_(grad.mul(group["lr"])).mul_(1 - alpha).add_(bias)
+
+                # perform a backwardstep step for misclassified inputs
+                misclassified = ~group["model"].correct
+                p[misclassified] = p[misclassified].mul_(group["beta"])
+                # grad = -grad
 
                 # update optimizer state
                 state["step"] += 1
