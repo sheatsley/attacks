@@ -725,8 +725,10 @@ class BaseTest(unittest.TestCase):
                     n_restarts=1,
                     n_iter=self.attack_params["epochs"],
                     eps=None,
-                    alpha_max=0.1,
-                    eta=1,
+                    alpha_max=self.attacks["fab"].traveler.optimizer.param_groups[0][
+                        "alpha_max"
+                    ],
+                    eta=self.attack_params["alpha"],
                     beta=self.attacks["fab"].traveler.optimizer.param_groups[0]["beta"],
                     verbose=True,
                 ).perturb(x=self.x.clone(), y=self.y.clone()),
@@ -744,8 +746,10 @@ class BaseTest(unittest.TestCase):
                     eps=self.l2,
                     steps=self.attack_params["epochs"],
                     n_restarts=1,
-                    alpha_max=0.1,
-                    eta=1,
+                    alpha_max=self.attacks["fab"].traveler.optimizer.param_groups[0][
+                        "alpha_max"
+                    ],
+                    eta=self.attack_params["alpha"],
                     beta=self.attacks["fab"].traveler.optimizer.param_groups[0]["beta"],
                     verbose=True,
                     seed=self.seed,
