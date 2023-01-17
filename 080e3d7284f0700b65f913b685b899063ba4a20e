@@ -1,0 +1,1 @@
+this looks to be as good as we can get with fab with reasonable implementation into our framework (ie incorporate delta_org projection faithfully). on mnist, this implementation gets 0.01% acc at 26.25% norm vs 0.33% at 25.97% (technically our performance is 0.1% worse at 96.0%), on phishing we are 0.2% better at 97.9% with 0.99% at 12.40% vs 1.48% at 12.20%.
