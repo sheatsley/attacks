@@ -125,14 +125,13 @@ class Surface:
             loss=loss.view(-1, c_j),
             y=y,
             x=x,
+            p=p,
         )
         dist = (c.sub(p).abs() for c in self.clip)
         final_grad = (
             self.norm(smap_grad, dist, self.loss.max_obj)
             if self.norm is l0
             else self.norm(smap_grad)
-            if type(self.saliency_map).__name__ != "FabSaliency"
-            else smap_grad
         )
 
         # call closure subroutines and attach grads to the perturbation vector
