@@ -7,111 +7,7 @@ import torch  # Tensors and Dynamic neural networks in Python with strong GPU ac
 
 # TODO:
 # add unit tests
-
-
-class FabSaliency:
-    """ """
-
-    jac_req = True
-
-    def __init__(self, q):
-        """ """
-        self.q = q
-        return None
-
-    def __call__(self, g, loss, y, x, minimum=torch.tensor(1e-5), **kwargs):
-        """ """
-
-        # retrieve yth gradient and logit
-        y_hot = torch.nn.functional.one_hot(y).bool()
-        yth_grad = g[y_hot].unsqueeze(1)
-        yth_logit = loss[y_hot].unsqueeze(1)
-
-        # retrieve all non-yth gradients and logits
-        other_grad = g[~y_hot].view(g.size(0), -1, g.size(2))
-        other_logits = loss[~y_hot].view(loss.size(0), -1)
-
-        # compute ith class
-        grad_diffs = yth_grad.sub(other_grad).squeeze(1)
-        logit_diffs = yth_logit.sub(other_logits).abs_().squeeze(1)
-
-        # generalize me later (maybe just invert logic?)
-        b = (logit_diffs - (x * grad_diffs).sum(1)).clone()
-        w = -grad_diffs.clone()
-        t = x.clone()
-
-        # determine feasibility
-
-        # to merge
-        c = (w * t).sum(1) - b
-        ind2 = (c < 0).nonzero().squeeze()
-        w[ind2] *= -1
-        c[ind2] *= -1
-
-        u = torch.arange(0, w.shape[0]).unsqueeze(1)
-
-        r = torch.max(t / w, (t - 1) / w)
-        u2 = torch.ones(r.shape)
-        r = torch.min(r, 1e12 * u2)
-        r = torch.max(r, -1e12 * u2)
-        r[w.abs() < 1e-8] = 1e12
-        r[r == -1e12] = -r[r == -1e12]
-        rs, indr = torch.sort(r, dim=1)
-        rs2 = torch.cat((rs[:, 1:], torch.zeros(rs.shape[0], 1)), 1)
-        rs[rs == 1e12] = 0
-        rs2[rs2 == 1e12] = 0
-
-        w3 = w**2
-        w3s = w3[u, indr]
-        w5 = w3s.sum(dim=1, keepdim=True)
-        ws = w5 - torch.cumsum(w3s, dim=1)
-        d = -(r * w).clone()
-        d = d * (w.abs() > 1e-8).float()
-        s = torch.cat(
-            (
-                (-w5.squeeze() * rs[:, 0]).unsqueeze(1),
-                torch.cumsum((-rs2 + rs) * ws, dim=1) - w5 * rs[:, 0].unsqueeze(-1),
-            ),
-            1,
-        )
-
-        c4 = s[:, 0] + c < 0
-        c3 = (d * w).sum(dim=1) + c > 0
-        c6 = c4.nonzero().squeeze()
-        c2 = ((1 - c4.float()) * (1 - c3.float())).nonzero().squeeze()
-
-        counter = 0
-        lb = torch.zeros(c2.shape[0])
-        ub = torch.ones(c2.shape[0]) * (w.shape[1] - 1)
-        nitermax = torch.ceil(torch.log2(torch.tensor(w.shape[1]).float()))
-        counter2 = torch.zeros(lb.shape).long()
-
-        while counter < nitermax:
-            counter4 = torch.floor((lb + ub) / 2)
-            counter2 = counter4.long()
-            c3 = s[c2, counter2] + c[c2] > 0
-            ind3 = c3.nonzero().squeeze()
-            ind32 = (~c3).nonzero().squeeze()
-            lb[ind3] = counter4[ind3]
-            ub[ind32] = counter4[ind32]
-            counter += 1
-
-        lb = lb.long()
-        alpha = torch.zeros([1])
-
-        if c6.nelement() != 0:
-            alpha = c[c6] / w5[c6].squeeze(-1)
-            d[c6] = -alpha.unsqueeze(-1) * w[c6]
-
-        if c2.nelement() != 0:
-            alpha = (s[c2, lb] + c[c2]) / ws[c2, lb] + rs[c2, lb]
-            if torch.sum(ws[c2, lb] == 0) > 0:
-                ind = (ws[c2, lb] == 0).nonzero().squeeze().long()
-                alpha[ind] = 0
-            c5 = (alpha.unsqueeze(-1) > r[c2]).float()
-            d[c2] = d[c2] * c5 - alpha.unsqueeze(-1) * w[c2] * (1 - c5)
-
-        return d * (w.abs() > 1e-8).float()
+# update deepfool return docstring
 
 
 class DeepFoolSaliency:
@@ -159,7 +55,7 @@ class DeepFoolSaliency:
         self.q = q
         return None
 
-    def __call__(self, g, loss, y, minimum=torch.tensor(1e-4), **kwargs):
+    def __call__(self, g, loss, y, p, minimum=torch.tensor(1e-4), **kwargs):
         """
         This method applies the heuristic defined above. Specifically, this
         computes the logit and gradient differences between the true class
@@ -193,6 +89,7 @@ class DeepFoolSaliency:
 
         # compute ith class
         grad_diffs = yth_grad.sub(other_grad)
+        save_my_logits = yth_logit.sub(other_logits)
         logit_diffs = yth_logit.sub(other_logits).abs_()
         normed_ith_logit_diff, i = (
             logit_diffs.div(grad_diffs.norm(self.q, dim=2).clamp(minimum))
@@ -201,9 +98,20 @@ class DeepFoolSaliency:
         )
 
         # save ith grad signs & normed logit diffs & return absolute ith gradient diffs
-        ith_grad_diff = grad_diffs[torch.arange(grad_diffs.size(0)), i.flatten(), :]
+        ith_grad_diff = grad_diffs[
+            torch.arange(grad_diffs.size(0)), i.flatten(), :
+        ]  # gather here as well?
         self.normed_ith_logit_diff = normed_ith_logit_diff
         self.ith_grad_diff_sign = ith_grad_diff.sign()
+
+        # save me
+        num = ((ith_grad_diff * p).sum(1) + save_my_logits.gather(1, i).flatten()).abs()
+        self.saveme = (
+            num.div(ith_grad_diff.norm(2, 1).pow(2).clamp(minimum))
+            .add(minimum)
+            .unsqueeze(1)
+            .mul(ith_grad_diff)
+        )
         return ith_grad_diff.abs()
 
     def closure(self, g):
