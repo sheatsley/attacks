@@ -499,6 +499,8 @@ class Attack:
             # compute peturbation updates and record progress
             for e in range(1, self.epochs + 1):
                 self.surface(xb, yb, pb)
+                # self.traveler.optimizer.g_diffs = self.surface.saliency_map.grad_diffs
+                self.traveler.optimizer.saveme = self.surface.saliency_map.saveme
                 self.traveler()
                 pb.clamp_(cnb, cxb)
                 self.project(xb, pb)
@@ -1042,7 +1044,7 @@ def fab(alpha=None, clip=None, epochs=None, epsilon=None, model=None, verbosity=
         norm=surface.l2,
         optimizer_alg=optimizer.BackwardSGD,
         random_restart=False,
-        saliency_map=saliency.FabSaliency,
+        saliency_map=saliency.DeepFoolSaliency,
         verbosity=verbosity,
     )
 
