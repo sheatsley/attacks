@@ -29,13 +29,8 @@ import torch  # Tensors and Dynamic neural networks in Python with strong GPU ac
 # rework attack wrapper calls to include adversary layer (inputs need to be in 0-1 when measuring norm)
 # ^ rework max-min logic to account for the above
 # ^ update random-restart params for attacks that would be captured by adversarial layer
-# confirm out-of-place op changes to tanh map work well after implementing early termination
 # enable random restart when adversary layer is complete
 # enable binary search when adversary layer is complete
-# configure verbosity level to be binary for all frameworks
-# adjust prints to be based on longest framework string
-# update DF and FAB functional docstrings
-# adjust apgddlr docstring about dlr loss being undefined for 2 classes
 
 
 class BaseTest(unittest.TestCase):
@@ -88,7 +83,7 @@ class BaseTest(unittest.TestCase):
         epochs=30,
         norm=0.15,
         seed=5115,
-        verbosity=1,
+        verbose=False,
     ):
         """
         This function initializes the setup necessary for all test cases within
@@ -110,8 +105,8 @@ class BaseTest(unittest.TestCase):
         :type norm: float
         :param seed: the seed to use to make randomized components determinisitc
         :type seed: int
-        :param verbosity: print attack statistics every verbosity%
-        :type verbosity: float
+        :param verbose: print attack status during crafting
+        :type verbose float
         :return: None
         :rtype: NoneType
         """
@@ -191,11 +186,12 @@ class BaseTest(unittest.TestCase):
         cls.linf_max = 1
         cls.linf = norm
         cls.clip_min, cls.clip_max = clip
+        cls.verbose = verbose
         cls.attack_params = {
             "alpha": alpha,
             "epochs": epochs,
             "model": cls.model,
-            "verbosity": verbosity,
+            "verbosity": int(not verbose),
         }
         cls.attacks = {
             "apgdce": aml.attacks.apgdce(**cls.attack_params | {"epsilon": cls.linf}),
@@ -214,11 +210,13 @@ class BaseTest(unittest.TestCase):
         frameworks = ", ".join(cls.available)
         cls.art_classifier = (
             cls.build_art_classifier()
-            if cls in (IdentityTests, SemanticTests)
+            if cls in (IdentityTests, SemanticTests) and "art" in cls.available
             else None
         )
         cls.fb_classifier = (
-            cls.build_fb_classifier() if cls in (IdentityTests, SemanticTests) else None
+            cls.build_fb_classifier()
+            if cls in (IdentityTests, SemanticTests) and "foolbox" in cls.available
+            else None
         )
         print(
             "Module Setup complete. Testing Parameters:",
@@ -313,7 +311,7 @@ class BaseTest(unittest.TestCase):
                         nb_random_init=1,
                         batch_size=self.x.size(0),
                         loss_type="cross_entropy",
-                        verbose=True,
+                        verbose=self.verbose,
                     ).generate(x=self.x.clone().numpy())
                 ),
                 "ART",
@@ -342,7 +340,7 @@ class BaseTest(unittest.TestCase):
                     rho=self.attacks["apgdce"].traveler.optimizer.param_groups[0][
                         "rho"
                     ],
-                    verbose=True,
+                    verbose=self.verbose,
                 )(inputs=ta_x, labels=self.y,).flatten(1),
                 "Torchattacks",
             )
@@ -356,9 +354,9 @@ class BaseTest(unittest.TestCase):
         This method crafts adversarial examples with APGD-DLR (Auto-PGD with
         DLR loss) (https://arxiv.org/pdf/2003.01690.pdf). The supported
         frameworks for APGD-DLR include ART and Torchattacks. Notably, DLR loss
-        is undefined when there are only two classes. Moreover, the
-        Torchattacks implementation assumes an image (batches, channels, width,
-        height).
+        is undefined for these frameworks when there are only two classes.
+        Moreover, the Torchattacks implementation assumes an image (batches,
+        channels, width, height).
 
         :return: APGD-DLR adversarial examples
         :rtype: tuple of torch Tensor objects (n, m)
@@ -381,7 +379,7 @@ class BaseTest(unittest.TestCase):
                         nb_random_init=1,
                         batch_size=self.x.size(0),
                         loss_type="difference_logits_ratio",
-                        verbose=True,
+                        verbose=self.verbose,
                     ).generate(x=self.x.clone().numpy())
                 ),
                 "ART",
@@ -411,7 +409,7 @@ class BaseTest(unittest.TestCase):
                     rho=self.attacks["apgdce"].traveler.optimizer.param_groups[0][
                         "rho"
                     ],
-                    verbose=True,
+                    verbose=self.verbose,
                 )(inputs=ta_x, labels=self.y).flatten(1),
                 "Torchattacks",
             )
@@ -463,7 +461,7 @@ class BaseTest(unittest.TestCase):
                         max_iter=self.attack_params["epochs"],
                         targeted=False,
                         batch_size=self.x.size(0),
-                        verbose=True,
+                        verbose=self.verbose,
                     ).generate(x=self.x.clone().numpy())
                 ),
                 "ART",
@@ -573,7 +571,7 @@ class BaseTest(unittest.TestCase):
                         max_halving=1,
                         max_doubling=1,
                         batch_size=self.x.size(0),
-                        verbose=True,
+                        verbose=self.verbose,
                     ).generate(x=self.x.clone().numpy())
                 ),
                 "ART",
@@ -659,7 +657,7 @@ class BaseTest(unittest.TestCase):
                         epsilon=0,
                         nb_grads=self.attack_params["model"].params["classes"],
                         batch_size=self.x.size(0),
-                        verbose=True,
+                        verbose=self.verbose,
                     ).generate(x=self.x.clone().numpy())
                 ),
                 "ART",
@@ -722,7 +720,7 @@ class BaseTest(unittest.TestCase):
                     ],
                     eta=1,
                     beta=self.attacks["fab"].traveler.optimizer.param_groups[0]["beta"],
-                    verbose=True,
+                    verbose=self.verbose,
                 ).perturb(x=self.x.clone(), y=self.y.clone()),
                 "AdverTorch",
             )
@@ -743,7 +741,7 @@ class BaseTest(unittest.TestCase):
                     ],
                     eta=1,
                     beta=self.attacks["fab"].traveler.optimizer.param_groups[0]["beta"],
-                    verbose=True,
+                    verbose=self.verbose,
                     seed=self.seed,
                     multi_targeted=False,
                     n_classes=self.attack_params["model"].params["classes"],
@@ -794,7 +792,7 @@ class BaseTest(unittest.TestCase):
                         theta=1,
                         gamma=self.linf,
                         batch_size=self.x.size(0),
-                        verbose=True,
+                        verbose=self.verbose,
                     ).generate(x=self.x.clone().numpy())
                 ),
                 "ART",
@@ -852,7 +850,7 @@ class BaseTest(unittest.TestCase):
                         batch_size=self.x.size(0),
                         random_eps=True,
                         summary_writer=False,
-                        verbose=True,
+                        verbose=self.verbose,
                     ).generate(x=self.x.clone().numpy())
                 ),
                 "ART",
@@ -1034,7 +1032,10 @@ class FunctionalTests(BaseTest):
     def test_df(self):
         """
         This method performs a functional test for DF (DeepFool)
-        (https://arxiv.org/pdf/1511.04599.pdf).
+        (https://arxiv.org/pdf/1511.04599.pdf). Notably, when the learning rate
+        alpha is less than one, a substantial amount of additional iterations
+        are necessary for meaningful performance, so we override alpha to be 1
+        so that tests pass.
 
         :return: None
         :rtype: NoneType
@@ -1046,7 +1047,10 @@ class FunctionalTests(BaseTest):
     def test_fab(self):
         """
         This method performs a functional test for FAB (Fast Adaptive Boundary)
-        (https://arxiv.org/pdf/1907.02044.pdf).
+        (https://arxiv.org/pdf/1907.02044.pdf). Notably, when the learning rate
+        alpha is less than one, a substantial amount of additional iterations
+        are necessary for meaningful performance, so we override alpha to be 1
+        so that tests pass.
 
         :return: None
         :rtype: NoneType
@@ -1208,7 +1212,7 @@ class IdentityTests(BaseTest):
         """
         This method performs an identity test for APGD-DLR (Auto-PGD with DLR
         loss) (https://arxiv.org/pdf/2003.01690.pdf). Notably, DLR loss is
-        undefined when there are only two classes.
+        undefined for other frameworks when there are only two classes.
 
         :return: None
         :rtype: NoneType
@@ -1410,7 +1414,7 @@ class SemanticTests(BaseTest):
         lf = max((len(f) for f in ("aml", *fws)))
         results = zip(("aml", *fws), acc_abs, acc_diff, norms_perfs)
         for f, a, d, n in results:
-            print(f"{f:<{lf}} {attack.name} Model Acc: {a:.2%} ({d:.2%}), Results: {n}")
+            print(f"{f:>{lf}} {attack.name} Model Acc: {a:.2%} ({d:.2%}), Results: {n}")
 
         # compute target norm and assert marginal performance difference
         norm_map = (aml.surface.l0, aml.surface.l2, aml.surface.linf)
@@ -1436,7 +1440,7 @@ class SemanticTests(BaseTest):
         """
         This method performs a semantic test for APGD-DLR (Auto-PGD with DLR
         loss) (https://arxiv.org/pdf/2003.01690.pdf). Notably, DLR loss is
-        undefined when there are only two classes.
+        undefined for other frameworks when there are only two classes.
 
         :return: None
         :rtype: NoneType
