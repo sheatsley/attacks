@@ -6,8 +6,8 @@ Tue Jul 25 2022
 import torch  # Tensors and Dynamic neural networks in Python with strong GPU acceleration
 
 # TODO:
-# add unit tests
-# update deepfool return docstring
+# check if jsma "x_org proj" helps when using backwardsgd
+# consider adding a clipping subroutine to support naitive FAB
 
 
 class DeepFoolSaliency:
@@ -55,14 +55,18 @@ class DeepFoolSaliency:
         self.q = q
         return None
 
-    def __call__(self, g, loss, y, p, minimum=torch.tensor(1e-4), **kwargs):
+    def __call__(self, g, loss, y, p, minimum=1e-4, **kwargs):
         """
         This method applies the heuristic defined above. Specifically, this
-        computes the logit and gradient differences between the true class
-        and closest non-true class. It saves these differences as attributes
-        to be used later during Surface closure subroutines. Finally, it
-        returns the gradient-differences to be normalized by the appropriate
-        lp-norm function in the surface module.
+        computes the logit and gradient differences between the true class and
+        closest non-true class. It saves these differences as attributes to be
+        used later during Surface closure subroutines. Finally, it returns the
+        gradient-differences to be normalized by the appropriate lp-norm
+        function in the surface module. Notably, this method also computes a
+        projection with respect to original input, as used in FAB
+        (https://arxiv.org/pdf/1907.02044.pdf), which adds the dot product of
+        the gradient differences and current perturbation vector to the logit
+        differences.
 
         :param g: the gradients of the perturbation vector
         :type g: torch Tensor object (n, c, m)
@@ -71,10 +75,10 @@ class DeepFoolSaliency:
         :param y: the labels (or initial predictions) of x
         :type y: PyTorch Tensor object (n,)
         :param minimum: minimum gradient value (to mitigate underflow)
-        :type minimum: torch Tensor object (1,)
+        :type minimum: float
         :param kwargs: miscellaneous keyword arguments
         :type kwargs: dict
-        :return: gradient differences as defined by DeepFool
+        :return: absolute gradient differences as defined by DeepFool
         :rtype: torch Tensor object (n, m)
         """
 
@@ -89,27 +93,27 @@ class DeepFoolSaliency:
 
         # compute ith class
         grad_diffs = yth_grad.sub(other_grad)
-        save_my_logits = yth_logit.sub(other_logits)
-        logit_diffs = yth_logit.sub(other_logits).abs_()
+        logit_diffs = yth_logit.sub(other_logits)
         normed_ith_logit_diff, i = (
-            logit_diffs.div(grad_diffs.norm(self.q, dim=2).clamp(minimum))
+            logit_diffs.abs()
+            .div(grad_diffs.norm(self.q, dim=2).clamp(minimum))
             .add_(minimum)
             .topk(1, dim=1, largest=False)
         )
 
         # save ith grad signs & normed logit diffs & return absolute ith gradient diffs
-        ith_grad_diff = grad_diffs[
-            torch.arange(grad_diffs.size(0)), i.flatten(), :
-        ]  # gather here as well?
+        ith_grad_diff = grad_diffs[torch.arange(grad_diffs.size(0)), i.flatten()]
+        ith_logit_diff = logit_diffs.gather(1, i)
         self.normed_ith_logit_diff = normed_ith_logit_diff
         self.ith_grad_diff_sign = ith_grad_diff.sign()
 
-        # save me
-        num = ((ith_grad_diff * p).sum(1) + save_my_logits.gather(1, i).flatten()).abs()
-        self.saveme = (
-            num.div(ith_grad_diff.norm(2, 1).pow(2).clamp(minimum))
-            .add(minimum)
-            .unsqueeze(1)
+        # compute projection wrt original input to support BackwardsSGD
+        pith_logit_diff = ith_grad_diff.mul(p).sum(1, keepdim=True).add_(ith_logit_diff)
+        ith_grad_diff_norm = ith_grad_diff.norm(self.q, dim=1, keepdim=True)
+        self.org_proj = (
+            pith_logit_diff.abs()
+            .div(ith_grad_diff_norm.pow(self.q).clamp(minimum))
+            .add_(minimum)
             .mul(ith_grad_diff)
         )
         return ith_grad_diff.abs()
@@ -237,8 +241,3 @@ class JacobianSaliency:
         # zero out components whose yth and ith signs are equal and compute product
         smap = (yth_row.sign() != ith_row.sign()).mul(yth_row).mul(ith_row.abs())
         return smap
-
-
-if __name__ == "__main__":
-    """ """
-    raise SystemExit(0)
