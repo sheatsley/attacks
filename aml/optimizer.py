@@ -7,14 +7,6 @@ import torch  # Tensors and Dynamic neural networks in Python with strong GPU ac
 from torch.optim import Adam  # Implements Adam: A Method for Stochasitc Optimization
 from torch.optim import SGD  # Implements stochasitc gradient descent
 
-# TODO
-# consider adding closure to BackwardSGD to perform beta backstep after perturbation
-# add support when maximize is false (eg MBS max loss cannot be initialized to zero)
-# add unit tests to confirm correctness
-# find better way to update p in BackwardSGD
-# add alpha_max to backward SGD
-# consider masked_fill_ for all tensors
-
 
 class BackwardSGD(torch.optim.Optimizer):
     """
@@ -27,8 +19,21 @@ class BackwardSGD(torch.optim.Optimizer):
     adversarial examples (agnostic of lp budget), and (2) slow robust accuracy
     assessment. (2) is broadly addressed through the saliency map used by
     DeepFool (https://arxiv.org/pdf/1511.04599.pdf), while (1) is addressed by
-    this optimizer. Specifically, this optimizer performs a biased backward
-    step towards the original input, defined as:
+    this optimizer. Specifically, this optimizer performs both biased &
+    backward steps towards the initial input. The biased step is defined as:
+
+        Δ_(k+1) = (1 - α)(Δ_k + η * ∇f(x + Δ_k)) + α * η * P(∇f(x + Δ_k))
+
+    where Δ is the current perturbation vector, k is the current iteration, η
+    is the learnign rate, ∇f is the gradient of the model with respect to Δ, x
+    is the initial input, P is a function designed to encourage perturbations
+    to stay close to the initial input, and α is defined as:
+
+     α = min(||∇f(x + Δ)||_p / (||∇f(x + Δ)||_p + ||P(∇f(x + Δ_k))||_p), α_max)
+
+    where α_max is a constant in [0, 1]. Conceptually, this biased step
+    encourages updates that are also close to the initial input. The biased
+    step is defined as:
 
                         ß_(k+1) = ß if ∇f(x + Δ_k) ≠ c else 1
                         Δ_(k+1) = ß_(k+1) * η * ∇f(x + Δ_k)
@@ -36,98 +41,104 @@ class BackwardSGD(torch.optim.Optimizer):
     where k is the current iteration, ß is a constant in [0, 1], Δ is the
     current perturbation vector to produce adversarial example, ∇f is the
     gradient of the model with respect to Δ, x is the original input, c is the
-    label, and η is the learning rate. Conceputally, ß enables adversaires to
-    dampen the learning rate when inputs are already misclassified, ensuring x
-    + Δ is as close to x as possible (while achieving adversarial goals).
+    label, and η is the learning rate. Conceputally, ß enables adversaries to
+    dampen the learning rate when inputs are already misclassified, Δ is as
+    small as possible (while achieving adversarial goals).
 
     :func:`__init__`: instantiates BackwardSGD objects
     :func:`step`: applies one optimization step
     """
 
-    def __init__(self, params, lr, maximize, model, alpha_max=0.1, beta=0.9, **kwargs):
+    def __init__(
+        self,
+        params,
+        atk_loss,
+        lr,
+        maximize,
+        norm,
+        saliency_map,
+        alpha_max=0.1,
+        beta=0.9,
+        **kwargs,
+    ):
         """
-        This method instanties a Backward SGD object. It requires a learning
-        rate, ß, and a reference to a dlm LinearClassifier-inherited object (as
-        to determine misclassified inputs). It also accepts keyword arguments
-        for to provide a homogeneous interface. Notably, because PyTorch
-        optimizers cannot be instantiated without the parameter to optimize, a
-        dummy tensor is supplied and expected to be overriden at a later time
-        (i.e., within Traveler objects initialize method).
+        This method instanties a Backward SGD object. Beyond standard optimizer
+        parameters, a reference to a Loss module object (so misclassified
+        inputs can be calculated), the lp-norm (to compute α), and a reference
+        to a Saliency module object (as to retrieve P). It also accepts keyword
+        arguments for to provide a homogeneous interface. Notably, because
+        PyTorch optimizers cannot be instantiated without the parameter to
+        optimize, a dummy tensor is supplied and expected to be overriden at a
+        later time (i.e., within Traveler objects initialize method).
 
-        :param beta: momentum factor
+        :param alpha_max: maximum value of alpha
+        :type alpha_max: float
+        :param atk_loss: used to return the current model accuracy
+        :type atk_loss: Loss object
+        :param beta: backward step strength
         :type beta: float
         :param lr: learning rate
         :type lr: float
         :param maximize: whether to maximize or minimize the objective function
         :type maximize: bool
-        :param model: returns misclassified inputs
-        :type model: dlm LinearClassifier-inherited object
+        :param minimum: minimum gradient value (to mitigate underflow)
+        :type minimum: float
         :param params: the parameters to optimize over
         :type params: tuple of torch Tensor objects (n, m)
+        :param saliency_map: saliency map that computes P
+        :type saliency_map: Saliency module object
         :return: Backward SGD optimizer
         :rtype: BackwardSGD object
         """
         super().__init__(
             params,
             {
-                "lr": lr,
                 "alpha_max": alpha_max,
+                "atk_loss": atk_loss,
                 "beta": beta,
+                "lr": lr,
                 "maximize": maximize,
-                "model": model,
+                "norm": norm,
+                "saliency_map": saliency_map,
             },
         )
 
-        # initialize state
-        for group in self.param_groups:
-            for p in group["params"]:
-                state = self.state[p]
-                state["step"] = 0
-                state["delta_org"] = p.new_zeros(p.size())
-
     @torch.no_grad()
-    def step(self):
+    def step(self, minimum=1e-8):
         """
         This method applies one optimization step as described above.
         Specifically, this optimizer: (1) sets ß based on whether samples are
         misclassified, and (2) steps in the direction of the gradient of the
         loss with static learning rate η.
 
+        :param minimum: minimum gradient value (to mitigate underflow)
+        :type minimum: float
         :return: None
         :rtype: NoneType
         """
-        mini = 1e-4
         for group in self.param_groups:
             for p in group["params"]:
                 grad = p.grad.data if group["maximize"] else -p.grad.data
-                state = self.state[p]
-
-                # save the first gradient to bias subsequent perturbations
-                state["delta_org"] = -self.saveme.clone()
-
-                # compute alpha, biased projection, and apply update step
-                grad_norm = grad.norm(2, 1, keepdim=True)
-                alpha = (
-                    grad_norm.div(
-                        grad_norm.add(
-                            state["delta_org"].norm(2, 1, keepdim=True).clamp(mini)
-                        )
-                    ).add(mini)
-                ).clamp(max=group["alpha_max"])
-                bias = state["delta_org"].mul(group["lr"]).mul(alpha)
-                # grad.mul_(group["lr"]).mul_(alpha.mul_(-1).add_(1)).add_(bias)
-                grad.mul_(group["lr"]).mul_(1 - alpha).add_(bias)
-                # p.add_(grad).add_(1e-8 * grad.sign())
-                p.add_(grad)
-                # p.add_(grad.mul(group["lr"])).mul_(1 - alpha).add_(bias)
+                p_grad = (
+                    group["saliency_map"].org_proj
+                    if group["maximize"]
+                    else -group["saliency_map"].org_proj
+                )
 
                 # perform a backwardstep step for misclassified inputs
-                misclassified = ~group["model"].correct
+                misclassified = ~(group["atk_loss"].curr_acc)
                 p[misclassified] = p[misclassified].mul_(group["beta"])
-                # grad = -grad
 
-                # update optimizer state
-                state["step"] += 1
+                # compute alpha for biased projection
+                grad_norm = grad.norm(group["norm"], 1, keepdim=True).clamp(minimum)
+                p_grad_norm = p_grad.norm(group["norm"], 1, keepdim=True).clamp(minimum)
+                norm_sum = grad_norm.add(p_grad_norm)
+                alpha = grad_norm.div(norm_sum).clamp(max=group["alpha_max"])
+
+                # apply biased projection and update step
+                bias = p_grad.mul_(group["lr"]).mul_(alpha)
+                grad.mul_(group["lr"]).mul_(1 - alpha).add_(bias)
+                p.add_(grad)
         return None
 
 
@@ -147,7 +158,7 @@ class MomentumBestStart(torch.optim.Optimizer):
 
     where k is the current iteration, Δ is the current perturbation vector to
     produce adversarial examples, η is the current learning rate, ∇f is the
-    gradient of the model with respect to Δ, x is the original input, and α is
+    gradient of the model with respect to Δ, x is the init input, and α is
     a constant in [0, 1]. Secondly, the learning rate η is potentially halved
     at every checkpoint w, where checkpoints are determined by multiplying the
     total number of attack iterations by p_j, defined as:
@@ -161,7 +172,7 @@ class MomentumBestStart(torch.optim.Optimizer):
                                     < ρ * (w_j - w_(j-1))
         (2) η_(w_(j-1)) == η_(w_j) and LMax_(w_(j-1)) == LMax_(w_j)
 
-    where w_j is the jth checkpoint, L is the model loss, x is the original
+    where w_j is the jth checkpoint, L is the model loss, x is the initial
     input, Δ_i is the perturbation vector at the ith iteration, ρ is a
     constant, η_(w_j) is the learning rate at checkpoint w_j, and LMax_(w_j) is
     the highest model loss observed at checkpoint w_j. If both condtions are
@@ -190,17 +201,17 @@ class MomentumBestStart(torch.optim.Optimizer):
         **kwargs,
     ):
         """
-        This method instanties a MomentumBest Start object. It requires the
-        total number of optimization iterations, a reference to a Loss object
-        (so that the most recently computed loss can be retrieved), and the
-        maximimum budget of the lp-norm threat model (which initializes the
-        learning rate). It also accepts keyword arguments to provide a
-        homogeneous interface. Notably, because PyTorch optimizers cannot be
-        instantiated without the parameter to optimize, a dummy tensor is
-        supplied and expected to be overriden at a later time (i.e., within
-        Traveler objects initialize method).
+        This method instanties a MomentumBest Start object. Beyond standard
+        optimizer parameters, it requires the total number of optimization
+        iterations, a reference to a Loss module object (so that the most
+        recently computed loss can be retrieved), and the maximimum budget of
+        the lp-norm threat model (which initializes the learning rate). It also
+        accepts keyword arguments to provide a homogeneous interface. Notably,
+        because PyTorch optimizers cannot be instantiated without the parameter
+        to optimize, a dummy tensor is supplied and expected to be overriden at
+        a later time (i.e., within Traveler objects initialize method).
 
-        :param atk_loss: returns the current loss of the attack
+        :param atk_loss: used to return the current loss of the attack
         :type atk_loss: Loss object
         :param alpha: momentum factor
         :type alpha: float
@@ -230,8 +241,8 @@ class MomentumBestStart(torch.optim.Optimizer):
         super().__init__(
             params,
             {
-                "atk_loss": atk_loss,
                 "alpha": alpha,
+                "atk_loss": atk_loss,
                 "checkpoints": {w for w in wj[:-1]},
                 "epochs": epochs,
                 "epsilon": epsilon,
@@ -318,8 +329,3 @@ class MomentumBestStart(torch.optim.Optimizer):
                 state["step"] += 1
                 state["epoch"] += 1
         return None
-
-
-if __name__ == "__main__":
-    """ """
-    raise SystemExit(0)
