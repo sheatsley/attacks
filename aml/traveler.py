@@ -6,9 +6,6 @@ Wed Apr 27 2022
 """
 import torch  # Tensors and Dynamic neural networks in Python with strong GPU acceleration
 
-# TODO
-# add unit tests
-
 
 class Traveler:
     """
@@ -24,7 +21,7 @@ class Traveler:
     :func:`initialize`: prepares Traveler objects to operate over inputs
     """
 
-    def __init__(self, change_of_variables, optimizer, random_restart):
+    def __init__(self, change_of_variables, optimizer, random_start):
         """
         This method instantiates Traveler objects with a variety of attributes
         necessary for the remaining methods in this class. Conceptually,
@@ -34,16 +31,16 @@ class Traveler:
         into and out of the hyperbolic tangent space), (2) a PyTorch-based
         optimizer object from the optimizer module (which is initialized with
         α, the learning rate), (3) the minimum and maximum values to initialize
-        inputs (i.e., random restart, often sampled between -ε and ε), (4) a
-        tuple of callables to run on the input passed in to __call__, and (5)
-        any component that has advertised optimizable hyperparameters.
+        inputs (i.e., random start, often uniformly sampled between -ε and ε),
+        (4) a tuple of callables to run on the input passed in to __call__, and
+        (5) any component that has advertised optimizable hyperparameters.
 
         :param change_of_variables: whether to map inputs to tanh-space
         :type change_of_variables: bool
         :param optimizer: optimization algorithm to use
         :type optimizer: optimizer module object
-        :param random_restart: magnitude of a random perturbation
-        :type random_restart: scalar
+        :param random_start: magnitude of a random perturbation
+        :type random_start: scalar
         :param closure: subroutines to run at the end of __call__
         :type closure: tuple of callables
         :return: a traveler
@@ -51,7 +48,7 @@ class Traveler:
         """
         self.change_of_variables = change_of_variables
         self.optimizer = optimizer
-        self.random_restart = random_restart
+        self.random_start = random_start
         self.closure = [
             comp for c in vars(self) if hasattr(comp := getattr(self, c), "closure")
         ]
@@ -61,7 +58,7 @@ class Traveler:
             "α": optimizer.defaults.get("lr", "adaptive"),
             "CoV": change_of_variables,
             "optim": type(optimizer).__name__,
-            "RR": (-random_restart, random_restart),
+            "RR": (-random_start, random_start),
         }
         return None
 
@@ -109,12 +106,12 @@ class Traveler:
         :rtype: NoneType
         """
 
-        # subroutine (1): random restart
+        # subroutine (1): random start
         p.add_(
             torch.distributions.uniform.Uniform(
-                -self.random_restart, self.random_restart
+                -self.random_start, self.random_start
             ).sample(p.size())
-        ) if self.random_restart else 0
+        ) if self.random_start else 0
 
         # subroutine (2): change of variables
         if self.change_of_variables:
@@ -159,8 +156,3 @@ def tanh_space(x, into=False):
         if into
         else x.tanh().add(1).div(2)
     )
-
-
-if __name__ == "__main__":
-    """ """
-    raise SystemExit(0)
