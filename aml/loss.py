@@ -5,9 +5,6 @@ Wed Apr 6 2022
 """
 import torch  # Tensors and Dynamic neural networks in Python with strong GPU acceleration
 
-# TODO
-# add unit tests to confirm correctness
-
 
 class CELoss(torch.nn.CrossEntropyLoss):
     """
@@ -42,22 +39,28 @@ class CELoss(torch.nn.CrossEntropyLoss):
         super().__init__(reduction="none", **kwargs)
         return None
 
-    def forward(self, logits, y):
+    def forward(self, logits, y, yt=None):
         """
         This method serves as a wrapper for the PyTorch CrossEntropyLoss
         forward method. We provide this wrapper to expose the most recently
-        computed loss (detached from the current graph) to be used later by
-        optimizers who require it (e.g., BWSGD).
+        computed accuracy and loss to be used later by optimizers who require
+        it (e.g., BackwardSGD & MomentumBestStart, respectively).
 
         :param logits: the model logits
         :type logits: torch Tensor object (n, c)
         :param y: the labels (or initial predictions) of the inputs (e.g., x)
         :type y: PyTorch Tensor object (n,)
+        :param yt: the true labels if attempting to compute a jacobian
+        :type yt: PyTorch Tensor object (n,)
         :return: the current loss
         :rtype: torch Tensor object (n,)
         """
         curr_loss = super().forward(logits, y)
-        self.curr_loss = curr_loss.detach()
+        c = y.numel() // yt.numel() if yt is not None else 1
+        self.curr_loss = curr_loss.detach().take(
+            torch.arange(0, y.numel(), c).add(yt if yt is not None else 0)
+        )
+        self.curr_acc = logits.detach()[::c].argmax(1).eq(yt if yt is not None else y)
         return curr_loss
 
 
@@ -77,9 +80,9 @@ class CWLoss(torch.nn.Module):
     the second hyperparameter, parameterizes the tradeoff between
     imperceptibility and misclassification (which can be dynamically optimized
     for, e.g. via binary search). Moreover, like other losses, we store the
-    last computed loss, and expose attributes to state that optimizers should
-    minimize this function and Surface objects should provide a reference to
-    the perturbation vector.
+    last computed accuracy & loss, and expose attributes to state that
+    optimizers should minimize this function and Surface objects should provide
+    a reference to the perturbation vector.
 
     :func:`__init__`: instantiates a CWLoss object
     :func:`attach`: sets the perturbation vector as an object attribute
@@ -134,7 +137,7 @@ class CWLoss(torch.nn.Module):
         ) if self.c.shape < delta.shape else None
         return None
 
-    def forward(self, logits, y):
+    def forward(self, logits, y, yt=None):
         """
         This method computes the loss described above. Specifically, it
         computes the sum of: (1) the lp-norm of the perturbation, and (2) the
@@ -148,6 +151,8 @@ class CWLoss(torch.nn.Module):
         :type logits: torch Tensor object (n, c)
         :param y: the labels (or initial predictions) of the inputs (e.g., x)
         :type y: PyTorch Tensor object (n,)
+        :param yt: the true labels if attempting to compute a jacobian
+        :type yt: PyTorch Tensor object (n,)
         :return: the current loss
         :rtype: torch Tensor object (n,)
         """
@@ -163,9 +168,13 @@ class CWLoss(torch.nn.Module):
         max_logit, _ = logits.masked_select(~y_hot).view(-1, logits.size(1) - 1).max(1)
         log_diff = torch.clamp(yth_logit - max_logit, min=-self.k)
 
-        # save current loss for optimizers later
+        # save current accuracy and loss for optimizers later
         curr_loss = lp + self.c * log_diff
-        self.curr_loss = curr_loss.detach()
+        c = y.numel() // yt.numel() if yt is not None else 1
+        self.curr_loss = curr_loss.detach().take(
+            torch.arange(0, y.numel(), c).add(yt if yt is not None else 0)
+        )
+        self.curr_acc = logits.detach()[::c].argmax(1).eq(yt if yt is not None else y)
         return curr_loss
 
 
@@ -182,9 +191,9 @@ class DLRLoss(torch.nn.Module):
     is the next closest class (as measured by the moodel logits), and π defines
     the descending order of the model logits (that is, the denominator
     represents the difference between the largest and 3rd largest model logit).
-    Like other losses, we store the last computed loss and expose attributes so
-    that optimizers maximize this function and that a refernece to the
-    perturbation vector is not needed.
+    Like other losses, we store the last computed accuracy & loss, and expose
+    attributes so that optimizers maximize this function and that a refernece
+    to the perturbation vector is not needed.
 
     :func:`__init__`: instantiates a DLRLoss  object
     :func:`forward`: returns the loss for a given batch of inputs
@@ -204,7 +213,7 @@ class DLRLoss(torch.nn.Module):
         super().__init__()
         return None
 
-    def forward(self, logits, y, minimum=torch.tensor(1e-8)):
+    def forward(self, logits, y, yt=None, minimum=1e-8):
         """
         This method computes the loss described above. Specifically, it
         computes the division of: (1) the logit difference between the yth
@@ -216,8 +225,10 @@ class DLRLoss(torch.nn.Module):
         :type logits: torch Tensor object (n, c)
         :param y: the labels (or initial predictions) of the inputs (e.g., x)
         :type y: PyTorch Tensor object (n,)
+        :param yt: the true labels if attempting to compute a jacobian
+        :type yt: PyTorch Tensor object (n,)
         :param minimum: minimum gradient value (to mitigate underflow)
-        :type minimum: torch Tensor object (1,)
+        :type minimum: float
         :return: the current loss
         :rtype: torch Tensor object (n,)
         """
@@ -230,9 +241,13 @@ class DLRLoss(torch.nn.Module):
 
         # compute ordered logit differences
         log_desc = logits.sort(dim=1, descending=True).values
-        pi_diff = log_desc[:, 0] - log_desc[:, min(2, logits.size(1) - 1)]
-        curr_loss = -(log_diff / pi_diff.clamp_(minimum))
-        self.curr_loss = curr_loss.detach()
+        pi_diff = log_desc[:, 0].sub(log_desc[:, min(2, logits.size(1) - 1)])
+        curr_loss = -(log_diff.div(pi_diff).clamp_(minimum))
+        c = y.numel() // yt.numel() if yt is not None else 1
+        self.curr_loss = curr_loss.detach().take(
+            torch.arange(0, y.numel(), c).add(yt if yt is not None else 0)
+        )
+        self.curr_acc = logits.detach()[::c].argmax(1).eq(yt if yt is not None else y)
         return curr_loss
 
 
@@ -246,8 +261,8 @@ class IdentityLoss(torch.nn.Module):
     model logits. Thus, when x is duplicated c times (where c is the number of
     classes) backpropogating the gradients from this loss function will return
     a model Jacobian. Moreover, like other losses, we store the last computed
-    loss, and expose attributes so that optimizers should minimize this
-    function and a reference to the perturbation vector is not needed.
+    accuracy & loss, and expose attributes so that optimizers should minimize
+    this function and a reference to the perturbation vector is not needed.
 
     :func:`__init__`: instantiates an IdentityLoss object
     :func:`forward`: returns the yth logit component for a batch of imputs
@@ -267,7 +282,7 @@ class IdentityLoss(torch.nn.Module):
         super().__init__()
         return None
 
-    def forward(self, logits, y):
+    def forward(self, logits, y, yt=None):
         """
         This method computes the loss described above. Specifically, it returns
         the yth-component of the logits.
@@ -276,14 +291,15 @@ class IdentityLoss(torch.nn.Module):
         :type logits: torch Tensor object (n, c)
         :param y: the labels (or initial predictions) of the inputs (e.g., x)
         :type y: PyTorch Tensor object (n,)
+        :param yt: the true labels if attempting to compute a jacobian
+        :type yt: PyTorch Tensor object (n,)
         :return: the current loss
         :rtype: torch Tensor object (n,)
         """
         curr_loss = logits.gather(1, y.unsqueeze(1)).flatten()
-        self.curr_loss = curr_loss.detach()
+        c = y.numel() // yt.numel() if yt is not None else 1
+        self.curr_loss = curr_loss.detach().take(
+            torch.arange(0, y.numel(), c).add(yt if yt is not None else 0)
+        )
+        self.curr_acc = logits.detach()[::c].argmax(1).eq(yt if yt is not None else y)
         return curr_loss
-
-
-if __name__ == "__main__":
-    """ """
-    raise SystemExit(0)
