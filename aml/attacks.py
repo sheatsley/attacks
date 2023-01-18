@@ -21,7 +21,8 @@ import torch  # Tensors and Dynamic neural networks in Python with strong GPU ac
 # l2 rr should be normlized by l2-norm and l0 norm should pick max l0 random features
 # for l0 clamp, need to check if cov makes 0s a very small number (check on prev_p == 0 would fail)
 # consider setting a min in tanh_p (like l2 norm) to mitigate underflow
-# update progress to call model.accuracy and reference model.correct for stats
+# consider showing separate batch and output accuracies (attacks like fab almost always show 50% acc)
+# probably seprate out essential from non-essential ops in progress
 
 
 class Adversary:
@@ -398,7 +399,7 @@ class Attack:
         norm_map = {surface.l0: 0, surface.linf: 1, surface.l2: 2}
         saliency_map = (
             saliency_map(norm_map[norm])
-            if saliency_map in {saliency.DeepFoolSaliency, saliency.FabSaliency}
+            if saliency_map is saliency.DeepFoolSaliency
             else saliency_map()
         )
         loss_func = loss_func()
@@ -407,6 +408,8 @@ class Attack:
             "epochs": epochs,
             "epsilon": self.epsilon,
             "model": model,
+            "norm": self.lp,
+            "saliency_map": saliency_map,
         }
         torch_opt_params = {
             "lr": alpha,
@@ -499,8 +502,6 @@ class Attack:
             # compute peturbation updates and record progress
             for e in range(1, self.epochs + 1):
                 self.surface(xb, yb, pb)
-                # self.traveler.optimizer.g_diffs = self.surface.saliency_map.grad_diffs
-                self.traveler.optimizer.saveme = self.surface.saliency_map.saveme
                 self.traveler()
                 pb.clamp_(cnb, cxb)
                 self.project(xb, pb)
