@@ -95,27 +95,28 @@ class Surface:
         """
 
         # expand inputs if components require a full model jacobian
-        x_j, y_j, p_j, c_j = (
+        xj, yj, pj, cj = (
             (
-                x.repeat_interleave(c_j, dim=0),
-                torch.arange(c_j).repeat(x.size(0)),
-                p.repeat_interleave(c_j, dim=0),
-                c_j,
+                x.repeat_interleave(cj, dim=0),
+                torch.arange(cj).repeat(x.size(0)),
+                p.repeat_interleave(cj, dim=0),
+                cj,
             )
-            if (c_j := self.model.params["classes"] * self.saliency_map.jac_req)
+            if (cj := self.model.params["classes"] * self.saliency_map.jac_req)
             else (x, y, p, 1)
         )
 
         # map out of tanh-space, perform forward & backward passes
-        p_j.requires_grad = True
-        loss = self.loss(self.model(self.cov(x_j + p_j)), y_j, y if c_j != 1 else None)
-        (grad,) = torch.autograd.grad(loss, p_j, torch.ones_like(loss))
+        pj.requires_grad = True
+        logits = self.model(self.transform(xj + pj))
+        loss = self.loss(logits, yj, y if self.saliency_map.jac_req else None)
+        (grad,) = torch.autograd.grad(loss, pj, torch.ones_like(loss))
         loss = loss.detach()
-        p_j.requires_grad = False
+        pj.requires_grad = False
 
         # apply saliency map and lp-norm filter
-        opt_args = {"loss": loss.view(-1, c_j), "y": y, "p": p}
-        smap_grad = self.saliency_map(grad.view(-1, c_j, grad.size(1)), **opt_args)
+        opt_args = {"loss": loss.view(-1, cj), "y": y, "p": p}
+        smap_grad = self.saliency_map(grad.view(-1, cj, grad.size(1)), **opt_args)
         dist = (c.sub(p).abs() for c in self.clip)
         final_grad = (
             self.norm(smap_grad, dist, self.loss.max_obj)
@@ -137,33 +138,80 @@ class Surface:
         """
         return f"Surface({self.params})"
 
-    def initialize(self, clip, p):
+    def initialize(self, ranges, clip, p):
         """
         This method performs any preprocessing and initialization steps prior
-        to crafting adversarial examples. Specifically, some attacks (1)
+        to crafting adversarial examples. Specifically, (1) the minimum and
+        maximum values for features are saved so that inputs can be
+        de-normalized before they are passed into the model, (2) some attacks
         operate under the l0-norm, which exhibit a difficiency when the most
         salient feature is at a clipping or threat-model bound; this can be
         alleviated by considering these bounds when building the saliency map,
-        or (2) directly incorporates lp-norms as part of the loss function
-        (e.g., CW) which requires access to the perturbation vector. At this
-        time, this intilization method attaches l0-bounds to Surface objects
-        and perturbation vectors to loss functions (if required).
+        and (3) some attacks directly incorporate lp-norms as part of the loss
+        function (e.g., CW-L2) which requires access to the perturbation
+        vector. At this time, this initialization method attaches feature
+        ranges & clips to Surface objects and perturbation vectors to loss
+        functions (if required).
 
+        :param ranges: the range of allowable feature values
+        :type ranges: tuple of torch
         :param clip: the range of allowable values for the perturbation vector
-        :type clip: tuple of torch Tensor objects (n, m)
+        :type clip: tuple of torch Tensor objects (n, m) Tensor objects (n, m)
         :param p: the perturbation vectors used to craft adversarial examples
         :type p: torch Tensor object (n, m)
         :return: None
         :rtype: NoneType
         """
 
-        # subroutine (1): save minimum and maximum values for l0 attacks
+        # subroutine (1): save feature ranges
+        self.mins, self.maxs = ranges
+
+        # subroutine (2): save minimum and maximum values for l0 attacks
         self.clip = clip
 
-        # subroutine (2): attach the perturbation vector to loss objects
-        if self.loss.del_req:
-            self.loss.attach(p)
+        # subroutine (3): attach the perturbation vector to loss objects
+        self.loss.attach(p) if self.loss.del_req else None
         return None
+
+    def min_max_scale(self, x):
+        """
+        This method maps inputs back into their original domains. Semantically
+        identical to sklearn preprocessing MinMaxScaler, this method maps
+        inputs back into their original domains according to the minimums and
+        maximums seen pre-normalized (which are arguments to the initialize
+        method). Specifically, this method applies the following:
+
+                        o = x * (max(x) - min(x)) + min(x)
+
+        Where o is the initial input and x is the transformed input Notably,
+        all operations are done in-place.
+
+        :param x: normalized inputs
+        :type x: torch Tensor object (n, m)
+        :return: denormalized inputs
+        :rtype: torch Tensor object (n, m)
+        """
+        breakpoint()
+        return x.mul_(self.maxs.sub(self.mins)).add_(self.mins)
+
+    def transform(self, x):
+        """
+        This method applies a series of transformations before an input is
+        passed into the model. At this item, this supports two transformations:
+        (1) mapping inputs out of the tanh-space, and (2) inversing min-max
+        normalization. Notably, many techniques assume inputs lie within [0, 1]
+        (such as change of variables), and thus, they must additionally be
+        mapped out of [0, 1] before computing model logits. Finally, we detach
+        from x when mapping out of [0, 1] to ensure such operations are not
+        tracked by autograd.
+
+        :param x: current batch of transformed inputs
+        :type x: torch Tensor object (n, m)
+        :return: current batch of inputs, de-transformed
+        :rtype: torch Tensor object (n, m)
+        """
+        self.min_max_scale(self.cov(x).detach())
+        return x
 
 
 def linf(g):
