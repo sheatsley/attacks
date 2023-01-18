@@ -23,6 +23,7 @@ import torch  # Tensors and Dynamic neural networks in Python with strong GPU ac
 # consider setting a min in tanh_p (like l2 norm) to mitigate underflow
 # consider showing separate batch and output accuracies (attacks like fab almost always show 50% acc)
 # probably seprate out essential from non-essential ops in progress
+# confirm progress logic correcetness for max-loss cov
 
 
 class Adversary:
@@ -31,18 +32,15 @@ class Adversary:
     shown in https://arxiv.org/pdf/1608.04644.pdf and
     https://arxiv.org/pdf/1907.02044.pdf, effective adversaries often enact
     some decision after adversarial examples have been crafted. For the
-    provided examples, such adversaries embed hyperparamter optimization, and
-    perform multiple restarts (useful only if the attack is non-deterministic)
-    and simply return the most effective adversarial examples. This class
-    facilitiates such functions.
+    provided examples, such adversaries embed hyperparamter optimization,
+    perform multiple restarts (for non-deterministic attacks), and return the
+    most effective adversarial examples. This class provides such functions.
 
     :func:`__init__`: instantiates Adversary objects
     :func:`__repr__`: returns the threat model
     :func:`attack`: returns a set of adversarial examples
-    :func:`carlini`: hyperparameter criterion used in CW attack
     :func:`max_loss`: restart criterion used in PGD attack
     :func:`min_norm`: restart criterion used in FAB attack
-    :func:`minmax_scale`: normalizes inputs to be within [0, 1]
     """
 
     def __init__(
@@ -59,7 +57,8 @@ class Adversary:
         This method instantiates an Adversary object with a hyperparameter to
         be optimized (via binary search), the lower and upper bounds to
         consider for binary search, the criterion to control the hyperparameter
-        search (by convention, "success" is encoded as True), the number of
+        search (by convention, "success" is encoded as True, meaning the
+        hyperparameter will be decreased for the next iteration), the number of
         hyperparameter optimization steps, the number of restarts, and the
         criterion to determine if an input is kept across restarts.
 
@@ -128,9 +127,7 @@ class Adversary:
         :rtype: torch Tensor object (n, m)
         """
 
-        # rescale inputs and  iterate over restarts & hyperparameters
-        print("Rescaling inputs...")
-        x = self.minmaxscale(x)
+        # iterate over restarts & hyperparameters
         best_p = torch.zeros_like_(x)
         for iter_step in range(self.num_restarts):
             print(
@@ -172,32 +169,7 @@ class Adversary:
                     f"Found {best_updates.sum()} better adversarial examples!",
                     "(+{best_updates.sum().div(best_updates.numel()):.2%})",
                 )
-
-        # unscale inputs and return
-        return self.minmaxscale(x + best_p, False)
-
-    def carlini(self, x, curr_p, prev_p, y):
-        """
-        This method serves as the hyperparameter criterion as used in
-        https://arxiv.org/pdf/1608.04644.pdf. Specifically, it enforces the
-        following scheme: if the current iterate is misclassifed and has lower
-        norm than the previous iterate, then decrease the hyperparameter
-        emphasizing misclassification, otherwise increase it.
-
-        :param x: inputs to produce adversarial examples from
-        :type x: torch Tensor object (n, m)
-        :param curr_p: the current set of perturbation vectors
-        :type curr_p: torch Tensor object (n, m)
-        :param prev_p: the previous set of perturbation vectors
-        :type prev_p: torch Tensor object (n, m)
-        :param y: the labels (or initial predictions) of x
-        :type y: Pytorch Tensor object (n,)
-        :return: whether the hyperparameter should be decreased
-        :rtype: torch Tensor object (n,)
-        """
-        return self.model.predict(x + curr_p).not_eq_(y) and curr_p.norm(
-            self.norm, 1
-        ) < prev_p.norm(self.norm, 1)
+        return x + best_p
 
     def max_loss(self, x, curr_p, best_p, y):
         """
@@ -223,9 +195,9 @@ class Adversary:
     def min_norm(self, x, curr_p, best_p, y):
         """
         This method serves as a restart criterion as used in
-        https://arxiv.org/pdf/1907.02044.pdf. Specifically, it returns the set
-        of perturbations whose norm is minimal (while still being
-        misclassified).
+        https://arxiv.org/pdf/1907.02044.pdf and
+        https://arxiv.org/pdf/1608.04644.pdf. Specifically, it returns the set
+        of misclassified perturbations with minimal norm.
 
         :param x: inputs to produce adversarial examples from
         :type x: torch Tensor object (n, m)
@@ -242,28 +214,6 @@ class Adversary:
             curr_p.norm(self.norm, 1) < best_p.norm(self.norm, 1)
             or best_p.norm(self.norm, 1).eq(0)
         )
-
-    def minmax_scale(self, x, transform=True):
-        """
-        This method serves as a wrapper for sklearn.preprocessing.MinMaxScaler.
-        Specifically, it maps inputs to [0, 1] (as some techniques assume this
-        range, e.g., change of variables). Importantly, since these scalers
-        always return numpy arrays, this method additionally casts these inputs
-        back as PyTorch tensors with the original data type.
-
-        :param x: inputs to scale
-        :type x: torch Tensor object (n, m)
-        :param transform: performs the transformation if true; the inverse if false
-        :return: scaled inputs
-        :rtype: torch Tensor object (n, m)
-        """
-        if transform:
-            self.scaler = sklearn.preprocessing.MinMaxScaler()
-            self.scaler.dtype = x.dtype
-            x = self.scaler.fit_transform(x)
-        else:
-            x = self.scaler.inverse_transform(x)
-        return torch.from_numpy(x).to(self.scaler.dtype)
 
 
 class Attack:
@@ -289,7 +239,6 @@ class Attack:
         self,
         alpha,
         change_of_variables,
-        clip,
         early_termination,
         epochs,
         epsilon,
@@ -297,7 +246,7 @@ class Attack:
         norm,
         model,
         optimizer_alg,
-        random_restart,
+        random_start,
         saliency_map,
         batch_size=-1,
         verbosity=0.25,
@@ -312,8 +261,6 @@ class Attack:
         :type batch_size: int
         :param early_termination: whether misclassified inputs are perturbed
         :type early_termination: bool
-        :param clip: range of allowable values for the domain
-        :type clip: tuple of floats or tuple of torch Tensor object (n, m)
         :param epochs: number of optimization steps to perform
         :type epochs: int
         :param epsilon: lp-norm ball threat model
@@ -329,8 +276,8 @@ class Attack:
         :type change_of_variables: bool
         :param optimizer_alg: optimization algorithm to use
         :type optimizer_alg: optimizer module class
-        :param random_restart: whether to randomly perturb inputs
-        :type random_restart: bool
+        :param random_start: whether to randomly perturb initial inputs
+        :type random_start: bool
 
         Finally, the following parameters define Surface objects:
 
@@ -346,7 +293,7 @@ class Attack:
         To easily identify attacks, __repr__ is overriden and instead returns
         an abbreviation computed by concatenating the first letter (or two, if
         there is a name collision) of the following parameters, in order: (1)
-        optimizer, (2) if random restart was used, (3) if change of variables
+        optimizer, (2) if random start was used, (3) if change of variables
         was applied, (4) loss function, (5) saliency map, and (6) norm used.
         Combinations that yield known attacks are labeled as such (see __repr__
         for more details).
@@ -358,25 +305,27 @@ class Attack:
         # set & save attack parameters, and build short attack name
         self.batch_size = batch_size
         self.change_of_variables = change_of_variables
-        self.clip = (-torch.inf, torch.inf) if change_of_variables else clip
         self.epochs = epochs
         self.epsilon = epsilon
         self.et = early_termination
-        self.verbosity = max(1, int(epochs * verbosity))
-        self.project = getattr(self, norm.__name__)
         self.lp = {surface.l0: 0, surface.l2: 2, surface.linf: torch.inf}[norm]
+        self.project = getattr(self, norm.__name__)
         self.results = {m: [] for m in ("acc", "aloss", "mloss", "l0", "l2", "linf")}
+        self.verbosity = max(1, int(epochs * verbosity))
+        self.clip = torch.tensor(
+            (-torch.inf, torch.inf) if change_of_variables else (0, 1)
+        ).unbind()
         self.components = {
             "change of variables": change_of_variables,
             "loss function": loss_func.__name__,
             "optimizer": optimizer_alg.__name__,
-            "random restart": random_restart,
+            "random start": random_start,
             "saliency map": saliency_map.__name__,
             "target norm": "l∞" if norm == surface.linf else norm.__name__,
         }
         name = (
             self.components["optimizer"][0],
-            "R" if self.components["random restart"] else "r̶",
+            "R" if self.components["random start"] else "r̶",
             "V" if self.components["change of variables"] else "v̶",
             self.components["loss function"][:2],
             self.components["saliency map"][0],
@@ -422,7 +371,7 @@ class Attack:
             else torch_opt_params
         )
         self.traveler = traveler.Traveler(
-            change_of_variables, optimizer_alg, random_restart * epsilon
+            change_of_variables, optimizer_alg, random_start * epsilon
         )
         self.surface = surface.Surface(
             loss_func, model, norm, saliency_map, change_of_variables
@@ -460,7 +409,7 @@ class Attack:
         Specifically, it normalizes inputs to be within [0, 1] (as some
         techniques assume this range, e.g., change of variables), creates a
         copy of x, creates the desired batch size, performs traveler
-        initilizations (i.e., change of variables and random restart), and
+        initilizations (i.e., change of variables and random start), and
         iterates an epoch number of times.
 
         :param x: inputs to produce adversarial examples from
@@ -471,16 +420,13 @@ class Attack:
         :rtype: torch Tensor object (n, m)
         """
 
-        # initialize perturbation vectors, batches, and clips
+        # initialize perturbations, ranges, inputs, and batches
         x = x.detach().clone()
         p = x.new_zeros(x.size())
+        mins, maxs = (x.min(0).values, x.max(0).values)
+        x.sub_(mins).div_(maxs.sub(mins))
         batch_size = x.size(0) if self.batch_size == -1 else self.batch_size
         num_batches = -(-x.size(0) // batch_size)
-        clip = (
-            self.clip
-            if all(isinstance(c, torch.Tensor) for c in self.clip)
-            else tuple(torch.full_like(x, c) for c in self.clip)
-        )
         o = torch.where(
             self.surface.model(x).argmax(1).ne(y).unsqueeze(1),
             torch.zeros(x.size()),
@@ -492,8 +438,8 @@ class Attack:
         xi, yi, pi, oi = (t.split(batch_size) for t in (x, y, p, o))
         for b, (xb, yb, pb, ob) in enumerate(zip(xi, yi, pi, oi)):
             print(f"On batch {b + 1} of {num_batches} {(b + 1) / num_batches:.1%}...")
-            cnb, cxb = (c.sub(xb) for c in clip)
-            self.surface.initialize((cnb, cxb), pb)
+            cnb, cxb = (c.sub(xb) for c in self.clip)
+            self.surface.initialize((mins, maxs), (cnb, cxb), pb)
             self.traveler.initialize(xb, pb)
             pb.clamp_(cnb, cxb)
             self.project(xb, pb)
@@ -619,7 +565,7 @@ class Attack:
         """
 
         # compute absolute stats (averaged on exit) & update early termination
-        logits = self.surface.model(self.surface.cov(xb + pb))
+        logits = self.surface.model(self.surface.transform(xb + pb))
         mloss = self.surface.model.loss(logits, yb).item()
         ali = self.surface.loss(logits, yb)
         aloss = ali.sum().item()
@@ -635,7 +581,13 @@ class Attack:
             smaller = pb.norm(self.lp, 1).lt(ob.norm(self.lp, 1))
             update = (~correct).logical_and_(smaller)
         else:
-            ologits = self.surface.model(self.surface.cov(xb) + ob.nan_to_num(posinf=0))
+
+            # only map x out of tanh-space since perturbations already are
+            ologits = self.surface.model(
+                self.surface.min_max_scale(
+                    self.surface.cov(xb) + ob.nan_to_num(posinf=0)
+                )
+            )
             oloss = self.surface.loss(ologits, yb)
             update = oloss.lt(ali) if self.surface.loss.max_obj else oloss.gt(ali)
         ob[update] = pb[update]
@@ -676,10 +628,10 @@ class Attack:
         tanh-space, this also supports an out-of-place-non-scaled version of
         the procedure defined in tanh_map.
 
-        :param x: adversarial examples in tanh-space
+        :param x: initial inputs in tanh-space
         :type x: torch Tensor object (n, m)
-        :param ox: original inputs
-        :type ox: torch tensor object (n, m)
+        :param p: perturbations in tanh-space
+        :type p: torch Tensor object (n, m)
         :param into: whether to map into (or out of) the tanh-space
         :type into: bool
         :return: perturbation vector mapped out of tanh-space
@@ -694,7 +646,6 @@ class Attack:
 
 def attack_builder(
     alpha=None,
-    clip=None,
     epochs=None,
     early_termination=None,
     epsilon=None,
@@ -706,7 +657,7 @@ def attack_builder(
         optimizer.MomentumBestStart,
         optimizer.SGD,
     ),
-    random_restart_enabled=(True, False),
+    random_start_enabled=(True, False),
     losses=(loss.CELoss, loss.CWLoss, loss.DLRLoss, loss.IdentityLoss),
     norms=(surface.l0, surface.l2, surface.linf),
     saliency_maps=(
@@ -721,14 +672,14 @@ def attack_builder(
     machine learning can be cast into a single, unified framework. With this
     observation, this method combinatorically builds attack objects by swapping
     popular optimizers, norms, saliency maps, loss functions, and other
-    techniques used within the AML community, such as random restart and change
+    techniques used within the AML community, such as random start and change
     of variables. The combinations of supported components are shown below:
 
         Traveler Components:
         Change of variables: Enabled or disabled
         Optimizer: Adam, Backward Stochastic Gradient Descent,
                     Momentum Best Start, and Stochastic Gradient Descent
-        Random restart: Enabled or disabled
+        Random start: Enabled or disabled
 
         Surface Components:
         Loss: Categorical Cross-Entropy, Difference of Logits Ratio, Identity,
@@ -742,8 +693,6 @@ def attack_builder(
 
     :param alpha: learning rate of the optimizer
     :type alpha: float
-    :param clip: permissible values for the domain
-    :type clip: tuple of floats or torch Tensor object (n, m)
     :param early_termination: whether misclassified inputs are perturbed
     :type early_termination: bool
     :param epochs: number of optimization steps to perform
@@ -761,7 +710,7 @@ def attack_builder(
     # generate combinations of components and instantiate Attack objects
     num_attacks = (
         len(optimizers)
-        * len(random_restart_enabled)
+        * len(random_start_enabled)
         * len(change_of_variables_enabled)
         * len(saliency_maps)
         * len(norms)
@@ -773,14 +722,14 @@ def attack_builder(
         loss_func,
         norm,
         optimizer_alg,
-        random_restart,
+        random_start,
         saliency_map,
     ) in itertools.product(
         change_of_variables_enabled,
         losses,
         norms,
         optimizers,
-        random_restart_enabled,
+        random_start_enabled,
         saliency_maps,
     ):
         yield Attack(
@@ -792,24 +741,22 @@ def attack_builder(
             model=model,
             norm=norm,
             optimizer=optimizer_alg,
-            random_restart=random_restart,
+            random_start=random_start,
             saliency_map=saliency_map,
             verbosity=verbosity,
         )
 
 
-def apgdce(alpha=None, clip=None, epochs=None, epsilon=None, model=None, verbosity=1):
+def apgdce(alpha=None, epochs=None, epsilon=None, model=None, verbosity=1):
     """
     This function serves as an alias to build Auto-PGD with Cross-Entropy loss
     (APGD-CE), as shown in https://arxiv.org/abs/2003.01690. Specifically,
     APGD-CE: does not use change of variables, uses the Momentum Best Start
-    optimizer, uses random restart, uses Cross-Entropy loss, uses l∞ norm, and
+    optimizer, uses random start, uses Cross-Entropy loss, uses l∞ norm, and
     uses the Identity saliency map.
 
     :param alpha: learning rate of the optimizer
     :type alpha: float
-    :param clip: range of allowable values for the domain
-    :type clip: tuple of floats or torch Tensor object (n, m)
     :param early_termination: whether misclassified inputs are perturbed
     :type early_termination: bool
     :param epochs: number of optimization steps to perform
@@ -825,14 +772,13 @@ def apgdce(alpha=None, clip=None, epochs=None, epsilon=None, model=None, verbosi
     """
     return Attack(
         alpha=alpha,
-        clip=clip,
         early_termination=False,
         epochs=epochs,
         epsilon=epsilon,
         model=model,
         change_of_variables=False,
         optimizer_alg=optimizer.MomentumBestStart,
-        random_restart=True,
+        random_start=True,
         loss_func=loss.CELoss,
         norm=surface.linf,
         saliency_map=saliency.IdentitySaliency,
@@ -840,19 +786,16 @@ def apgdce(alpha=None, clip=None, epochs=None, epsilon=None, model=None, verbosi
     )
 
 
-def apgddlr(alpha=None, clip=None, epochs=None, epsilon=None, model=None, verbosity=1):
+def apgddlr(alpha=None, epochs=None, epsilon=None, model=None, verbosity=1):
     """
     This function serves as an alias to build Auto-PGD with the Difference of
-    Logits Ratio loss (APGD-DLR), as shown in
-    https://arxiv.org/abs/2003.01690. Specifically, APGD-DLR: does not use
-    change of variables, uses the Momentum Best Start optimizer, uses random
-    restart, uses Difference of Logits ratio loss, uses l∞ norm, and uses the
-    Identity saliency map.
+    Logits Ratio loss (APGD-DLR), as shown in https://arxiv.org/abs/2003.01690.
+    Specifically, APGD-DLR: does not use change of variables, uses the Momentum
+    Best Start optimizer, uses random start, uses Difference of Logits ratio
+    loss, uses l∞ norm, and uses the Identity saliency map.
 
     :param alpha: learning rate of the optimizer
     :type alpha: float
-    :param clip: range of allowable values for the domain
-    :type clip: tuple of floats or torch Tensor object (n, m)
     :param early_termination: whether misclassified inputs are perturbed
     :type early_termination: bool
     :param epochs: number of optimization steps to perform
@@ -869,7 +812,6 @@ def apgddlr(alpha=None, clip=None, epochs=None, epsilon=None, model=None, verbos
     return Attack(
         alpha=alpha,
         change_of_variables=False,
-        clip=clip,
         early_termination=False,
         epochs=epochs,
         epsilon=epsilon,
@@ -877,24 +819,22 @@ def apgddlr(alpha=None, clip=None, epochs=None, epsilon=None, model=None, verbos
         model=model,
         norm=surface.linf,
         optimizer_alg=optimizer.MomentumBestStart,
-        random_restart=True,
+        random_start=True,
         saliency_map=saliency.IdentitySaliency,
         verbosity=verbosity,
     )
 
 
-def bim(alpha=None, clip=None, epochs=None, epsilon=None, model=None, verbosity=1):
+def bim(alpha=None, epochs=None, epsilon=None, model=None, verbosity=1):
     """
     This function serves as an alias to build the Basic Iterative Method (BIM),
     as shown in (https://arxiv.org/pdf/1611.01236.pdf) Specifically, BIM: does
     not use change of variables, uses the Stochastic Gradient Descent
-    optimizer, does not use random restart, uses Cross Entropyy loss, uses l∞
+    optimizer, does not use random start, uses Cross Entropyy loss, uses l∞
     norm, and uses the Identity saliency map.
 
     :param alpha: learning rate of the optimizer
     :type alpha: float
-    :param clip: range of allowable values for the domain
-    :type clip: tuple of floats or torch Tensor object (n, m)
     :param early_termination: whether misclassified inputs are perturbed
     :type early_termination: bool
     :param epochs: number of optimization steps to perform
@@ -911,7 +851,6 @@ def bim(alpha=None, clip=None, epochs=None, epsilon=None, model=None, verbosity=
     return Attack(
         alpha=alpha,
         change_of_variables=False,
-        clip=clip,
         early_termination=False,
         epochs=epochs,
         epsilon=epsilon,
@@ -919,23 +858,21 @@ def bim(alpha=None, clip=None, epochs=None, epsilon=None, model=None, verbosity=
         model=model,
         norm=surface.linf,
         optimizer_alg=optimizer.SGD,
-        random_restart=False,
+        random_start=False,
         saliency_map=saliency.IdentitySaliency,
         verbosity=verbosity,
     )
 
 
-def cwl2(alpha=None, clip=None, epochs=None, epsilon=None, model=None, verbosity=1):
+def cwl2(alpha=None, epochs=None, epsilon=None, model=None, verbosity=1):
     """
     This function serves as an alias to build Carlini-Wagner l₂ (CW-L2), as
     shown in (https://arxiv.org/pdf/1608.04644.pdf) Specifically, CW-L2: uses
-    change of variables, uses the Adam optimizer, does not use random restart,
+    change of variables, uses the Adam optimizer, does not use random start,
     uses Carlini-Wagner loss, uses l₂ norm, and uses the Identity saliency map.
 
     :param alpha: learning rate of the optimizer
     :type alpha: float
-    :param clip: range of allowable values for the domain
-    :type clip: tuple of floats or torch Tensor object (n, m)
     :param early_termination: whether misclassified inputs are perturbed
     :type early_termination: bool
     :param epochs: number of optimization steps to perform
@@ -952,7 +889,6 @@ def cwl2(alpha=None, clip=None, epochs=None, epsilon=None, model=None, verbosity
     return Attack(
         alpha=alpha,
         change_of_variables=True,
-        clip=clip,
         early_termination=True,
         epochs=epochs,
         epsilon=epsilon,
@@ -960,24 +896,22 @@ def cwl2(alpha=None, clip=None, epochs=None, epsilon=None, model=None, verbosity
         model=model,
         norm=surface.l2,
         optimizer_alg=optimizer.Adam,
-        random_restart=False,
+        random_start=False,
         saliency_map=saliency.IdentitySaliency,
         verbosity=verbosity,
     )
 
 
-def df(alpha=None, clip=None, epochs=None, epsilon=None, model=None, verbosity=1):
+def df(alpha=None, epochs=None, epsilon=None, model=None, verbosity=1):
     """
     This function serves as an alias to build DeepFool (DF), as shown in
     (https://arxiv.org/pdf/1511.04599.pdf) Specifically, DF: does not use
     change of variables, uses the Stochastic Gradient Descent optimizer, does
-    not use random restart, uses Identity loss, uses l₂ norm, and uses the
+    not use random start, uses Identity loss, uses l₂ norm, and uses the
     DeepFool saliency map.
 
     :param alpha: learning rate of the optimizer
     :type alpha: float
-    :param clip: range of allowable values for the domain
-    :type clip: tuple of floats or torch Tensor object (n, m)
     :param early_termination: whether misclassified inputs are perturbed
     :type early_termination: bool
     :param epochs: number of optimization steps to perform
@@ -994,7 +928,6 @@ def df(alpha=None, clip=None, epochs=None, epsilon=None, model=None, verbosity=1
     return Attack(
         alpha=alpha,
         change_of_variables=False,
-        clip=clip,
         early_termination=True,
         epochs=epochs,
         epsilon=epsilon,
@@ -1002,24 +935,22 @@ def df(alpha=None, clip=None, epochs=None, epsilon=None, model=None, verbosity=1
         model=model,
         norm=surface.l2,
         optimizer_alg=optimizer.SGD,
-        random_restart=False,
+        random_start=False,
         saliency_map=saliency.DeepFoolSaliency,
         verbosity=verbosity,
     )
 
 
-def fab(alpha=None, clip=None, epochs=None, epsilon=None, model=None, verbosity=1):
+def fab(alpha=None, epochs=None, epsilon=None, model=None, verbosity=1):
     """
     This function serves as an alias to build Fast Adaptive Boundary (FAB), as
     shown in (https://arxiv.org/pdf/1907.02044.pdf) Specifically, FAB: does not
     use change of variables, uses the Backward Stochastic Gradient Descent
-    optimizer, does not use random restart, uses Identity loss, uses l₂ norm,
-    and uses the DeepFool saliency map.
+    optimizer, does not use random start, uses Identity loss, uses l₂ norm, and
+    uses the DeepFool saliency map.
 
     :param alpha: learning rate of the optimizer
     :type alpha: float
-    :param clip: range of allowable values for the domain
-    :type clip: tuple of floats or torch Tensor object (n, m)
     :param early_termination: whether misclassified inputs are perturbed
     :type early_termination: bool
     :param epochs: number of optimization steps to perform
@@ -1036,7 +967,6 @@ def fab(alpha=None, clip=None, epochs=None, epsilon=None, model=None, verbosity=
     return Attack(
         alpha=alpha,
         change_of_variables=False,
-        clip=clip,
         early_termination=True,
         epochs=epochs,
         epsilon=epsilon,
@@ -1044,24 +974,22 @@ def fab(alpha=None, clip=None, epochs=None, epsilon=None, model=None, verbosity=
         model=model,
         norm=surface.l2,
         optimizer_alg=optimizer.BackwardSGD,
-        random_restart=False,
+        random_start=False,
         saliency_map=saliency.DeepFoolSaliency,
         verbosity=verbosity,
     )
 
 
-def pgd(alpha=None, clip=None, epochs=None, epsilon=None, model=None, verbosity=1):
+def pgd(alpha=None, epochs=None, epsilon=None, model=None, verbosity=1):
     """
     This function serves as an alias to build Projected Gradient Descent (PGD),
     as shown in (https://arxiv.org/pdf/1706.06083.pdf) Specifically, PGD: does
     not use change of variables, uses the Stochastic Gradient Descent
-    optimizer, uses random restart, uses Identity loss, uses l∞ norm, and uses
+    optimizer, uses random start, uses Identity loss, uses l∞ norm, and uses
     the Identity saliency map.
 
     :param alpha: learning rate of the optimizer
     :type alpha: float
-    :param clip: range of allowable values for the domain
-    :type clip: tuple of floats or torch Tensor object (n, m)
     :param epochs: number of optimization steps to perform
     :type epochs: int
     :param epsilon: lp-norm ball threat model
@@ -1076,7 +1004,6 @@ def pgd(alpha=None, clip=None, epochs=None, epsilon=None, model=None, verbosity=
     return Attack(
         alpha=alpha,
         change_of_variables=False,
-        clip=clip,
         early_termination=False,
         epochs=epochs,
         epsilon=epsilon,
@@ -1084,24 +1011,22 @@ def pgd(alpha=None, clip=None, epochs=None, epsilon=None, model=None, verbosity=
         model=model,
         norm=surface.linf,
         optimizer_alg=optimizer.SGD,
-        random_restart=True,
+        random_start=True,
         saliency_map=saliency.IdentitySaliency,
         verbosity=verbosity,
     )
 
 
-def jsma(alpha=None, clip=None, epochs=None, epsilon=None, model=None, verbosity=1):
+def jsma(alpha=None, epochs=None, epsilon=None, model=None, verbosity=1):
     """
     This function serves as an alias to build the Jacobian-based Saliency Map
     Approach (JSMA), as shown in (https://arxiv.org/pdf/1511.07528.pdf)
     Specifically, the JSMA: does not use change of variables, uses the
-    Stochastic Gradient Descent optimizer, does not use random restart, uses
+    Stochastic Gradient Descent optimizer, does not use random start, uses
     Identity loss, uses l0 norm, and uses the Jacobian saliency map.
 
     :param alpha: learning rate of the optimizer
     :type alpha: float
-    :param clip: range of allowable values for the domain
-    :type clip: tuple of floats or torch Tensor object (n, m)
     :param epochs: number of optimization steps to perform
     :type epochs: int
     :param epsilon: lp-norm ball threat model
@@ -1115,7 +1040,6 @@ def jsma(alpha=None, clip=None, epochs=None, epsilon=None, model=None, verbosity
     """
     return Attack(
         alpha=alpha,
-        clip=clip,
         early_termination=True,
         epochs=epochs,
         change_of_variables=False,
@@ -1124,12 +1048,7 @@ def jsma(alpha=None, clip=None, epochs=None, epsilon=None, model=None, verbosity
         model=model,
         norm=surface.l0,
         optimizer_alg=optimizer.SGD,
-        random_restart=False,
+        random_start=False,
         saliency_map=saliency.JacobianSaliency,
         verbosity=verbosity,
     )
-
-
-if __name__ == "__main__":
-    """ """
-    raise SystemExit(0)
