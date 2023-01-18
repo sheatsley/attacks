@@ -191,7 +191,6 @@ class Surface:
         :return: denormalized inputs
         :rtype: torch Tensor object (n, m)
         """
-        breakpoint()
         return x.mul_(self.maxs.sub(self.mins)).add_(self.mins)
 
     def transform(self, x):
@@ -210,7 +209,8 @@ class Surface:
         :return: current batch of inputs, de-transformed
         :rtype: torch Tensor object (n, m)
         """
-        self.min_max_scale(self.cov(x).detach())
+        x = self.cov(x)
+        self.min_max_scale(x.detach())
         return x
 
 
