@@ -35,6 +35,7 @@ import torch  # Tensors and Dynamic neural networks in Python with strong GPU ac
 # configure verbosity level to be binary for all frameworks
 # adjust prints to be based on longest framework string
 # update DF and FAB functional docstrings
+# adjust apgddlr docstring about dlr loss being undefined for 2 classes
 
 
 class BaseTest(unittest.TestCase):
@@ -189,9 +190,9 @@ class BaseTest(unittest.TestCase):
         cls.l2 = cls.l2_max * norm
         cls.linf_max = 1
         cls.linf = norm
+        cls.clip_min, cls.clip_max = clip
         cls.attack_params = {
             "alpha": alpha,
-            "clip": clip,
             "epochs": epochs,
             "model": cls.model,
             "verbosity": verbosity,
@@ -248,10 +249,7 @@ class BaseTest(unittest.TestCase):
 
         return PyTorchClassifier(
             model=cls.attack_params["model"].model,
-            clip_values=(
-                cls.attack_params["clip"][0].max().item(),
-                cls.attack_params["clip"][1].min().item(),
-            ),
+            clip_values=(cls.clip_min.max().item(), cls.clip_max.min().item()),
             loss=cls.attack_params["model"].loss,
             optimizer=cls.attack_params["model"].optimizer,
             input_shape=(cls.x.size(1),),
@@ -271,10 +269,7 @@ class BaseTest(unittest.TestCase):
 
         return PyTorchModel(
             model=cls.attack_params["model"].model,
-            bounds=(
-                cls.attack_params["clip"][0].max().item(),
-                cls.attack_params["clip"][1].min().item(),
-            ),
+            bounds=(cls.clip_min.max().item(), cls.clip_max.min().item()),
         )
 
     @classmethod
@@ -449,8 +444,8 @@ class BaseTest(unittest.TestCase):
                     eps=self.linf,
                     nb_iter=self.attack_params["epochs"],
                     eps_iter=self.attack_params["alpha"],
-                    clip_min=self.attack_params["clip"][0],
-                    clip_max=self.attack_params["clip"][1],
+                    clip_min=self.clip_min,
+                    clip_max=self.clip_max,
                     targeted=False,
                 ).perturb(x=self.x.clone(), y=self.y.clone()),
                 "AdverTorch",
@@ -487,8 +482,8 @@ class BaseTest(unittest.TestCase):
                     eps_iter=self.attack_params["alpha"],
                     nb_iter=self.attack_params["epochs"],
                     norm=float("inf"),
-                    clip_min=self.attack_params["clip"][0].max().item(),
-                    clip_max=self.attack_params["clip"][1].min().item(),
+                    clip_min=self.clip_min.max().item(),
+                    clip_max=self.clip_max.min().item(),
                     y=self.y,
                     targeted=False,
                     rand_init=False,
@@ -556,8 +551,8 @@ class BaseTest(unittest.TestCase):
                     max_iterations=self.attack_params["epochs"],
                     abort_early=True,
                     initial_const=self.attacks["cwl2"].surface.loss.c.item(),
-                    clip_min=self.attack_params["clip"][0],
-                    clip_max=self.attack_params["clip"][1],
+                    clip_min=self.clip_min,
+                    clip_max=self.clip_max,
                 ).perturb(x=self.x.clone(), y=self.y.clone()),
                 "AdverTorch",
             )
@@ -595,8 +590,8 @@ class BaseTest(unittest.TestCase):
                     y=self.y,
                     lr=self.attack_params["alpha"],
                     confidence=self.attacks["cwl2"].surface.loss.k,
-                    clip_min=self.attack_params["clip"][0].max().item(),
-                    clip_max=self.attack_params["clip"][1].min().item(),
+                    clip_min=self.clip_min.max().item(),
+                    clip_max=self.clip_max.min().item(),
                     initial_const=self.attacks["cwl2"].surface.loss.c.item(),
                     binary_search_steps=1,
                     max_iterations=self.attack_params["epochs"],
@@ -725,7 +720,7 @@ class BaseTest(unittest.TestCase):
                     alpha_max=self.attacks["fab"].traveler.optimizer.param_groups[0][
                         "alpha_max"
                     ],
-                    eta=self.attack_params["alpha"],
+                    eta=1,
                     beta=self.attacks["fab"].traveler.optimizer.param_groups[0]["beta"],
                     verbose=True,
                 ).perturb(x=self.x.clone(), y=self.y.clone()),
@@ -746,7 +741,7 @@ class BaseTest(unittest.TestCase):
                     alpha_max=self.attacks["fab"].traveler.optimizer.param_groups[0][
                         "alpha_max"
                     ],
-                    eta=self.attack_params["alpha"],
+                    eta=1,
                     beta=self.attacks["fab"].traveler.optimizer.param_groups[0]["beta"],
                     verbose=True,
                     seed=self.seed,
@@ -781,8 +776,8 @@ class BaseTest(unittest.TestCase):
                 JacobianSaliencyMapAttack(
                     predict=self.attack_params["model"],
                     num_classes=self.attack_params["model"].params["classes"],
-                    clip_min=self.attack_params["clip"][0],
-                    clip_max=self.attack_params["clip"][1],
+                    clip_min=self.clip_min,
+                    clip_max=self.clip_max,
                     gamma=self.linf,
                     theta=1,
                 ).perturb(x=self.x.clone(), y=self.y.clone()),
@@ -832,8 +827,8 @@ class BaseTest(unittest.TestCase):
                     nb_iter=self.attack_params["epochs"],
                     eps_iter=self.attack_params["alpha"],
                     rand_init=True,
-                    clip_min=self.attack_params["clip"][0],
-                    clip_max=self.attack_params["clip"][1],
+                    clip_min=self.clip_min,
+                    clip_max=self.clip_max,
                     targeted=False,
                 ).perturb(x=self.x.clone(), y=self.y.clone()),
                 "AdverTorch",
@@ -877,8 +872,8 @@ class BaseTest(unittest.TestCase):
                     eps_iter=self.attack_params["alpha"],
                     nb_iter=self.attack_params["epochs"],
                     norm=float("inf"),
-                    clip_min=self.attack_params["clip"][0].max().item(),
-                    clip_max=self.attack_params["clip"][1].min().item(),
+                    clip_min=self.clip_min.max().item(),
+                    clip_max=self.clip_max.min().item(),
                     y=self.y,
                     targeted=False,
                     rand_init=True,
@@ -1412,9 +1407,10 @@ class SemanticTests(BaseTest):
             for an, perf in zip(norms, perfs)
         )
         acc_diff = (a - self.clean_acc for a in acc_abs)
+        lf = max((len(f) for f in ("aml", *fws)))
         results = zip(("aml", *fws), acc_abs, acc_diff, norms_perfs)
         for f, a, d, n in results:
-            print(f"{f} {attack.name} Model Acc: {a:.2%} ({d:.2%}), Results: {n}")
+            print(f"{f:<{lf}} {attack.name} Model Acc: {a:.2%} ({d:.2%}), Results: {n}")
 
         # compute target norm and assert marginal performance difference
         norm_map = (aml.surface.l0, aml.surface.l2, aml.surface.linf)
@@ -1485,12 +1481,18 @@ class SemanticTests(BaseTest):
     def test_fab(self):
         """
         This method performs a semantic test for FAB (Fast Adaptive Boundary)
-        (https://arxiv.org/pdf/1907.02044.pdf).
+        (https://arxiv.org/pdf/1907.02044.pdf). Notably, since eta is assumed
+        to be >1, we override the value of alpha to be 1 so that meaningful
+        performance can be measured.
 
         :return: None
         :rtype: NoneType
         """
-        return self.semantic_test(*self.fab())
+        attack, fws = self.fab()
+        return self.semantic_test(
+            aml.attacks.fab(**self.attack_params | {"alpha": 1, "epsilon": self.l2}),
+            fws,
+        )
 
     def test_jsma(self):
         """
