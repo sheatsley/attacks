@@ -7,9 +7,6 @@ Thu June 30 2022
 import aml.traveler as traveler  # PyTorch-based custom optimizers for crafting adversarial examples
 import torch  # Tensors and Dynamic neural networks in Python with strong GPU acceleration
 
-# TODO:
-# add unit tests
-
 
 class Surface:
     """
@@ -111,22 +108,14 @@ class Surface:
 
         # map out of tanh-space, perform forward & backward passes
         p_j.requires_grad = True
-        loss = self.loss(self.model(self.cov(x_j + p_j)), y_j)
+        loss = self.loss(self.model(self.cov(x_j + p_j)), y_j, y if c_j != 1 else None)
         (grad,) = torch.autograd.grad(loss, p_j, torch.ones_like(loss))
         loss = loss.detach()
         p_j.requires_grad = False
 
-        # TODO fix me later
-        self.model.accuracy(x + p, y)
-
         # apply saliency map and lp-norm filter
-        smap_grad = self.saliency_map(
-            grad.view(-1, c_j, grad.size(1)),
-            loss=loss.view(-1, c_j),
-            y=y,
-            x=x,
-            p=p,
-        )
+        opt_args = {"loss": loss.view(-1, c_j), "y": y, "p": p}
+        smap_grad = self.saliency_map(grad.view(-1, c_j, grad.size(1)), **opt_args)
         dist = (c.sub(p).abs() for c in self.clip)
         final_grad = (
             self.norm(smap_grad, dist, self.loss.max_obj)
@@ -228,8 +217,3 @@ def l2(g, minimum=torch.tensor(1e-8)):
     :rtype: torch Tensor object (n, m)
     """
     return g.div_(g.norm(2, dim=1, keepdim=True).clamp_(minimum))
-
-
-if __name__ == "__main__":
-    """ """
-    raise SystemExit(0)
