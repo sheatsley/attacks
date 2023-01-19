@@ -59,12 +59,12 @@ class CELoss(torch.nn.CrossEntropyLoss):
         """
         curr_loss = super().forward(logits, y)
         if record:
-            classes, off, labels = (yt.numel(), yt, yt) if yt is not None else (1, 0, y)
-            c = y.numel() // classes
+            c, off, labels = (y.numel(), 0, y) if yt is None else (yt.numel(), yt, yt)
+            stride = y.numel() // c
             self.curr_loss = curr_loss.detach().take(
-                torch.arange(0, y.numel(), c).add(off)
+                torch.arange(0, y.numel(), stride).add(off)
             )
-            self.curr_acc = logits.detach()[::c].argmax(1).eq(labels)
+            self.curr_acc = logits.detach()[::stride].argmax(1).eq(labels)
         return curr_loss
 
 
@@ -117,7 +117,7 @@ class CWLoss(torch.nn.Module):
         """
         super().__init__()
         self.norm = norm
-        self.c = torch.tensor(c)
+        self.c = torch.tensor((c,))
         self.k = k
         self.hparams = {"c": self.c}
         return None
@@ -136,9 +136,8 @@ class CWLoss(torch.nn.Module):
         :rtype: NoneType
         """
         self.delta = delta
-        self.c.resize_(delta.size(0)).fill_(
-            self.c[0]
-        ) if self.c.shape < delta.shape else None
+        if self.c.size(0) < delta.size(0):
+            self.c.resize_(delta.size(0)).fill_(self.c[0])
         return None
 
     def forward(self, logits, y, yt=None, record=False):
@@ -177,12 +176,12 @@ class CWLoss(torch.nn.Module):
         # save current accuracy and loss for optimizers later
         curr_loss = lp + self.c * log_diff
         if record:
-            classes, off, labels = (yt.numel(), yt, yt) if yt is not None else (1, 0, y)
-            c = y.numel() // classes
+            c, off, labels = (y.numel(), 0, y) if yt is None else (yt.numel(), yt, yt)
+            stride = y.numel() // c
             self.curr_loss = curr_loss.detach().take(
-                torch.arange(0, y.numel(), c).add(off)
+                torch.arange(0, y.numel(), stride).add(off)
             )
-            self.curr_acc = logits.detach()[::c].argmax(1).eq(labels)
+            self.curr_acc = logits.detach()[::stride].argmax(1).eq(labels)
         return curr_loss
 
 
@@ -254,12 +253,12 @@ class DLRLoss(torch.nn.Module):
         pi_diff = log_desc[:, 0].sub(log_desc[:, min(2, logits.size(1) - 1)])
         curr_loss = -(log_diff.div(pi_diff).clamp_(minimum))
         if record:
-            classes, off, labels = (yt.numel(), yt, yt) if yt is not None else (1, 0, y)
-            c = y.numel() // classes
+            c, off, labels = (y.numel(), 0, y) if yt is None else (yt.numel(), yt, yt)
+            stride = y.numel() // c
             self.curr_loss = curr_loss.detach().take(
-                torch.arange(0, y.numel(), c).add(off)
+                torch.arange(0, y.numel(), stride).add(off)
             )
-            self.curr_acc = logits.detach()[::c].argmax(1).eq(labels)
+            self.curr_acc = logits.detach()[::stride].argmax(1).eq(labels)
         return curr_loss
 
 
@@ -312,10 +311,10 @@ class IdentityLoss(torch.nn.Module):
         """
         curr_loss = logits.gather(1, y.unsqueeze(1)).flatten()
         if record:
-            classes, off, labels = (yt.numel(), yt, yt) if yt is not None else (1, 0, y)
-            c = y.numel() // classes
+            c, off, labels = (y.numel(), 0, y) if yt is None else (yt.numel(), yt, yt)
+            stride = y.numel() // c
             self.curr_loss = curr_loss.detach().take(
-                torch.arange(0, y.numel(), c).add(off)
+                torch.arange(0, y.numel(), stride).add(off)
             )
-            self.curr_acc = logits.detach()[::c].argmax(1).eq(labels)
+            self.curr_acc = logits.detach()[::stride].argmax(1).eq(labels)
         return curr_loss
