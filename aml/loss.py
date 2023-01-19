@@ -39,7 +39,7 @@ class CELoss(torch.nn.CrossEntropyLoss):
         super().__init__(reduction="none", **kwargs)
         return None
 
-    def forward(self, logits, y, yt=None):
+    def forward(self, logits, y, yt=None, record=False):
         """
         This method serves as a wrapper for the PyTorch CrossEntropyLoss
         forward method. We provide this wrapper to expose the most recently
@@ -52,15 +52,19 @@ class CELoss(torch.nn.CrossEntropyLoss):
         :type y: PyTorch Tensor object (n,)
         :param yt: the true labels if attempting to compute a jacobian
         :type yt: PyTorch Tensor object (n,)
+        :param record: if the current loss and accuracy should be recorded
+        :type record: bool
         :return: the current loss
         :rtype: torch Tensor object (n,)
         """
         curr_loss = super().forward(logits, y)
-        c = y.numel() // yt.numel() if yt is not None else 1
-        self.curr_loss = curr_loss.detach().take(
-            torch.arange(0, y.numel(), c).add(yt if yt is not None else 0)
-        )
-        self.curr_acc = logits.detach()[::c].argmax(1).eq(yt if yt is not None else y)
+        if record:
+            classes, off, labels = (yt.numel(), yt, yt) if yt is not None else (1, 0, y)
+            c = y.numel() // classes
+            self.curr_loss = curr_loss.detach().take(
+                torch.arange(0, y.numel(), c).add(off)
+            )
+            self.curr_acc = logits.detach()[::c].argmax(1).eq(labels)
         return curr_loss
 
 
@@ -137,7 +141,7 @@ class CWLoss(torch.nn.Module):
         ) if self.c.shape < delta.shape else None
         return None
 
-    def forward(self, logits, y, yt=None):
+    def forward(self, logits, y, yt=None, record=False):
         """
         This method computes the loss described above. Specifically, it
         computes the sum of: (1) the lp-norm of the perturbation, and (2) the
@@ -153,6 +157,8 @@ class CWLoss(torch.nn.Module):
         :type y: PyTorch Tensor object (n,)
         :param yt: the true labels if attempting to compute a jacobian
         :type yt: PyTorch Tensor object (n,)
+        :param record: if the current loss and accuracy should be recorded
+        :type record: bool
         :return: the current loss
         :rtype: torch Tensor object (n,)
         """
@@ -170,11 +176,13 @@ class CWLoss(torch.nn.Module):
 
         # save current accuracy and loss for optimizers later
         curr_loss = lp + self.c * log_diff
-        c = y.numel() // yt.numel() if yt is not None else 1
-        self.curr_loss = curr_loss.detach().take(
-            torch.arange(0, y.numel(), c).add(yt if yt is not None else 0)
-        )
-        self.curr_acc = logits.detach()[::c].argmax(1).eq(yt if yt is not None else y)
+        if record:
+            classes, off, labels = (yt.numel(), yt, yt) if yt is not None else (1, 0, y)
+            c = y.numel() // classes
+            self.curr_loss = curr_loss.detach().take(
+                torch.arange(0, y.numel(), c).add(off)
+            )
+            self.curr_acc = logits.detach()[::c].argmax(1).eq(labels)
         return curr_loss
 
 
@@ -213,7 +221,7 @@ class DLRLoss(torch.nn.Module):
         super().__init__()
         return None
 
-    def forward(self, logits, y, yt=None, minimum=1e-8):
+    def forward(self, logits, y, yt=None, record=False, minimum=1e-8):
         """
         This method computes the loss described above. Specifically, it
         computes the division of: (1) the logit difference between the yth
@@ -227,6 +235,8 @@ class DLRLoss(torch.nn.Module):
         :type y: PyTorch Tensor object (n,)
         :param yt: the true labels if attempting to compute a jacobian
         :type yt: PyTorch Tensor object (n,)
+        :param record: if the current loss and accuracy should be recorded
+        :type record: bool
         :param minimum: minimum gradient value (to mitigate underflow)
         :type minimum: float
         :return: the current loss
@@ -243,11 +253,13 @@ class DLRLoss(torch.nn.Module):
         log_desc = logits.sort(dim=1, descending=True).values
         pi_diff = log_desc[:, 0].sub(log_desc[:, min(2, logits.size(1) - 1)])
         curr_loss = -(log_diff.div(pi_diff).clamp_(minimum))
-        c = y.numel() // yt.numel() if yt is not None else 1
-        self.curr_loss = curr_loss.detach().take(
-            torch.arange(0, y.numel(), c).add(yt if yt is not None else 0)
-        )
-        self.curr_acc = logits.detach()[::c].argmax(1).eq(yt if yt is not None else y)
+        if record:
+            classes, off, labels = (yt.numel(), yt, yt) if yt is not None else (1, 0, y)
+            c = y.numel() // classes
+            self.curr_loss = curr_loss.detach().take(
+                torch.arange(0, y.numel(), c).add(off)
+            )
+            self.curr_acc = logits.detach()[::c].argmax(1).eq(labels)
         return curr_loss
 
 
@@ -282,7 +294,7 @@ class IdentityLoss(torch.nn.Module):
         super().__init__()
         return None
 
-    def forward(self, logits, y, yt=None):
+    def forward(self, logits, y, yt=None, record=False):
         """
         This method computes the loss described above. Specifically, it returns
         the yth-component of the logits.
@@ -293,13 +305,17 @@ class IdentityLoss(torch.nn.Module):
         :type y: PyTorch Tensor object (n,)
         :param yt: the true labels if attempting to compute a jacobian
         :type yt: PyTorch Tensor object (n,)
+        :param record: if the current loss and accuracy should be recorded
+        :type record: bool
         :return: the current loss
         :rtype: torch Tensor object (n,)
         """
         curr_loss = logits.gather(1, y.unsqueeze(1)).flatten()
-        c = y.numel() // yt.numel() if yt is not None else 1
-        self.curr_loss = curr_loss.detach().take(
-            torch.arange(0, y.numel(), c).add(yt if yt is not None else 0)
-        )
-        self.curr_acc = logits.detach()[::c].argmax(1).eq(yt if yt is not None else y)
+        if record:
+            classes, off, labels = (yt.numel(), yt, yt) if yt is not None else (1, 0, y)
+            c = y.numel() // classes
+            self.curr_loss = curr_loss.detach().take(
+                torch.arange(0, y.numel(), c).add(off)
+            )
+            self.curr_acc = logits.detach()[::c].argmax(1).eq(labels)
         return curr_loss
