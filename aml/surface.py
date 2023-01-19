@@ -106,10 +106,10 @@ class Surface:
             else (x, y, p, 1)
         )
 
-        # map out of tanh-space, perform forward & backward passes
+        # map out of tanh- and [0, 1]-space, perform forward & backward passes
         pj.requires_grad = True
         logits = self.model(self.transform(xj + pj))
-        loss = self.loss(logits, yj, y if self.saliency_map.jac_req else None)
+        loss = self.loss(logits, yj, y if self.saliency_map.jac_req else None, True)
         (grad,) = torch.autograd.grad(loss, pj, torch.ones_like(loss))
         loss = loss.detach()
         pj.requires_grad = False
