@@ -31,6 +31,7 @@ import torch  # Tensors and Dynamic neural networks in Python with strong GPU ac
 # ^ update random-restart params for attacks that would be captured by adversarial layer
 # enable random restart when adversary layer is complete
 # enable binary search when adversary layer is complete
+# translate max halving doubling line search cw art implementation into binary search steps
 
 
 class BaseTest(unittest.TestCase):
@@ -528,7 +529,8 @@ class BaseTest(unittest.TestCase):
         This method crafts adversariale examples with CW-L2 (Carlini-Wagner
         with l₂ norm) (https://arxiv.org/pdf/1608.04644.pdf). The supported
         frameworks for CW-L2 include AdverTorch, ART, CleverHans, Foolbox, and
-        Torchattacks.
+        Torchattacks. Notably, Torchattacks does not explicitly support binary
+        searching on c (it expects searching manually).
 
         :return: CW-L2 adversarial examples
         :rtype: tuple of torch Tensor objects (n, m)
@@ -545,7 +547,7 @@ class BaseTest(unittest.TestCase):
                     confidence=self.attacks["cwl2"].surface.loss.k,
                     targeted=False,
                     learning_rate=self.attack_params["alpha"],
-                    binary_search_steps=1,
+                    binary_search_steps=self.attacks["cwl2"].hparam_steps,
                     max_iterations=self.attack_params["epochs"],
                     abort_early=True,
                     initial_const=self.attacks["cwl2"].surface.loss.c.item(),
@@ -565,7 +567,7 @@ class BaseTest(unittest.TestCase):
                         confidence=self.attacks["cwl2"].surface.loss.k,
                         targeted=False,
                         learning_rate=self.attack_params["alpha"],
-                        binary_search_steps=1,
+                        binary_search_steps=self.attacks["cwl2"].hparam_steps,
                         max_iter=self.attack_params["epochs"],
                         initial_const=self.attacks["cwl2"].surface.loss.c.item(),
                         max_halving=1,
@@ -591,7 +593,7 @@ class BaseTest(unittest.TestCase):
                     clip_min=self.clip_min.max().item(),
                     clip_max=self.clip_max.min().item(),
                     initial_const=self.attacks["cwl2"].surface.loss.c.item(),
-                    binary_search_steps=1,
+                    binary_search_steps=self.attacks["cwl2"].hparam_steps,
                     max_iterations=self.attack_params["epochs"],
                 ).detach(),
                 "CleverHans",
@@ -601,7 +603,7 @@ class BaseTest(unittest.TestCase):
 
             print("Producing CW-L2 adversarial examples with Foolbox...")
             _, fb_adv, _ = L2CarliniWagnerAttack(
-                binary_search_steps=1,
+                binary_search_steps=self.attacks["cwl2"].hparam_steps,
                 steps=self.attack_params["epochs"],
                 stepsize=self.attack_params["alpha"],
                 confidence=self.attacks["cwl2"].surface.loss.k,
@@ -978,7 +980,7 @@ class FunctionalTests(BaseTest):
         :rtype: NoneType
         """
         with self.subTest(Attack=attack.name):
-            p = attack.craft(self.x, self.y)
+            p = attack.attack(self.x, self.y)
             norms = (p.norm(d, 1).mean().item() for d in (0, 2, torch.inf))
             norm_results = ", ".join(
                 f"l{p}: {n:.3}/{b} ({n/b:.2%})"
@@ -1380,16 +1382,16 @@ class SemanticTests(BaseTest):
 
         # craft adversarial examples
         fws_adv, fws = zip(*fws) if fws else ([], "No Adversarial Examples")
-        aml_p = attack.craft(self.x, self.y)
+        aml_adv = attack.attack(self.x, self.y)
         fws_p = (fw_adv.sub(self.x) for fw_adv in fws_adv)
 
         # compute perturbation norms
-        ps = (aml_p, *fws_p)
+        ps = (aml_adv.sub(self.x), *fws_p)
         lp = (0, 2, torch.inf)
         norms = tuple([p.norm(d, 1).mean().item() for d in lp] for p in ps)
 
         # compute model accuracy decrease
-        advs = (self.x + aml_p, *fws_adv)
+        advs = (aml_adv, *fws_adv)
         acc_abs = tuple(self.model.accuracy(adv, self.y).item() for adv in advs)
         acc_dec = tuple(a / self.clean_acc for a in acc_abs)
 
