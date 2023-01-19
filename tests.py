@@ -19,6 +19,7 @@ import pathlib  # Object-oriented filesystem paths
 import pickle  # Python object serialization
 import unittest  # Unit testing framework
 import torch  # Tensors and Dynamic neural networks in Python with strong GPU acceleration
+import matplotlib.pyplot as plt
 
 # TODO
 # get all functional tests passing
@@ -30,8 +31,8 @@ import torch  # Tensors and Dynamic neural networks in Python with strong GPU ac
 # ^ rework max-min logic to account for the above
 # ^ update random-restart params for attacks that would be captured by adversarial layer
 # enable random restart when adversary layer is complete
-# enable binary search when adversary layer is complete
-# translate max halving doubling line search cw art implementation into binary search steps
+# expose alpha override parameter so we can set overshoot in other frameworks (and for jsma)
+# find optimal hparam scheme for cw
 
 
 class BaseTest(unittest.TestCase):
@@ -192,7 +193,7 @@ class BaseTest(unittest.TestCase):
             "alpha": alpha,
             "epochs": epochs,
             "model": cls.model,
-            "verbosity": int(not verbose),
+            "verbosity": 0.01 if verbose else 1,
         }
         cls.attacks = {
             "apgdce": aml.attacks.apgdce(**cls.attack_params | {"epsilon": cls.linf}),
@@ -294,6 +295,14 @@ class BaseTest(unittest.TestCase):
         :return: APGD-CE adversarial examples
         :rtype: tuple of torch Tensor objects (n, m)
         """
+        (model, eps, eps_step, max_iter, nb_random_init, rho) = (
+            self.attack_params["model"],
+            self.linf,
+            self.attack_params["alpha"],
+            self.attack_params["epochs"],
+            self.attacks["apgdce"].params["num_restarts"],
+            self.attacks["apgdce"].traveler.optimizer.param_groups[0]["rho"],
+        )
         art_adv = ta_adv = None
         if "art" in self.available:
             from art.attacks.evasion import AutoProjectedGradientDescent
@@ -305,11 +314,11 @@ class BaseTest(unittest.TestCase):
                     AutoProjectedGradientDescent(
                         estimator=self.art_classifier,
                         norm="inf",
-                        eps=self.linf,
-                        eps_step=self.attack_params["alpha"],
-                        max_iter=self.attack_params["epochs"],
+                        eps=eps,
+                        eps_step=eps_step,
+                        max_iter=max_iter,
                         targeted=False,
-                        nb_random_init=1,
+                        nb_random_init=nb_random_init,
                         batch_size=self.x.size(0),
                         loss_type="cross_entropy",
                         verbose=self.verbose,
@@ -330,17 +339,15 @@ class BaseTest(unittest.TestCase):
             )
             ta_adv = (
                 APGD(
-                    model=self.attack_params["model"],
+                    model=model,
                     norm="Linf",
-                    eps=self.linf,
-                    steps=self.attack_params["epochs"],
-                    n_restarts=1,
+                    eps=eps,
+                    steps=max_iter,
+                    n_restarts=nb_random_init,
                     seed=self.seed,
                     loss="ce",
                     eot_iter=1,
-                    rho=self.attacks["apgdce"].traveler.optimizer.param_groups[0][
-                        "rho"
-                    ],
+                    rho=rho,
                     verbose=self.verbose,
                 )(inputs=ta_x, labels=self.y,).flatten(1),
                 "Torchattacks",
@@ -362,6 +369,14 @@ class BaseTest(unittest.TestCase):
         :return: APGD-DLR adversarial examples
         :rtype: tuple of torch Tensor objects (n, m)
         """
+        (model, eps, eps_step, max_iter, nb_random_init, rho) = (
+            self.attack_params["model"],
+            self.linf,
+            self.attack_params["alpha"],
+            self.attack_params["epochs"],
+            self.attacks["apgddlr"].params["num_restarts"],
+            self.attacks["apgddlr"].traveler.optimizer.param_groups[0]["rho"],
+        )
         art_adv = ta_adv = None
         if "art" in self.available and self.art_classifier.nb_classes > 2:
             from art.attacks.evasion import AutoProjectedGradientDescent
@@ -373,11 +388,11 @@ class BaseTest(unittest.TestCase):
                     AutoProjectedGradientDescent(
                         estimator=self.art_classifier,
                         norm="inf",
-                        eps=self.linf,
-                        eps_step=self.attack_params["alpha"],
-                        max_iter=self.attack_params["epochs"],
+                        eps=eps,
+                        eps_step=eps_step,
+                        max_iter=max_iter,
                         targeted=False,
-                        nb_random_init=1,
+                        nb_random_init=nb_random_init,
                         batch_size=self.x.size(0),
                         loss_type="difference_logits_ratio",
                         verbose=self.verbose,
@@ -399,17 +414,15 @@ class BaseTest(unittest.TestCase):
             )
             ta_adv = (
                 APGD(
-                    model=self.attack_params["model"],
+                    model=model,
                     norm="Linf",
-                    eps=self.linf,
-                    steps=self.attack_params["epochs"],
-                    n_restarts=1,
+                    eps=eps,
+                    steps=max_iter,
+                    n_restarts=nb_random_init,
                     seed=self.seed,
                     loss="dlr",
                     eot_iter=1,
-                    rho=self.attacks["apgdce"].traveler.optimizer.param_groups[0][
-                        "rho"
-                    ],
+                    rho=rho,
                     verbose=self.verbose,
                 )(inputs=ta_x, labels=self.y).flatten(1),
                 "Torchattacks",
@@ -431,6 +444,12 @@ class BaseTest(unittest.TestCase):
         :return: BIM adversarial examples
         :rtype: tuple of torch Tensor objects (n, m)
         """
+        (model, eps, nb_iter, eps_iter) = (
+            self.attack_params["model"],
+            self.linf,
+            self.attack_params["epochs"],
+            self.attack_params["alpha"],
+        )
         at_adv = art_adv = ch_adv = fb_adv = ta_adv = None
         if "advertorch" in self.available:
             from advertorch.attacks import LinfBasicIterativeAttack
@@ -438,11 +457,11 @@ class BaseTest(unittest.TestCase):
             print("Producing BIM adversarial examples with AdverTorch...")
             at_adv = (
                 LinfBasicIterativeAttack(
-                    predict=self.attack_params["model"],
+                    predict=model,
                     loss_fn=torch.nn.CrossEntropyLoss(reduction="sum"),
-                    eps=self.linf,
-                    nb_iter=self.attack_params["epochs"],
-                    eps_iter=self.attack_params["alpha"],
+                    eps=eps,
+                    nb_iter=nb_iter,
+                    eps_iter=eps_iter,
                     clip_min=self.clip_min,
                     clip_max=self.clip_max,
                     targeted=False,
@@ -457,9 +476,9 @@ class BaseTest(unittest.TestCase):
                 torch.from_numpy(
                     BasicIterativeMethod(
                         estimator=self.art_classifier,
-                        eps=self.linf,
-                        eps_step=self.attack_params["alpha"],
-                        max_iter=self.attack_params["epochs"],
+                        eps=eps,
+                        eps_step=eps_iter,
+                        max_iter=nb_iter,
                         targeted=False,
                         batch_size=self.x.size(0),
                         verbose=self.verbose,
@@ -475,11 +494,11 @@ class BaseTest(unittest.TestCase):
             print("Producing BIM adversarial examples with CleverHans...")
             ch_adv = (
                 basic_iterative_method(
-                    model_fn=self.attack_params["model"],
+                    model_fn=model,
                     x=self.x.clone(),
-                    eps=self.linf,
-                    eps_iter=self.attack_params["alpha"],
-                    nb_iter=self.attack_params["epochs"],
+                    eps=eps,
+                    eps_iter=eps_iter,
+                    nb_iter=nb_iter,
                     norm=float("inf"),
                     clip_min=self.clip_min.max().item(),
                     clip_max=self.clip_max.min().item(),
@@ -497,14 +516,14 @@ class BaseTest(unittest.TestCase):
             print("Producing BIM adversarial examples with Foolbox...")
             _, fb_adv, _ = LinfBasicIterativeAttack(
                 rel_stepsize=None,
-                abs_stepsize=self.attack_params["alpha"],
-                steps=self.attack_params["epochs"],
+                abs_stepsize=eps_iter,
+                steps=nb_iter,
                 random_start=False,
             )(
                 self.fb_classifier,
                 self.x.clone(),
                 self.y.clone(),
-                epsilons=self.linf,
+                epsilons=eps,
             )
             fb_adv = (fb_adv, "Foolbox")
         if "torchattacks" in self.available:
@@ -513,10 +532,10 @@ class BaseTest(unittest.TestCase):
             print("Producing BIM adversarial examples with Torchattacks...")
             ta_adv = (
                 BIM(
-                    model=self.attack_params["model"],
-                    eps=self.linf,
-                    alpha=self.attack_params["alpha"],
-                    steps=self.attack_params["epochs"],
+                    model=model,
+                    eps=eps,
+                    alpha=eps_iter,
+                    steps=nb_iter,
                 )(inputs=self.x.clone(), labels=self.y),
                 "Torchattacks",
             )
@@ -530,11 +549,30 @@ class BaseTest(unittest.TestCase):
         with l₂ norm) (https://arxiv.org/pdf/1608.04644.pdf). The supported
         frameworks for CW-L2 include AdverTorch, ART, CleverHans, Foolbox, and
         Torchattacks. Notably, Torchattacks does not explicitly support binary
-        searching on c (it expects searching manually).
+        searching on c (it expects searching manually). Moreover, the
+        CleverHans implementation suffers from a segmentation fault when the
+        number of backwards passes is roughly greater than 60.
 
         :return: CW-L2 adversarial examples
         :rtype: tuple of torch Tensor objects (n, m)
         """
+        (
+            model,
+            classes,
+            confidence,
+            learning_rate,
+            binary_search_steps,
+            max_iterations,
+            initial_const,
+        ) = (
+            self.attack_params["model"],
+            self.attack_params["model"].params["classes"],
+            self.attacks["cwl2"].surface.loss.k,
+            self.attack_params["alpha"],
+            self.attacks["cwl2"].hparam_steps,
+            self.attack_params["epochs"],
+            self.attacks["cwl2"].surface.loss.c.item(),
+        )
         at_adv = art_adv = ch_adv = fb_adv = ta_adv = None
         if "advertorch" in self.available:
             from advertorch.attacks import CarliniWagnerL2Attack
@@ -542,15 +580,15 @@ class BaseTest(unittest.TestCase):
             print("Producing CW-L2 adversarial examples with AdverTorch...")
             at_adv = (
                 CarliniWagnerL2Attack(
-                    predict=self.attack_params["model"],
-                    num_classes=self.attack_params["model"].params["classes"],
-                    confidence=self.attacks["cwl2"].surface.loss.k,
+                    predict=model,
+                    num_classes=classes,
+                    confidence=confidence,
                     targeted=False,
-                    learning_rate=self.attack_params["alpha"],
-                    binary_search_steps=self.attacks["cwl2"].hparam_steps,
-                    max_iterations=self.attack_params["epochs"],
+                    learning_rate=learning_rate,
+                    binary_search_steps=binary_search_steps,
+                    max_iterations=max_iterations,
                     abort_early=True,
-                    initial_const=self.attacks["cwl2"].surface.loss.c.item(),
+                    initial_const=initial_const,
                     clip_min=self.clip_min,
                     clip_max=self.clip_max,
                 ).perturb(x=self.x.clone(), y=self.y.clone()),
@@ -564,37 +602,37 @@ class BaseTest(unittest.TestCase):
                 torch.from_numpy(
                     CarliniL2Method(
                         classifier=self.art_classifier,
-                        confidence=self.attacks["cwl2"].surface.loss.k,
+                        confidence=confidence,
                         targeted=False,
-                        learning_rate=self.attack_params["alpha"],
-                        binary_search_steps=self.attacks["cwl2"].hparam_steps,
-                        max_iter=self.attack_params["epochs"],
-                        initial_const=self.attacks["cwl2"].surface.loss.c.item(),
-                        max_halving=1,
-                        max_doubling=1,
+                        learning_rate=learning_rate,
+                        binary_search_steps=binary_search_steps,
+                        max_iter=max_iterations,
+                        initial_const=initial_const,
+                        max_halving=5,
+                        max_doubling=5,
                         batch_size=self.x.size(0),
                         verbose=self.verbose,
                     ).generate(x=self.x.clone().numpy())
                 ),
                 "ART",
             )
-        if "cleverhans" in self.available:
+        if "cleverhans" not in self.available:
             from cleverhans.torch.attacks.carlini_wagner_l2 import carlini_wagner_l2
 
             print("Producing CW-L2 adversarial examples with CleverHans...")
             ch_adv = (
                 carlini_wagner_l2(
-                    model_fn=self.attack_params["model"],
+                    model_fn=model,
                     x=self.x.clone(),
-                    n_classes=self.attack_params["model"].params["classes"],
+                    n_classes=classes,
                     y=self.y,
-                    lr=self.attack_params["alpha"],
-                    confidence=self.attacks["cwl2"].surface.loss.k,
+                    lr=learning_rate,
+                    confidence=confidence,
                     clip_min=self.clip_min.max().item(),
                     clip_max=self.clip_max.min().item(),
-                    initial_const=self.attacks["cwl2"].surface.loss.c.item(),
-                    binary_search_steps=self.attacks["cwl2"].hparam_steps,
-                    max_iterations=self.attack_params["epochs"],
+                    initial_const=initial_const,
+                    binary_search_steps=max(binary_search_steps, 1),
+                    max_iterations=min(max_iterations, 30),
                 ).detach(),
                 "CleverHans",
             )
@@ -603,11 +641,11 @@ class BaseTest(unittest.TestCase):
 
             print("Producing CW-L2 adversarial examples with Foolbox...")
             _, fb_adv, _ = L2CarliniWagnerAttack(
-                binary_search_steps=self.attacks["cwl2"].hparam_steps,
-                steps=self.attack_params["epochs"],
-                stepsize=self.attack_params["alpha"],
-                confidence=self.attacks["cwl2"].surface.loss.k,
-                initial_const=self.attacks["cwl2"].surface.loss.c.item(),
+                binary_search_steps=binary_search_steps,
+                steps=max_iterations,
+                stepsize=learning_rate,
+                confidence=confidence,
+                initial_const=initial_const,
                 abort_early=True,
             )(
                 self.fb_classifier,
@@ -622,11 +660,11 @@ class BaseTest(unittest.TestCase):
             print("Producing CW-L2 adversarial examples with Torchattacks...")
             ta_adv = (
                 CW(
-                    model=self.attack_params["model"],
-                    c=self.attacks["cwl2"].surface.loss.c.item(),
-                    kappa=self.attacks["cwl2"].surface.loss.k,
-                    steps=self.attack_params["epochs"],
-                    lr=self.attack_params["alpha"],
+                    model=model,
+                    c=initial_const,
+                    kappa=confidence,
+                    steps=max_iterations,
+                    lr=learning_rate,
                 )(inputs=self.x.clone(), labels=self.y),
                 "Torchattacks",
             )
@@ -646,6 +684,13 @@ class BaseTest(unittest.TestCase):
         :return: DeepFool adversarial examples
         :rtype: tuple of torch Tensor objects (n, m)
         """
+        model, max_iter, epsilon, nb_grads, epsilons = (
+            self.attack_params["model"],
+            self.attack_params["epochs"],
+            0,
+            self.attack_params["model"].params["classes"],
+            self.l2,
+        )
         art_adv = fb_adv = ta_adv = None
         if "art" not in self.available:
             from art.attacks.evasion import DeepFool
@@ -655,9 +700,9 @@ class BaseTest(unittest.TestCase):
                 torch.from_numpy(
                     DeepFool(
                         classifier=self.art_classifier,
-                        max_iter=self.attack_params["epochs"],
-                        epsilon=0,
-                        nb_grads=self.attack_params["model"].params["classes"],
+                        max_iter=max_iter,
+                        epsilon=epsilon,
+                        nb_grads=nb_grads,
                         batch_size=self.x.size(0),
                         verbose=self.verbose,
                     ).generate(x=self.x.clone().numpy())
@@ -669,15 +714,15 @@ class BaseTest(unittest.TestCase):
 
             print("Producing DF adversarial examples with Foolbox...")
             _, fb_adv, _ = L2DeepFoolAttack(
-                steps=self.attack_params["epochs"],
-                candidates=self.attack_params["model"].params["classes"],
-                overshoot=0,
+                steps=max_iter,
+                candidates=nb_grads,
+                overshoot=epsilon,
                 loss="logits",
             )(
                 self.fb_classifier,
                 self.x.clone(),
                 self.y.clone(),
-                epsilons=self.l2,
+                epsilons=epsilons,
             )
             fb_adv = (fb_adv, "Foolbox")
         if "torchattacks" not in self.available:
@@ -685,9 +730,9 @@ class BaseTest(unittest.TestCase):
 
             print("Producing DF adversarial examples with Torchattacks...")
             ta_adv = DeepFool(
-                model=self.attack_params["model"],
-                steps=self.attack_params["epochs"],
-                overshoot=0,
+                model=model,
+                steps=max_iter,
+                overshoot=epsilon,
             )(inputs=self.x.clone(), labels=self.y)
 
             # torchattack's implementation can return nans
@@ -705,6 +750,15 @@ class BaseTest(unittest.TestCase):
         :return: FAB adversarial examples
         :rtype: tuple of torch Tensor objects (n, m)
         """
+        (model, n_restarts, n_iter, eps, alpha, beta, n_classes) = (
+            self.attack_params["model"],
+            self.attacks["fab"].params["num_restarts"],
+            self.attack_params["epochs"],
+            self.l2,
+            self.attacks["fab"].traveler.optimizer.param_groups[0]["alpha_max"],
+            self.attacks["fab"].traveler.optimizer.param_groups[0]["beta"],
+            self.attack_params["model"].params["classes"],
+        )
         at_adv = ta_adv = None
         if "advertorch" in self.available:
             from advertorch.attacks import L2FABAttack
@@ -713,15 +767,13 @@ class BaseTest(unittest.TestCase):
             self.reset_seeds()
             at_adv = (
                 L2FABAttack(
-                    predict=self.attack_params["model"],
-                    n_restarts=1,
-                    n_iter=self.attack_params["epochs"],
-                    eps=None,
-                    alpha_max=self.attacks["fab"].traveler.optimizer.param_groups[0][
-                        "alpha_max"
-                    ],
+                    predict=model,
+                    n_restarts=n_restarts,
+                    n_iter=n_iter,
+                    eps=eps,
+                    alpha_max=alpha,
                     eta=1,
-                    beta=self.attacks["fab"].traveler.optimizer.param_groups[0]["beta"],
+                    beta=beta,
                     verbose=self.verbose,
                 ).perturb(x=self.x.clone(), y=self.y.clone()),
                 "AdverTorch",
@@ -733,20 +785,18 @@ class BaseTest(unittest.TestCase):
             self.reset_seeds()
             ta_adv = (
                 FAB(
-                    model=self.attack_params["model"],
+                    model=model,
                     norm="L2",
-                    eps=self.l2,
+                    eps=eps,
                     steps=self.attack_params["epochs"],
-                    n_restarts=1,
-                    alpha_max=self.attacks["fab"].traveler.optimizer.param_groups[0][
-                        "alpha_max"
-                    ],
+                    n_restarts=n_restarts,
+                    alpha_max=alpha,
                     eta=1,
-                    beta=self.attacks["fab"].traveler.optimizer.param_groups[0]["beta"],
+                    beta=beta,
                     verbose=self.verbose,
                     seed=self.seed,
                     multi_targeted=False,
-                    n_classes=self.attack_params["model"].params["classes"],
+                    n_classes=n_classes,
                 )(inputs=self.x.clone(), labels=self.y),
                 "Torchattacks",
             )
@@ -767,6 +817,12 @@ class BaseTest(unittest.TestCase):
         :return: JSMA adversarial examples
         :rtype: tuple of torch Tensor objects (n, m)
         """
+        (model, num_classes, gamma, theta) = (
+            self.attack_params["model"],
+            self.attack_params["model"].params["classes"],
+            self.linf,
+            1,
+        )
         at_adv = art_adv = None
         if "advertorch" in self.available:
             from advertorch.attacks import JacobianSaliencyMapAttack
@@ -774,12 +830,12 @@ class BaseTest(unittest.TestCase):
             print("Producing JSMA adversarial examples with AdverTorch...")
             at_adv = (
                 JacobianSaliencyMapAttack(
-                    predict=self.attack_params["model"],
-                    num_classes=self.attack_params["model"].params["classes"],
+                    predict=model,
+                    num_classes=num_classes,
                     clip_min=self.clip_min,
                     clip_max=self.clip_max,
-                    gamma=self.linf,
-                    theta=1,
+                    gamma=gamma,
+                    theta=theta,
                 ).perturb(x=self.x.clone(), y=self.y.clone()),
                 "AdverTorch",
             )
@@ -791,8 +847,8 @@ class BaseTest(unittest.TestCase):
                 torch.from_numpy(
                     SaliencyMapMethod(
                         classifier=self.art_classifier,
-                        theta=1,
-                        gamma=self.linf,
+                        theta=theta,
+                        gamma=gamma,
                         batch_size=self.x.size(0),
                         verbose=self.verbose,
                     ).generate(x=self.x.clone().numpy())
@@ -813,6 +869,12 @@ class BaseTest(unittest.TestCase):
         :return: PGD adversarial examples
         :rtype: tuple of torch Tensor objects (n, m)
         """
+        (model, eps, nb_iter, eps_iter) = (
+            self.attack_params["model"],
+            self.linf,
+            self.attack_params["epochs"],
+            self.attack_params["alpha"],
+        )
         at_adv = art_adv = ch_adv = fb_adv = ta_adv = None
         if "advertorch" in self.available:
             from advertorch.attacks import LinfPGDAttack
@@ -821,11 +883,11 @@ class BaseTest(unittest.TestCase):
             self.reset_seeds()
             at_adv = (
                 LinfPGDAttack(
-                    predict=self.attack_params["model"],
+                    predict=model,
                     loss_fn=torch.nn.CrossEntropyLoss(reduction="sum"),
-                    eps=self.linf,
-                    nb_iter=self.attack_params["epochs"],
-                    eps_iter=self.attack_params["alpha"],
+                    eps=eps,
+                    nb_iter=nb_iter,
+                    eps_iter=eps_iter,
                     rand_init=True,
                     clip_min=self.clip_min,
                     clip_max=self.clip_max,
@@ -843,10 +905,10 @@ class BaseTest(unittest.TestCase):
                     ProjectedGradientDescent(
                         estimator=self.art_classifier,
                         norm="inf",
-                        eps=self.linf,
-                        eps_step=self.attack_params["alpha"],
+                        eps=eps,
+                        eps_step=eps_iter,
                         decay=None,
-                        max_iter=self.attack_params["epochs"],
+                        max_iter=nb_iter,
                         targeted=False,
                         num_random_init=1,
                         batch_size=self.x.size(0),
@@ -866,18 +928,18 @@ class BaseTest(unittest.TestCase):
             self.reset_seeds()
             ch_adv = (
                 projected_gradient_descent(
-                    model_fn=self.attack_params["model"],
+                    model_fn=model,
                     x=self.x.clone(),
-                    eps=self.linf,
-                    eps_iter=self.attack_params["alpha"],
-                    nb_iter=self.attack_params["epochs"],
+                    eps=eps,
+                    eps_iter=eps_iter,
+                    nb_iter=nb_iter,
                     norm=float("inf"),
                     clip_min=self.clip_min.max().item(),
                     clip_max=self.clip_max.min().item(),
                     y=self.y,
                     targeted=False,
                     rand_init=True,
-                    rand_minmax=self.linf,
+                    rand_minmax=eps,
                     sanity_checks=True,
                 ).detach(),
                 "CleverHans",
@@ -889,14 +951,14 @@ class BaseTest(unittest.TestCase):
             self.reset_seeds()
             _, fb_adv, _ = LinfProjectedGradientDescentAttack(
                 rel_stepsize=None,
-                abs_stepsize=self.attack_params["alpha"],
-                steps=self.attack_params["epochs"],
+                abs_stepsize=eps_iter,
+                steps=nb_iter,
                 random_start=True,
             )(
                 self.fb_classifier,
                 self.x.clone(),
                 self.y.clone(),
-                epsilons=self.linf,
+                epsilons=eps,
             )
             fb_adv = (fb_adv, "Foolbox")
         if "torchattacks" in self.available:
@@ -906,10 +968,10 @@ class BaseTest(unittest.TestCase):
             self.reset_seeds()
             ta_adv = (
                 PGD(
-                    model=self.attack_params["model"],
-                    eps=self.linf,
-                    alpha=self.attack_params["alpha"],
-                    steps=self.attack_params["epochs"],
+                    model=model,
+                    eps=eps,
+                    alpha=eps_iter,
+                    steps=nb_iter,
                     random_start=True,
                 )(inputs=self.x.clone(), labels=self.y),
                 "Torchattacks",
@@ -974,21 +1036,21 @@ class FunctionalTests(BaseTest):
         """
         This method performs a functional test for a given attack.
 
-        :param attack: attack to test
-        :type attack: aml Attack object
+        :param adversary: adversary to test
+        :type adversary: aml Adversary or Attack object
         :return: None
         :rtype: NoneType
         """
         with self.subTest(Attack=attack.name):
-            p = attack.attack(self.x, self.y)
+            p = attack.craft(self.x, self.y)
             norms = (p.norm(d, 1).mean().item() for d in (0, 2, torch.inf))
             norm_results = ", ".join(
                 f"l{p}: {n:.3}/{b} ({n/b:.2%})"
                 for n, b, p in zip(norms, (self.l0, self.l2, self.linf), (0, 2, "∞"))
             )
-            advx_acc = self.model.accuracy(self.x + p, self.y).item()
-            print(f"{attack.name} complete! Model Acc: {advx_acc:.2%},", norm_results)
-            self.assertLess(advx_acc, self.min_acc)
+            adv_acc = self.model.accuracy(self.x + p, self.y).item()
+            print(f"{attack.name} complete! Model Acc: {adv_acc:.2%},", norm_results)
+            self.assertLess(adv_acc, self.min_acc)
         return None
 
     def test_apgdce(self):
@@ -1100,8 +1162,10 @@ class IdentityTests(BaseTest):
     should fail.
 
     The following frameworks are supported:
+        AdverTorch (https://github.com/BorealisAI/advertorch)
         ART (https://github.com/Trusted-AI/adversarial-robustness-toolbox)
         CleverHans (https://github.com/cleverhans-lab/cleverhans)
+        Foolbox (https://github.com/bethgelab/foolbox)
         Torchattacks (https://github.com/Harry24k/adversarial-attacks-pytorch)
 
     The following attacks are supported:
@@ -1315,8 +1379,10 @@ class SemanticTests(BaseTest):
     normalized lp-norm.
 
     The following frameworks are supported:
+        AdverTorch (https://github.com/BorealisAI/advertorch)
         ART (https://github.com/Trusted-AI/adversarial-robustness-toolbox)
         CleverHans (https://github.com/cleverhans-lab/cleverhans)
+        Foolbox (https://github.com/bethgelab/foolbox)
         Torchattacks (https://github.com/Harry24k/adversarial-attacks-pytorch)
 
     The following attacks are supported:
@@ -1366,14 +1432,15 @@ class SemanticTests(BaseTest):
         """
         super().setUpClass()
         cls.max_perf_degrad = max_perf_degrad
+        cls.state = 0
         return None
 
     def semantic_test(self, attack, fws):
         """
         This method performs a semantic test for a given attack.
 
-        :param attack: attack to test
-        :type attack: aml Attack object
+        :param adversary: attack to test
+        :type adversary: aml Adversary object
         :param fws: adversarial examples produced by other frameworks
         :type fws: tuple of tuples of torch Tensor object (n, m) and str
         :return: None
@@ -1382,16 +1449,16 @@ class SemanticTests(BaseTest):
 
         # craft adversarial examples
         fws_adv, fws = zip(*fws) if fws else ([], "No Adversarial Examples")
-        aml_adv = attack.attack(self.x, self.y)
+        aml_p = attack.craft(self.x, self.y)
         fws_p = (fw_adv.sub(self.x) for fw_adv in fws_adv)
 
         # compute perturbation norms
-        ps = (aml_adv.sub(self.x), *fws_p)
+        ps = (aml_p, *fws_p)
         lp = (0, 2, torch.inf)
         norms = tuple([p.norm(d, 1).mean().item() for d in lp] for p in ps)
 
         # compute model accuracy decrease
-        advs = (aml_adv, *fws_adv)
+        advs = (self.x + aml_p, *fws_adv)
         acc_abs = tuple(self.model.accuracy(adv, self.y).item() for adv in advs)
         acc_dec = tuple(a / self.clean_acc for a in acc_abs)
 
@@ -1426,6 +1493,52 @@ class SemanticTests(BaseTest):
         for fw, fw_perf in zip(fws, fws_perf):
             with self.subTest(Attack=f"{attack.name} v. {fw}"):
                 self.assertGreaterEqual(aml_perf + self.max_perf_degrad, fw_perf)
+
+        lp_map = {0: 0, 2: 1, float("inf"): 2}
+        color_map = {
+            "aml": "black",
+            "ART": "blue",
+            "CleverHans": "green",
+            "AdverTorch": "red",
+            "Foolbox": "yellow",
+            "Torchattacks": "brown",
+        }
+        symbol_map = {
+            "APGD-CE": ".",
+            "APGD-DLR": "o",
+            "BIM": "^",
+            "CW-L2": "v",
+            "DF": "s",
+            "FAB": "P",
+            "JSMA": "+",
+            "PGD": "D",
+        }
+        if not hasattr(self, "ax"):
+            self.fig, self.ax = plt.subplots()
+        for acc, norm, fw in zip(
+            list(acc_abs)[::-1],
+            [n[lp_map[attack.lp]] for n in norms[::-1]],
+            ["aml", *fws][::-1] if fws != "No Adversarial Examples" else ["aml"],
+        ):
+            xa = norm / max_b[lp_map[attack.lp]]
+            plt.scatter(
+                xa,
+                acc,
+                c=color_map[fw],
+                label=fw,
+                marker=symbol_map[attack.name],
+                alpha=0.5,
+            )
+            self.ax.annotate(f"{attack.name} ({fw})", (xa, acc))
+        if attack.name == "PGD":
+            handles, labels = plt.gca().get_legend_handles_labels()
+            by_label = dict(zip(labels, handles))
+            plt.legend(by_label.values(), by_label.keys())
+            plt.grid(True)
+            plt.xlabel("% of Lp Budget Consumed")
+            plt.ylabel("Model Accuracy")
+            plt.show(block=True)
+        self.state += 1
         return None
 
     def test_apgdce(self):
@@ -1526,6 +1639,30 @@ class SemanticTests(BaseTest):
         """
         return self.semantic_test(*self.pgd())
 
+    def test_all(self):
+        """ """
+        self.semantic_test(*self.apgdce())
+        self.semantic_test(*self.apgddlr())
+        self.semantic_test(*self.bim())
+        self.semantic_test(*self.cwl2())
+        attack, fws = self.df()
+        self.semantic_test(
+            aml.attacks.df(**self.attack_params | {"alpha": 1, "epsilon": self.l2}), fws
+        )
+        attack, fws = self.fab()
+        self.semantic_test(
+            aml.attacks.fab(**self.attack_params | {"alpha": 1, "epsilon": self.l2}),
+            fws,
+        )
+        attack, fws = self.jsma()
+        self.semantic_test(
+            aml.attacks.jsma(**self.attack_params | {"alpha": 1, "epsilon": self.l0}),
+            fws,
+        )
+        self.semantic_test(*self.pgd())
+        breakpoint()
+        return None
+
 
 class SpecialTest(unittest.TestCase):
     """
@@ -1537,7 +1674,3 @@ class SpecialTest(unittest.TestCase):
 
     :func:`test_all_components`: coverage test that stresses all components
     """
-
-
-if __name__ == "__main__":
-    raise SystemExit(0)
