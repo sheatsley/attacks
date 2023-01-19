@@ -10,20 +10,20 @@ import aml.saliency as saliency  # Gradient manipulation heuristics to achieve a
 import aml.surface as surface  # PyTorch-based models for crafting adversarial examples
 import aml.traveler as traveler  # PyTorch-based perturbation schemes for crafting adversarial examples
 import itertools  # Functions creating iterators for efficietn looping
-import sklearn.preprocessing  # Preprocessing and Normalization
 import torch  # Tensors and Dynamic neural networks in Python with strong GPU acceleration
 
 # TODO
-# implement unit test
-# cleanup hparam updates
-# consider merging min_norm and carlini interfaces
+# finish converting attacks to adversaries
 # add perturbations visualizations in examples directory
 # l2 rr should be normlized by l2-norm and l0 norm should pick max l0 random features
 # for l0 clamp, need to check if cov makes 0s a very small number (check on prev_p == 0 would fail)
 # consider setting a min in tanh_p (like l2 norm) to mitigate underflow
+# configure adversary verbosity based on attack verbosity (use \r if no attack prints)
 # consider showing separate batch and output accuracies (attacks like fab almost always show 50% acc)
 # probably seprate out essential from non-essential ops in progress
 # confirm progress logic correcetness for max-loss cov
+# consider if hparam "success" flag is needed to determine if hparams should be increased or decreased
+# consider dropping attack alias getattr... probably more harm than good
 
 
 class Adversary:
@@ -41,6 +41,7 @@ class Adversary:
     :func:`attack`: returns a set of adversarial examples
     :func:`max_loss`: restart criterion used in PGD attack
     :func:`min_norm`: restart criterion used in FAB attack
+    :func:`misclassified`: hyperparameter criterion used in CW-L2 attack
     """
 
     def __init__(
@@ -51,6 +52,7 @@ class Adversary:
         hparam_steps,
         num_restarts,
         restart_criterion,
+        verbose=False,
         **atk_args,
     ):
         """
@@ -65,7 +67,7 @@ class Adversary:
         :param hparam: the hyperparameter to be optimized
         :type hparam: str
         :param hparam_bounds: lower and upper bounds for binary search
-        :type hparam_bounds: tuple
+        :type hparam_bounds: tuple of floats
         :param hparam_criterion: criterion for hyperparameter optimization
         :type hparam_criterion: callable
         :param hparam_steps: the number of hyperparameter optimization steps
@@ -74,6 +76,8 @@ class Adversary:
         :type num_restarts: int
         :param restart_criterion: criterion for keeping inputs across restarts
         :type restart_criterion: callable
+        :param verbose: whether progress statistics are printed
+        :type verbose: bool
         :param atk_args: attack parameters
         :type atk_args: dict
         :return: an adversary
@@ -83,11 +87,11 @@ class Adversary:
         self.hparam = hparam
         self.hparam_bounds = hparam_bounds
         self.hparam_criterion = hparam_criterion
-        self.hparam_steps = min(hparam_steps, 1)
-        self.num_restarts = min(num_restarts, 1)
+        self.hparam_steps = max(hparam_steps, 1)
+        self.num_restarts = max(num_restarts, 1)
         self.restart_criterion = restart_criterion
-        self.attack = attack
-        self.loss = atk_args["loss"]
+        self.attack_alg = attack
+        self.loss = atk_args["loss_func"]
         self.norm = atk_args["norm"]
         self.model = atk_args["model"]
         self.params = {
@@ -100,6 +104,19 @@ class Adversary:
             "attack": attack.name,
         }
         return None
+
+    def __getattr__(self, name):
+        """
+        This method aliases Attack objects (i.e., self.attack) attributes to be
+        accessible by this object directly. It is principally used for better
+        readability and easier debugging.
+
+        :param name: name of the attribute to recieve from self.attack
+        :type name: str
+        :return: the desired attribute (if it exists)
+        :rtype: misc
+        """
+        return self.__getattribute__("attack_alg").__getattribute__(name)
 
     def __repr__(self):
         """
@@ -128,71 +145,64 @@ class Adversary:
         """
 
         # iterate over restarts & hyperparameters
-        best_p = torch.zeros_like_(x)
-        for iter_step in range(self.num_restarts):
+        b = torch.full_like(x, torch.inf)
+        for r in range(1, self.num_restarts + 1):
             print(
-                f"On iteration {iter+1} of {self.num_restarts}...",
-                f"({iter_step/self.num_restarts:.1%})",
+                f"On restart iteration {r} of {self.num_restarts}...",
+                f"({r / self.num_restarts:.1%})",
             )
 
             # instantiate bookkeeping and apply hyperparameter criterion
-            prev_p = torch.full_like(x, torch.inf)
             p = torch.zeros_like(x)
-            hparam_bounds = torch.tensor(self.hparam_bounds).repeat(y.numel())
-            for hparam_step in range(self.hparam_steps):
-                curr_p = self.attack(x + p, y)
-                if self.hparam:
-                    print(
-                        "On hyperparameter iteration {hparam_step+1}} of",
-                        "{self.hparam_steps}...",
-                        f"({hparam_step/self.hparam_steps:.1%})",
-                    )
-                    hparam_value = self.attack.hparams[self.hparam]
-                    hparam_updates = self.hparam_criterion(x, curr_p, prev_p, y)
-                    hparam_bounds[hparam_updates][1] = torch.minimum(
-                        hparam_bounds[hparam_updates][1], hparam_value[hparam_updates]
-                    )
-                    hparam_bounds[~hparam_updates][0] = torch.maximum(
-                        hparam_bounds[~hparam_updates][0], hparam_value[~hparam_updates]
-                    )
-                    self.attack.hparams[self.hparam] = hparam_bounds.diff().div(2)
-                    print(
-                        f"{hparam_updates.sum().div(hparam_updates.numel()):.2%}",
-                        "inputs were determined succesful.",
-                        f"Hyperparameter {self.hparam} updated.",
-                    )
-
-                # store the best adversarial examples seen thus far
-                best_updates = self.restart_criterion(x, curr_p, best_p, y)
-                best_p[best_updates] = curr_p[best_updates]
+            lb, ub = torch.tensor(self.hparam_bounds).repeat(y.numel(), 1).unbind(1)
+            for h in range(1, self.hparam_steps + 1):
                 print(
-                    f"Found {best_updates.sum()} better adversarial examples!",
-                    "(+{best_updates.sum().div(best_updates.numel()):.2%})",
+                    f"On hyperparameter iteration {h} of {self.hparam_steps}...",
+                    f"({h / self.hparam_steps:.1%})",
                 )
-        return x + best_p
+                p = self.attack_alg.craft(x + p, y)
+                success = self.hparam_criterion(x, p, b, y)
+                hparam = self.attack.hparams[self.hparam]
+                ub[success] = ub[success].minimum(hparam[success])
+                lb[~success] = lb[~success].maximum(hparam[~success])
+                hparam.copy_(ub.add(lb).div(2))
+                print(
+                    "Hyperparameter {self.hparam} updated "
+                    f"({success.sum().div(success.numel()):.2%} success)"
+                )
 
-    def max_loss(self, x, curr_p, best_p, y):
+                # store the best adversarial perturbations seen thus far
+                update = self.restart_criterion(x, p, b, y)
+                b[update] = p[update]
+                print(
+                    f"Found {update.sum()} better adversarial examples!",
+                    "(+{update.sum().div(update.numel()):.2%})",
+                )
+        return x + b.nan_to_num_(nan=None, posinf=0)
+
+    def max_loss(self, x, p, b, y):
         """
         This method serves as a restart criterion as used in
         https://arxiv.org/pdf/1706.06083.pdf. Specifically, it returns the set
-        of perturbations whose loss is maximal.
+        of perturbations whose loss is maximal. Notably, if the loss is to be
+        minimized and early termination is disabled, then the set of
+        pertrubations whose loss is minimal is returned instead.
 
         :param x: inputs to produce adversarial examples from
         :type x: torch Tensor object (n, m)
-        :param curr_p: the current set of perturbation vectors
-        :type curr_p: torch Tensor object (n, m)
-        :param best_p: the previous set of perturbation vectors
-        :type best_p: torch Tensor object (n, m )
+        :param p: candidate set of perturbation vectors
+        :type p: torch Tensor object (n, m)
+        :param b: best set of perturbation vectors
+        :type b: torch Tensor object (n, m )
         :param y: the labels (or initial predictions) of x
         :type y: Pytorch Tensor object (n,)
         :return: the perturbations whose loss is maximal
         :rtype: torch Tensor object (n,)
         """
-        return self.loss(self.model(x + curr_p), y).gt(
-            self.loss(self.model(x + best_p)), y
-        )
+        ploss, bloss = (self.loss(self.model(x + i), y) for i in (p, b))
+        return ploss.gt(bloss) if self.loss.max_obj else ploss.lt(bloss)
 
-    def min_norm(self, x, curr_p, best_p, y):
+    def min_norm(self, x, p, b, y):
         """
         This method serves as a restart criterion as used in
         https://arxiv.org/pdf/1907.02044.pdf and
@@ -201,19 +211,34 @@ class Adversary:
 
         :param x: inputs to produce adversarial examples from
         :type x: torch Tensor object (n, m)
-        :param curr_p: the current set of perturbation vectors
-        :type curr_p: torch Tensor object (n, m)
-        :param best_p: the previous set of perturbation vectors
-        :type best_p: torch Tensor object (n, m )
+        :param p: candidate set of perturbation vectors
+        :type p: torch Tensor object (n, m)
+        :param b: best set of perturbation vectors
+        :type b: torch Tensor object (n, m )
         :param y: the labels (or initial predictions) of x
         :type y: Pytorch Tensor object (n,)
         :return: the perturbations whose loss is maximal
         :rtype: torch Tensor object (n,)
         """
-        return self.model.predict(x + curr_p).not_eq_(y) and (
-            curr_p.norm(self.norm, 1) < best_p.norm(self.norm, 1)
-            or best_p.norm(self.norm, 1).eq(0)
-        )
+        misclassified = self.model(x + p).argmax(1).ne(y)
+        return misclassified.logical_and_(p.norm(self.norm, 1) < b.norm(self.norm, 1))
+
+    def misclassified(self, x, p, y):
+        """
+        This method serves as a hyperparameter criterion as used in
+        https://arxiv.org/pdf/1608.04644.pdf. Specifically, it returns the set
+        of adversarial examples that are misclassified.
+
+        :param x: inputs to produce adversarial examples from
+        :type x: torch Tensor object (n, m)
+        :param p: set of perturbation vectors
+        :type p: torch Tensor object (n, m)
+        :param y: the labels (or initial predictions) of x
+        :type y: Pytorch Tensor object (n,)
+        :return: the perturbations whose loss is maximal
+        :rtype: torch Tensor object (n,)
+        """
+        return self.model(x + p).argmax(1).ne(y)
 
 
 class Attack:
@@ -311,7 +336,7 @@ class Attack:
         self.lp = {surface.l0: 0, surface.l2: 2, surface.linf: torch.inf}[norm]
         self.project = getattr(self, norm.__name__)
         self.results = {m: [] for m in ("acc", "aloss", "mloss", "l0", "l2", "linf")}
-        self.verbosity = max(1, int(epochs * verbosity))
+        self.verbosity = int(epochs * verbosity)
         self.clip = torch.tensor(
             (-torch.inf, torch.inf) if change_of_variables else (0, 1)
         ).unbind()
@@ -422,15 +447,15 @@ class Attack:
 
         # initialize perturbations, ranges, inputs, and batches
         x = x.detach().clone()
-        p = x.new_zeros(x.size())
+        p = torch.zeros_like(x)
         mins, maxs = (x.min(0).values, x.max(0).values)
         x.sub_(mins).div_(maxs.sub(mins))
         batch_size = x.size(0) if self.batch_size == -1 else self.batch_size
         num_batches = -(-x.size(0) // batch_size)
         o = torch.where(
             self.surface.model(x).argmax(1).ne(y).unsqueeze(1),
-            torch.zeros(x.size()),
-            torch.full(x.size(), torch.inf),
+            torch.zeros_like(x),
+            torch.full_like(x, torch.inf),
         )
 
         # configure batches, attach objects, & apply perturbation inits
@@ -452,7 +477,7 @@ class Attack:
                 pb.clamp_(cnb, cxb)
                 self.project(xb, pb)
                 progress = self.progress(b, e, xb, yb, pb, ob)
-                print(
+                None if not self.verbosity else print(
                     f"Epoch {e:{len(str(self.epochs))}} / {self.epochs} {progress}"
                 ) if not e % self.verbosity else print(
                     f"Epoch {e}... ({e / self.epochs:.1%})", end="\r"
@@ -864,12 +889,22 @@ def bim(alpha=None, epochs=None, epsilon=None, model=None, verbosity=1):
     )
 
 
-def cwl2(alpha=None, epochs=None, epsilon=None, model=None, verbosity=1):
+def cwl2(
+    alpha=None,
+    epochs=None,
+    epsilon=None,
+    model=None,
+    hparam_bounds=(0, 1e10),
+    hparam_steps=5,
+    verbosity=1,
+):
     """
     This function serves as an alias to build Carlini-Wagner l₂ (CW-L2), as
     shown in (https://arxiv.org/pdf/1608.04644.pdf) Specifically, CW-L2: uses
     change of variables, uses the Adam optimizer, does not use random start,
     uses Carlini-Wagner loss, uses l₂ norm, and uses the Identity saliency map.
+    It also performs binary search over c, which controls the importance of
+    inducing misclassification over minimizing norm.
 
     :param alpha: learning rate of the optimizer
     :type alpha: float
@@ -881,12 +916,23 @@ def cwl2(alpha=None, epochs=None, epsilon=None, model=None, verbosity=1):
     :type epsilon: float
     :param model: neural network
     :type model: dlm LinearClassifier-inherited object
+    :param hparam_bounds: lower and upper bounds for binary search
+    :type hparam_bounds: tuple of floats
+    :param hparam_steps: the number of hyperparameter optimization steps
+    :type hparam_steps: int
     :param verbosity: print attack statistics every verbosity%
     :type verbosity: float
     :return: Carlini-Wagner l₂ attack
     :rtype: Attack objects
     """
-    return Attack(
+    return Adversary(
+        hparam="c",
+        hparam_bounds=hparam_bounds,
+        hparam_criterion=Adversary.misclassified,
+        hparam_steps=hparam_steps,
+        num_restarts=0,
+        restart_criterion=Adversary.min_norm,
+        verbose=False,
         alpha=alpha,
         change_of_variables=True,
         early_termination=True,
