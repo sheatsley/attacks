@@ -108,8 +108,11 @@ class Surface:
 
         # map out of tanh- and [0, 1]-space, perform forward & backward passes
         pj.requires_grad = True
+        good_p = self.cov(xj + pj) - self.cov(xj)
         logits = self.model(self.transform(xj + pj))
-        loss = self.loss(logits, yj, y if self.saliency_map.jac_req else None, True)
+        loss = self.loss(
+            logits, yj, good_p, y if self.saliency_map.jac_req else None, True
+        )
         (grad,) = torch.autograd.grad(loss, pj, torch.ones_like(loss))
         loss = loss.detach()
         pj.requires_grad = False
@@ -118,11 +121,14 @@ class Surface:
         opt_args = {"loss": loss.view(-1, cj), "y": y, "p": p}
         smap_grad = self.saliency_map(grad.view(-1, cj, grad.size(1)), **opt_args)
         dist = (c.sub(p).abs() for c in self.clip)
+        """
         final_grad = (
             self.norm(smap_grad, dist, self.loss.max_obj)
             if self.norm is l0
             else self.norm(smap_grad)
         )
+        """
+        final_grad = smap_grad
 
         # call closure subroutines and attach grads to the perturbation vector
         [comp.closure(final_grad) for comp in self.closure]
