@@ -140,7 +140,7 @@ class CWLoss(torch.nn.Module):
             self.c.resize_(delta.size(0)).fill_(self.c[0])
         return None
 
-    def forward(self, logits, y, yt=None, record=False):
+    def forward(self, logits, y, good_p, yt=None, record=False):
         """
         This method computes the loss described above. Specifically, it
         computes the sum of: (1) the lp-norm of the perturbation, and (2) the
@@ -163,9 +163,11 @@ class CWLoss(torch.nn.Module):
         """
 
         # compute lp-norm of perturbation vector
-        lp = self.delta.norm(p=self.norm, dim=1).repeat_interleave(
-            logits.size(0) // self.delta.size(0)
-        )
+        # lp = self.delta.norm(p=self.norm, dim=1).repeat_interleave(
+        #    logits.size(0) // self.delta.size(0)
+        # )
+        # lp = self.delta.square().sum(1)
+        lp = good_p.square().sum(1)
 
         # compute logit differences
         y_hot = torch.nn.functional.one_hot(y).bool()
