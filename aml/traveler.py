@@ -152,7 +152,10 @@ def tanh_space(x, into=False):
     :rtype: torch Tensor object (n, m)
     """
     return (
-        x.mul_(2).sub_(1).mul_(1 - torch.finfo(x.dtype).eps).arctanh_()
+        # x.mul_(2).sub_(1).mul_(1 - torch.finfo(x.dtype).eps).arctanh_()
+        # x.mul_(2).sub_(1).mul_(0.999999).arctanh_()
+        x.sub_(0.5).div_(0.5).mul_(0.999999).arctanh_()
         if into
-        else x.tanh().add(1).div(2)
+        # else x.tanh().add(1).div(2)
+        else x.tanh().mul(0.5).add(0.5)
     )
