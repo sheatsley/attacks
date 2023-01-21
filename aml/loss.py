@@ -3,6 +3,7 @@ This module defines custom PyTorch-based loss functions.
 Authors: Ryan Sheatsley & Blaine Hoak
 Wed Apr 6 2022
 """
+import aml.traveler as traveler  # PyTorch-based perturbation schemes for crafting adversarial examples
 import torch  # Tensors and Dynamic neural networks in Python with strong GPU acceleration
 
 
@@ -15,14 +16,14 @@ class CELoss(torch.nn.CrossEntropyLoss):
     attributes to state that optimizers should maximize this function and that
     a reference to perturbation vectors is not needed by this class.
 
-    :func:`__init__` instantiates a CELoss object
+    :func:`__init__`: instantiates a CELoss object
     :func:`forward`: returns the loss for a given batch of inputs
     """
 
     del_req = False
     max_obj = True
 
-    def __init__(self, **kwargs):
+    def __init__(self, change_of_variables, **kwargs):
         """
         This method instantiates a CELoss object. It accepts keyword arguments
         for the PyTorch parent class described in:
@@ -39,7 +40,7 @@ class CELoss(torch.nn.CrossEntropyLoss):
         super().__init__(reduction="none", **kwargs)
         return None
 
-    def forward(self, logits, y, yt=None, record=False):
+    def forward(self, logits, y, yt=None):
         """
         This method serves as a wrapper for the PyTorch CrossEntropyLoss
         forward method. We provide this wrapper to expose the most recently
@@ -49,23 +50,16 @@ class CELoss(torch.nn.CrossEntropyLoss):
         :param logits: the model logits
         :type logits: torch Tensor object (n, c)
         :param y: the labels (or initial predictions) of the inputs (e.g., x)
-        :type y: PyTorch Tensor object (n,)
+        :type y: torch Tensor object (n,)
         :param yt: the true labels if attempting to compute a jacobian
-        :type yt: PyTorch Tensor object (n,)
-        :param record: if the current loss and accuracy should be recorded
-        :type record: bool
+        :type yt: torch Tensor object (n,)
         :return: the current loss
         :rtype: torch Tensor object (n,)
         """
-        curr_loss = super().forward(logits, y)
-        if record:
-            c, off, labels = (y.numel(), 0, y) if yt is None else (yt.numel(), yt, yt)
-            stride = y.numel() // c
-            self.curr_loss = curr_loss.detach().take(
-                torch.arange(0, y.numel(), stride).add(off)
-            )
-            self.curr_acc = logits.detach()[::stride].argmax(1).eq(labels)
-        return curr_loss
+        loss = super().forward(logits, y)
+        if loss.requires_grad:
+            self.loss, self.acc = record(loss, logits, y, y if yt is None else yt)
+        return loss
 
 
 class CWLoss(torch.nn.Module):
@@ -73,17 +67,17 @@ class CWLoss(torch.nn.Module):
     This class implements the Carlini-Wagner loss, as shown in
     https://arxiv.org/pdf/1608.04644.pdf. Specifically, the loss is defined as:
 
-            lp(Δ) + c * max(max(f(x + Δ)_i:i ≠ y) - f(x + Δ)_y, -k)
+            ||Δ||_2 + c * max(max(f(x + Δ)_i:i ≠ y) - f(x + Δ)_y, -k)
 
     where Δ is the current perturbation vector to produce adversarial examples,
     x is the original input, y contains the labels of x, i is the next closest
-    class (as measured through the model logits, returned by f), lp computes
-    the p-norm of Δ, while k, the first hyperparameter, controls the minimum
+    class (as measured through the model logits, returned by f), ||·|| computes
+    the l2-norm of Δ, while k, the first hyperparameter, controls the minimum
     difference between the next closest class & the original class (i.e., how
     deep adversarial examples are pushed across the decision boundary), and c,
     the second hyperparameter, parameterizes the tradeoff between
     imperceptibility and misclassification (which can be dynamically optimized
-    for, e.g. via binary search). Moreover, like other losses, we store the
+    for, e.g., via binary search). Moreover, like other losses, we store the
     last computed accuracy & loss, and expose attributes to state that
     optimizers should minimize this function and Surface objects should provide
     a reference to the perturbation vector.
@@ -96,7 +90,7 @@ class CWLoss(torch.nn.Module):
     del_req = True
     max_obj = False
 
-    def __init__(self, norm=2, c=1.0, k=0.0):
+    def __init__(self, change_of_variables, c=1.0, k=0.0):
         """
         This method instantiates a CWLoss object. It accepts three arguments:
         (1) norm, the lp-norm to use, (2) c, which emphasizes optimizing
@@ -106,41 +100,48 @@ class CWLoss(torch.nn.Module):
         and the next largest logit). Finally, a reference to c is saved and
         exposed as an optimizable hyperparameter.
 
+        :param change_of_variables: whether to map inputs out of tanh-space
+        :type change_of_variables: bool
         :param norm: lp-space to project gradients into
-        :type norm: supported ord arguments in PyTorch linalg.vector_norm function
+        :type norm: supported ord arguments in torch linalg.vector_norm function
         :param c: importance of misclassification over imperceptability
         :type c: float
-        :param k: desired minimum logit difference between true and current classes
+        :param k: minimum logit difference between true and current classes
         :type k: float
         :return: Carlini-Wagner loss
         :rtype: CWLoss object
         """
         super().__init__()
-        self.norm = norm
+        self.cov = change_of_variables
         self.c = torch.tensor((c,))
         self.k = k
         self.hparams = {"c": self.c}
         return None
 
-    def attach(self, delta):
+    def attach(self, delta, x=None):
         """
         This method serves as a setter for attaching a reference to the
-        perturbation vector to CWLoss objects as an attribute (as the attribute
-        is subsequently referenced in the forward pass). If necessary, c is
+        perturbation vector to CWLoss objects as an attribute, as the attribute
+        is subsequently referenced in the forward pass, as well as a reference
+        to the initial input (which is needed to compute the norm of the
+        perturbation vector when using change of variables). If necessary, c is
         expanded in-place by the number of inputs to faciliate hyperparameter
         optimization, as done in https://arxiv.org/pdf/1608.04644.pdf.
 
         :param delta: perturbation vector
         :type delta: torch Tensor object (n, m)
+        :param x: initial inputs
+        :type x: torch Tensor object (n, m)
         :return: None
         :rtype: NoneType
         """
         self.delta = delta
+        self.x = x
         if self.c.size(0) < delta.size(0):
             self.c.resize_(delta.size(0)).fill_(self.c[0])
         return None
 
-    def forward(self, logits, y, good_p, yt=None, record=False):
+    def forward(self, logits, y, yt=None):
         """
         This method computes the loss described above. Specifically, it
         computes the sum of: (1) the lp-norm of the perturbation, and (2) the
@@ -153,38 +154,28 @@ class CWLoss(torch.nn.Module):
         :param logits: the model logits
         :type logits: torch Tensor object (n, c)
         :param y: the labels (or initial predictions) of the inputs (e.g., x)
-        :type y: PyTorch Tensor object (n,)
+        :type y: torch Tensor object (n,)
         :param yt: the true labels if attempting to compute a jacobian
-        :type yt: PyTorch Tensor object (n,)
-        :param record: if the current loss and accuracy should be recorded
-        :type record: bool
+        :type yt: torch Tensor object (n,)
         :return: the current loss
         :rtype: torch Tensor object (n,)
         """
 
-        # compute lp-norm of perturbation vector
-        # lp = self.delta.norm(p=self.norm, dim=1).repeat_interleave(
-        #    logits.size(0) // self.delta.size(0)
-        # )
-        # lp = self.delta.square().sum(1)
-        lp = good_p.square().sum(1)
+        # compute lp-norm of perturbation vector (map out of tanh-space)
+        delta = traveler.tanh_space_p(self.x, self.delta) if self.cov else self.delta
+        lp = delta.norm(dim=1).repeat_interleave(logits.size(0) // self.delta.size(0))
 
         # compute logit differences
         y_hot = torch.nn.functional.one_hot(y).bool()
         yth_logit = logits.masked_select(y_hot)
         max_logit, _ = logits.masked_select(~y_hot).view(-1, logits.size(1) - 1).max(1)
-        log_diff = torch.clamp(yth_logit - max_logit, min=-self.k)
+        log_diff = torch.clamp(yth_logit.sub(max_logit), min=-self.k)
 
         # save current accuracy and loss for optimizers later
-        curr_loss = lp + self.c * log_diff
-        if record:
-            c, off, labels = (y.numel(), 0, y) if yt is None else (yt.numel(), yt, yt)
-            stride = y.numel() // c
-            self.curr_loss = curr_loss.detach().take(
-                torch.arange(0, y.numel(), stride).add(off)
-            )
-            self.curr_acc = logits.detach()[::stride].argmax(1).eq(labels)
-        return curr_loss
+        loss = self.c.mul(log_diff).add(lp)
+        if loss.requires_grad:
+            self.loss, self.acc = record(loss, logits, y, y if yt is None else yt)
+        return loss
 
 
 class DLRLoss(torch.nn.Module):
@@ -211,7 +202,7 @@ class DLRLoss(torch.nn.Module):
     del_req = False
     max_obj = True
 
-    def __init__(self):
+    def __init__(self, **kwargs):
         """
         This method instantiates an IdentityLoss object. It accepts no
         arguments.
@@ -222,7 +213,7 @@ class DLRLoss(torch.nn.Module):
         super().__init__()
         return None
 
-    def forward(self, logits, y, yt=None, record=False, minimum=1e-8):
+    def forward(self, logits, y, yt=None, minimum=1e-8):
         """
         This method computes the loss described above. Specifically, it
         computes the division of: (1) the logit difference between the yth
@@ -233,11 +224,9 @@ class DLRLoss(torch.nn.Module):
         :param logits: the model logits
         :type logits: torch Tensor object (n, c)
         :param y: the labels (or initial predictions) of the inputs (e.g., x)
-        :type y: PyTorch Tensor object (n,)
+        :type y: torch Tensor object (n,)
         :param yt: the true labels if attempting to compute a jacobian
-        :type yt: PyTorch Tensor object (n,)
-        :param record: if the current loss and accuracy should be recorded
-        :type record: bool
+        :type yt: torch Tensor object (n,)
         :param minimum: minimum gradient value (to mitigate underflow)
         :type minimum: float
         :return: the current loss
@@ -248,20 +237,15 @@ class DLRLoss(torch.nn.Module):
         y_hot = torch.nn.functional.one_hot(y).bool()
         yth_logit = logits.masked_select(y_hot)
         max_logit, _ = logits.masked_select(~y_hot).view(-1, logits.size(1) - 1).max(1)
-        log_diff = yth_logit - max_logit
+        log_diff = yth_logit.sub(max_logit)
 
         # compute ordered logit differences
         log_desc = logits.sort(dim=1, descending=True).values
         pi_diff = log_desc[:, 0].sub(log_desc[:, min(2, logits.size(1) - 1)])
-        curr_loss = -(log_diff.div(pi_diff).clamp_(minimum))
-        if record:
-            c, off, labels = (y.numel(), 0, y) if yt is None else (yt.numel(), yt, yt)
-            stride = y.numel() // c
-            self.curr_loss = curr_loss.detach().take(
-                torch.arange(0, y.numel(), stride).add(off)
-            )
-            self.curr_acc = logits.detach()[::stride].argmax(1).eq(labels)
-        return curr_loss
+        loss = -(log_diff.div(pi_diff).clamp_(minimum))
+        if loss.requires_grad:
+            self.loss, self.acc = record(loss, logits, y, y if yt is None else yt)
+        return loss
 
 
 class IdentityLoss(torch.nn.Module):
@@ -284,7 +268,7 @@ class IdentityLoss(torch.nn.Module):
     del_req = False
     max_obj = False
 
-    def __init__(self):
+    def __init__(self, **kwargs):
         """
         This method instantiates an IdentityLoss object. It accepts no
         arguments.
@@ -295,7 +279,7 @@ class IdentityLoss(torch.nn.Module):
         super().__init__()
         return None
 
-    def forward(self, logits, y, yt=None, record=False):
+    def forward(self, logits, y, yt=None):
         """
         This method computes the loss described above. Specifically, it returns
         the yth-component of the logits.
@@ -303,20 +287,35 @@ class IdentityLoss(torch.nn.Module):
         :param logits: the model logits
         :type logits: torch Tensor object (n, c)
         :param y: the labels (or initial predictions) of the inputs (e.g., x)
-        :type y: PyTorch Tensor object (n,)
+        :type y: torch Tensor object (n,)
         :param yt: the true labels if attempting to compute a jacobian
-        :type yt: PyTorch Tensor object (n,)
-        :param record: if the current loss and accuracy should be recorded
-        :type record: bool
+        :type yt: torch Tensor object (n,)
         :return: the current loss
         :rtype: torch Tensor object (n,)
         """
-        curr_loss = logits.gather(1, y.unsqueeze(1)).flatten()
-        if record:
-            c, off, labels = (y.numel(), 0, y) if yt is None else (yt.numel(), yt, yt)
-            stride = y.numel() // c
-            self.curr_loss = curr_loss.detach().take(
-                torch.arange(0, y.numel(), stride).add(off)
-            )
-            self.curr_acc = logits.detach()[::stride].argmax(1).eq(labels)
-        return curr_loss
+        loss = logits.gather(1, y.unsqueeze(1)).flatten()
+        if loss.requires_grad:
+            self.loss, self.acc = record(loss, logits, y, y if yt is None else yt)
+        return loss
+
+
+def record(loss, logits, y, yt):
+    """
+    This function computes the accuracy and loss (to be used by optimizers that
+    require it, e.g., BackwardSGD and MomentumBestStart). Specifically, as
+    inputs are duplicated class-number of times for attacks that require model
+    Jacobians, we index into the loss and logits corresponding to the true
+    labels, given by yt (which is correct when yt == y for other attacks).
+
+    :param logits: the model logits
+    :type logits: torch Tensor object (n, c)
+    :param y: the labels (or initial predictions) of the inputs (e.g., x)
+    :type y: torch Tensor object (n,)
+    :param yt: the true labels if attempting to compute a jacobian
+    :type yt: torch Tensor object (n,)
+    """
+    classes = y.numel() // yt.numel()
+    offset = yt if y.numel() != yt.numel() else 0
+    loss = loss.detach().take(torch.arange(0, y.numel(), classes).add(offset))
+    accuracy = logits.detach()[::classes].argmax(1).eq(yt)
+    return loss, accuracy
