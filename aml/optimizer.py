@@ -126,7 +126,7 @@ class BackwardSGD(torch.optim.Optimizer):
                 )
 
                 # perform a backwardstep step for misclassified inputs
-                misclassified = ~(group["atk_loss"].curr_acc)
+                misclassified = ~(group["atk_loss"].acc)
                 p[misclassified] = p[misclassified].mul_(group["beta"])
 
                 # compute alpha for biased projection
@@ -285,21 +285,21 @@ class MomentumBestStart(torch.optim.Optimizer):
         """
         for group in self.param_groups:
             for p in group["params"]:
-                curr_loss = group["atk_loss"].curr_loss
+                loss = group["atk_loss"].loss
                 grad = p.grad.data if group["maximize"] else -p.grad.data
                 state = self.state[p]
 
                 # save max loss with perturbations and gradients (saves a pass)
-                max_loss_inc = curr_loss.gt(state["max_loss"])
-                state["max_loss"][max_loss_inc] = curr_loss[max_loss_inc]
+                max_loss_inc = loss.gt(state["max_loss"])
+                state["max_loss"][max_loss_inc] = loss[max_loss_inc]
                 state["best_p"][max_loss_inc] = p[max_loss_inc].clone()
                 state["best_grad"][max_loss_inc] = grad[max_loss_inc].clone()
 
                 # perform checkpoint subroutines (and update associated info)
-                loss_inc = curr_loss.gt(state["prev_loss"])
+                loss_inc = loss.gt(state["prev_loss"])
                 state["num_loss_updates"][loss_inc] += 1
                 state["max_loss_updated"][max_loss_inc] = True
-                state["prev_loss"] = curr_loss
+                state["prev_loss"] = loss
                 if state["epoch"] in group["checkpoints"]:
 
                     # loss increased <rho% or lr and max loss stayed the same?
