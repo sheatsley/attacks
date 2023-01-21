@@ -5,10 +5,6 @@ Tue Jul 25 2022
 """
 import torch  # Tensors and Dynamic neural networks in Python with strong GPU acceleration
 
-# TODO:
-# check if jsma "x_org proj" helps when using backwardsgd
-# consider adding a clipping subroutine to support naitive FAB
-
 
 class DeepFoolSaliency:
     """
@@ -73,7 +69,7 @@ class DeepFoolSaliency:
         :param loss: the current loss (or logits) used to compute g
         :type loss: PyTortch FloatTensor object (n, c)
         :param y: the labels (or initial predictions) of x
-        :type y: PyTorch Tensor object (n,)
+        :type y: torch Tensor object (n,)
         :param minimum: minimum gradient value (to mitigate underflow)
         :type minimum: float
         :param kwargs: miscellaneous keyword arguments
@@ -227,7 +223,7 @@ class JacobianSaliency:
         :param g: the gradients of the perturbation vector
         :type g: torch Tensor object (n, c, m)
         :param y: the labels (or initial predictions) of x
-        :type y: PyTorch Tensor object (n,)
+        :type y: torch Tensor object (n,)
         :param kwargs: miscellaneous keyword arguments
         :type kwargs: dict
         :return: JSMA-like manipulated gradients
