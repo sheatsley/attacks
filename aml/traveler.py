@@ -152,10 +152,36 @@ def tanh_space(x, into=False):
     :rtype: torch Tensor object (n, m)
     """
     return (
-        # x.mul_(2).sub_(1).mul_(1 - torch.finfo(x.dtype).eps).arctanh_()
-        # x.mul_(2).sub_(1).mul_(0.999999).arctanh_()
-        x.sub_(0.5).div_(0.5).mul_(0.999999).arctanh_()
+        x.mul_(2).sub_(1).mul_(1 - torch.finfo(x.dtype).eps).arctanh_()
         if into
-        # else x.tanh().add(1).div(2)
-        else x.tanh().mul(0.5).add(0.5)
+        else x.tanh().add(1).div(2)
+    )
+
+
+def tanh_space_p(x, p, into=False):
+    """
+    This method extracts the perturbation vector when using change of
+    variables. When using the technique, the computed perturbation is in
+    the tanh-space (which is convenient when returning adversarial examples
+    directly). To properly compute progress statistics as well as
+    projecting onto l2-norm balls (parameterized by epsilon), this method
+    extracts the perturbation vector in the real space by first mapping the
+    current input out of the tanh-space and subtracting it from the
+    original input. Moreover, to facilitate mapping perturbations into the
+    tanh-space, this also supports an out-of-place-non-scaled version of
+    the procedure defined in tanh_map.
+
+    :param x: initial inputs in tanh-space
+    :type x: torch Tensor object (n, m)
+    :param p: perturbations in tanh-space
+    :type p: torch Tensor object (n, m)
+    :param into: whether to map into (or out of) the tanh-space
+    :type into: bool
+    :return: perturbation vector mapped out of tanh-space
+    :rtype: torch Tensor object (n, m)
+    """
+    return (
+        tanh_space(x).add(p).mul(2).sub(1).arctanh().sub(x)
+        if into
+        else tanh_space(x.add(p)).sub(tanh_space(x))
     )
