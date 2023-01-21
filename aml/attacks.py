@@ -28,6 +28,10 @@ import torch  # Tensors and Dynamic neural networks in Python with strong GPU ac
 # should output buffers be inf or nan? (inf is dicey with losses to be minimized)
 # need to confirm maxs and mins logic works when inputs are outside [0,1] (ie unswnb15)
 # consider using pandas to store results instead of dictionary of lists
+# investigate l2 project with cwl2 (shouldn't affect performance with ET but it does).
+# consider if perturbations need to be mapped back out of [0, 1]-space on exit (they should be)
+# check if jsma "x_org proj" helps when using backwardsgd
+# consider adding a clipping subroutine to support naitive FAB
 
 
 class Adversary:
@@ -153,7 +157,7 @@ class Adversary:
         :param x: inputs to produce adversarial examples from
         :type x: torch Tensor object (n, m)
         :param y: the labels (or initial predictions) of x
-        :type y: Pytorch Tensor object (n,)
+        :type y: torch Tensor object (n,)
         :return: adversarial perturbations
         :rtype: torch Tensor object (n, m)
         """
@@ -210,7 +214,7 @@ class Adversary:
         :param b: best set of perturbation vectors
         :type b: torch Tensor object (n, m )
         :param y: the labels (or initial predictions) of x
-        :type y: Pytorch Tensor object (n,)
+        :type y: torch Tensor object (n,)
         :return: the perturbations whose loss is maximal
         :rtype: torch Tensor object (n,)
         """
@@ -233,7 +237,7 @@ class Adversary:
         :param b: best set of perturbation vectors
         :type b: torch Tensor object (n, m )
         :param y: the labels (or initial predictions) of x
-        :type y: Pytorch Tensor object (n,)
+        :type y: torch Tensor object (n,)
         :return: the perturbations whose loss is maximal
         :rtype: torch Tensor object (n,)
         """
@@ -251,7 +255,7 @@ class Adversary:
         :param p: set of perturbation vectors
         :type p: torch Tensor object (n, m)
         :param y: the labels (or initial predictions) of x
-        :type y: Pytorch Tensor object (n,)
+        :type y: torch Tensor object (n,)
         :return: the perturbations whose loss is maximal
         :rtype: torch Tensor object (n,)
         """
@@ -392,7 +396,7 @@ class Attack:
             if saliency_map is saliency.DeepFoolSaliency
             else saliency_map()
         )
-        loss_func = loss_func()
+        loss_func = loss_func(change_of_variables=change_of_variables)
         custom_opt_params = {
             "atk_loss": loss_func,
             "epochs": epochs,
@@ -456,23 +460,22 @@ class Attack:
         :param x: inputs to produce adversarial examples from
         :type x: torch Tensor object (n, m)
         :param y: the labels (or initial predictions) of x
-        :type y: Pytorch Tensor object (n,)
+        :type y: torch Tensor object (n,)
         :return: set of perturbation vectors
         :rtype: torch Tensor object (n, m)
         """
 
-        # initialize perturbations, ranges, inputs, batches, and results
+        # set perturbations, ranges, inputs, batches, results, & verbosity
         x = x.detach().clone()
-        xorg = x.detach().clone()
         p = torch.zeros_like(x)
         mins, maxs = (x.min(0).values, x.max(0).values)
-        mins, maxs = mins.where(mins < 0, torch.tensor(0)), maxs.where(
-            maxs > 1, torch.tensor(1)
-        )
+        mins = mins.where(mins < 0, torch.tensor(0))
+        maxs = maxs.where(maxs > 1, torch.tensor(1))
         x.sub_(mins).div_(maxs.sub(mins))
         batch_size = x.size(0) if self.batch_size == -1 else self.batch_size
         num_batches = -(-x.size(0) // batch_size)
         self.results = {m: [] for m in ("acc", "aloss", "mloss", "l0", "l2", "linf")}
+        verbose = self.verbosity and self.verbosity != self.epochs
         o = torch.where(
             self.surface.model(x).argmax(1).ne(y).unsqueeze(1),
             torch.zeros_like(x),
@@ -480,28 +483,28 @@ class Attack:
         )
 
         # configure batches, attach objects, & apply perturbation inits
-        None if not self.verbosity or self.verbosity == self.epochs else print(
+        print(
             f"Crafting {x.size(0)} adversarial examples with {self}..."
-        )
+        ) if verbose else None
         xi, yi, pi, oi = (t.split(batch_size) for t in (x, y, p, o))
         for b, (xb, yb, pb, ob) in enumerate(zip(xi, yi, pi, oi)):
-            None if not self.verbosity or self.verbosity == self.epochs else print(
+            print(
                 f"On batch {b + 1} of {num_batches} {(b + 1) / num_batches:.1%}..."
-            )
+            ) if verbose else None
             cnb, cxb = (c.sub(xb) for c in self.clip)
-            self.surface.initialize((mins, maxs), (cnb, cxb), pb)
+            self.surface.initialize((mins, maxs), (cnb, cxb), xb, pb)
             self.traveler.initialize(xb, pb)
             pb.clamp_(cnb, cxb)
-            # self.project(xb, pb, 0)
-            self.progress(b, 0, xb, yb, pb, ob, xorg)
+            self.project(xb, pb)
+            self.progress(b, 0, xb, yb, pb, ob)
 
             # compute peturbation updates and record progress
             for e in range(1, self.epochs + 1):
                 self.surface(xb, yb, pb)
                 self.traveler()
                 pb.clamp_(cnb, cxb)
-                # self.project(xb, pb, e)
-                progress = self.progress(b, e, xb, yb, pb, ob, xorg)
+                self.project(xb, pb)
+                progress = self.progress(b, e, xb, yb, pb, ob)
                 None if not self.verbosity else print(
                     f"Epoch {e:{len(str(self.epochs))}} / {self.epochs} {progress}"
                 ) if not e % self.verbosity and e not in {0, self.epochs} else print(
@@ -534,9 +537,9 @@ class Attack:
         :return: None
         :rtype: NoneType
         """
-        p_real = self.tanh_p(x, p) if self.change_of_variables else p
+        p_real = traveler.tanh_space_p(x, p) if self.change_of_variables else p
         p_real.clamp_(-self.epsilon, self.epsilon)
-        p.copy_(self.tanh_p(x, p, True)) if self.change_of_variables else None
+        p.copy_(traveler.tanh_space_p(x, p, True)) if self.change_of_variables else None
         return None
 
     def l0(self, x, p):
@@ -560,7 +563,7 @@ class Attack:
         self.prev_p = p.detach().clone()
         return None
 
-    def l2(self, x, p, e):
+    def l2(self, x, p):
         """
         This method projects perturbation vectors so that they are complaint
         with the specified l2 threat model (i.e., epsilon). Specifically,
@@ -580,19 +583,14 @@ class Attack:
         :return: None
         :rtype: NoneType
         """
-        p_real = self.tanh_p(x, p, e) if self.change_of_variables else p
+        p_real = traveler.tanh_space_p(x, p) if self.change_of_variables else p
         norm = p_real.norm(2, 1, True)
-        p.copy_(
-            p.where(
-                norm <= self.epsilon,
-                p_real.div(norm).clamp(1e-8).mul(self.epsilon),
-            )
-        )
+        p.copy_(p.where(norm <= self.epsilon, p_real.div(norm).mul(self.epsilon)))
         if self.change_of_variables:
-            p.copy_(p.where(norm <= self.epsilon, self.tanh_p(x, p, e, True)))
+            p.copy_(p.where(norm <= self.epsilon, traveler.tanh_space_p(x, p, True)))
         return None
 
-    def progress(self, batch, epoch, xb, yb, pb, ob, xorg):
+    def progress(self, batch, epoch, xb, yb, pb, ob):
         """
         This method records various statistics on the adversarial example
         crafting process, updates final perturbations when using early
@@ -622,21 +620,19 @@ class Attack:
         # compute absolute stats (averaged on exit) & update early termination
         logits = self.surface.model(self.surface.transform(xb + pb))
         mloss = self.surface.model.loss(logits, yb).item()
-        ali = self.surface.loss(logits, yb, self.tanh_p(xb, pb, epoch))
+        ali = self.surface.loss(logits, yb)
         aloss = ali.sum().item()
         correct = logits.argmax(1).eq(yb)
         acc = correct.sum().item()
 
         # extract perturbation vectors from tanh-space if using cov
-        print(epoch, "current delta:", pb.sum().item())
-        pb = self.tanh_p(xb, pb, epoch) if self.change_of_variables else pb
+        pb = traveler.tanh_space_p(xb, pb) if self.change_of_variables else pb
         nb = [pb.norm(n, 1).sum().item() for n in (0, 2, torch.inf)]
 
         # update early termination and output buffer
         if self.et:
             smaller = pb.norm(self.lp, 1).lt(ob.norm(self.lp, 1))
             update = (~correct).logical_and_(smaller)
-            print("new best:", update.sum().item())
         else:
 
             # only map x out of tanh-space since perturbations already are
@@ -648,7 +644,6 @@ class Attack:
             oloss = self.surface.loss(ologits, yb)
             update = oloss.lt(ali) if self.surface.loss.max_obj else oloss.gt(ali)
         ob[update] = pb[update]
-        print("best norms", ob.nan_to_num(posinf=0).norm(2, 1).mean().item())
 
         # extend result lists; first by batch, then by epoch
         for m, s in zip(self.results.keys(), (acc, aloss, mloss, *nb)):
@@ -671,34 +666,6 @@ class Attack:
             f"({(nb[1] - sum(self.results['l2'][batch][-2:-1])) / yb.numel():+.2f}) "
             f"l∞: {nb[2] / yb.numel():.2f} "
             f"({(nb[2] - sum(self.results['linf'][batch][-2:-1])) / yb.numel():+.2f})"
-        )
-
-    def tanh_p(self, x, p, e, into=False):
-        """
-        This method extracts the perturbation vector when using change of
-        variables. When using the technique, the computed perturbation is in
-        the tanh-space (which is convenient when returning adversarial examples
-        directly). To properly compute progress statistics as well as
-        projecting onto l2-norm balls (parameterized by epsilon), this method
-        extracts the perturbation vector in the real space by first mapping the
-        current input out of the tanh-space and subtracting it from the
-        original input. Moreover, to facilitate mapping perturbations into the
-        tanh-space, this also supports an out-of-place-non-scaled version of
-        the procedure defined in tanh_map.
-
-        :param x: initial inputs in tanh-space
-        :type x: torch Tensor object (n, m)
-        :param p: perturbations in tanh-space
-        :type p: torch Tensor object (n, m)
-        :param into: whether to map into (or out of) the tanh-space
-        :type into: bool
-        :return: perturbation vector mapped out of tanh-space
-        :rtype: torch Tensor object (n, m)
-        """
-        return (
-            traveler.tanh_space(x).add(p).mul(2).sub(1).arctanh().sub(x)
-            if into
-            else traveler.tanh_space(x.add(p)).sub(traveler.tanh_space(x))
         )
 
 
@@ -947,7 +914,7 @@ def cwl2(
     epsilon=None,
     model=None,
     hparam_bounds=(0, 1e10),
-    hparam_steps=1,
+    hparam_steps=9,
     verbosity=1,
 ):
     """
