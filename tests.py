@@ -616,7 +616,7 @@ class BaseTest(unittest.TestCase):
                 ),
                 "ART",
             )
-        if "cleverhans" not in self.available:
+        if "cleverhans" in self.available:
             from cleverhans.torch.attacks.carlini_wagner_l2 import carlini_wagner_l2
 
             print("Producing CW-L2 adversarial examples with CleverHans...")
@@ -631,7 +631,7 @@ class BaseTest(unittest.TestCase):
                     clip_min=self.clip_min.max().item(),
                     clip_max=self.clip_max.min().item(),
                     initial_const=initial_const,
-                    binary_search_steps=max(binary_search_steps, 1),
+                    binary_search_steps=min(binary_search_steps, 1),
                     max_iterations=min(max_iterations, 30),
                 ).detach(),
                 "CleverHans",
@@ -692,7 +692,7 @@ class BaseTest(unittest.TestCase):
             self.l2,
         )
         art_adv = fb_adv = ta_adv = None
-        if "art" not in self.available:
+        if "art" in self.available:
             from art.attacks.evasion import DeepFool
 
             print("Producing DF adversarial examples with ART...")
@@ -725,7 +725,7 @@ class BaseTest(unittest.TestCase):
                 epsilons=epsilons,
             )
             fb_adv = (fb_adv, "Foolbox")
-        if "torchattacks" not in self.available:
+        if "torchattacks" in self.available:
             from torchattacks import DeepFool
 
             print("Producing DF adversarial examples with Torchattacks...")
@@ -812,7 +812,9 @@ class BaseTest(unittest.TestCase):
         frameworks for the JSMA include AdverTorch and ART. Notably, the JSMA
         implementation in AdverTorch and ART both assume the l0-norm is passed
         in as a percentage (which is why we pass in linf) and we set theta to
-        be 1 since features can only be perturbed once.
+        be 1 since features can only be perturbed once. Moreover, the
+        AdverTorch implementation does not suport an untargetted scheme, so we
+        supply random targets.
 
         :return: JSMA adversarial examples
         :rtype: tuple of torch Tensor objects (n, m)
@@ -836,13 +838,15 @@ class BaseTest(unittest.TestCase):
                     clip_max=self.clip_max,
                     gamma=gamma,
                     theta=theta,
-                ).perturb(x=self.x.clone(), y=self.y.clone()),
+                ).perturb(
+                    x=self.x.clone(), y=torch.randint(num_classes, self.y.size())
+                ),
                 "AdverTorch",
             )
         if "art" in self.available:
             from art.attacks.evasion import SaliencyMapMethod
 
-            print("Producing DF adversarial examples with ART...")
+            print("Producing JSMA adversarial examples with ART...")
             art_adv = (
                 torch.from_numpy(
                     SaliencyMapMethod(
@@ -1493,52 +1497,6 @@ class SemanticTests(BaseTest):
         for fw, fw_perf in zip(fws, fws_perf):
             with self.subTest(Attack=f"{attack.name} v. {fw}"):
                 self.assertGreaterEqual(aml_perf + self.max_perf_degrad, fw_perf)
-
-        lp_map = {0: 0, 2: 1, float("inf"): 2}
-        color_map = {
-            "aml": "black",
-            "ART": "blue",
-            "CleverHans": "green",
-            "AdverTorch": "red",
-            "Foolbox": "yellow",
-            "Torchattacks": "brown",
-        }
-        symbol_map = {
-            "APGD-CE": ".",
-            "APGD-DLR": "o",
-            "BIM": "^",
-            "CW-L2": "v",
-            "DF": "s",
-            "FAB": "P",
-            "JSMA": "+",
-            "PGD": "D",
-        }
-        if not hasattr(self, "ax"):
-            self.fig, self.ax = plt.subplots()
-        for acc, norm, fw in zip(
-            list(acc_abs)[::-1],
-            [n[lp_map[attack.lp]] for n in norms[::-1]],
-            ["aml", *fws][::-1] if fws != "No Adversarial Examples" else ["aml"],
-        ):
-            xa = norm / max_b[lp_map[attack.lp]]
-            plt.scatter(
-                xa,
-                acc,
-                c=color_map[fw],
-                label=fw,
-                marker=symbol_map[attack.name],
-                alpha=0.5,
-            )
-            self.ax.annotate(f"{attack.name} ({fw})", (xa, acc))
-        if attack.name == "PGD":
-            handles, labels = plt.gca().get_legend_handles_labels()
-            by_label = dict(zip(labels, handles))
-            plt.legend(by_label.values(), by_label.keys())
-            plt.grid(True)
-            plt.xlabel("% of Lp Budget Consumed")
-            plt.ylabel("Model Accuracy")
-            plt.show(block=True)
-        self.state += 1
         return None
 
     def test_apgdce(self):
@@ -1638,30 +1596,6 @@ class SemanticTests(BaseTest):
         :rtype: NoneType
         """
         return self.semantic_test(*self.pgd())
-
-    def test_all(self):
-        """ """
-        self.semantic_test(*self.apgdce())
-        self.semantic_test(*self.apgddlr())
-        self.semantic_test(*self.bim())
-        self.semantic_test(*self.cwl2())
-        attack, fws = self.df()
-        self.semantic_test(
-            aml.attacks.df(**self.attack_params | {"alpha": 1, "epsilon": self.l2}), fws
-        )
-        attack, fws = self.fab()
-        self.semantic_test(
-            aml.attacks.fab(**self.attack_params | {"alpha": 1, "epsilon": self.l2}),
-            fws,
-        )
-        attack, fws = self.jsma()
-        self.semantic_test(
-            aml.attacks.jsma(**self.attack_params | {"alpha": 1, "epsilon": self.l0}),
-            fws,
-        )
-        self.semantic_test(*self.pgd())
-        breakpoint()
-        return None
 
 
 class SpecialTest(unittest.TestCase):
