@@ -87,7 +87,7 @@ class Surface:
         :param x: the batch of inputs to produce adversarial examples from
         :type x: torch Tensor object (n, m)
         :param y: the labels (or initial predictions) of x
-        :type y: PyTorch Tensor object (n,)
+        :type y: torch Tensor object (n,)
         :param p: the perturbation vectors used to craft adversarial examples
         :type p: torch Tensor object (n, m)
         :return: None
@@ -108,11 +108,8 @@ class Surface:
 
         # map out of tanh- and [0, 1]-space, perform forward & backward passes
         pj.requires_grad = True
-        good_p = self.cov(xj + pj) - self.cov(xj)
         logits = self.model(self.transform(xj + pj))
-        loss = self.loss(
-            logits, yj, good_p, y if self.saliency_map.jac_req else None, True
-        )
+        loss = self.loss(logits, yj, y if self.saliency_map.jac_req else None)
         (grad,) = torch.autograd.grad(loss, pj, torch.ones_like(loss))
         loss = loss.detach()
         pj.requires_grad = False
@@ -121,14 +118,7 @@ class Surface:
         opt_args = {"loss": loss.view(-1, cj), "y": y, "p": p}
         smap_grad = self.saliency_map(grad.view(-1, cj, grad.size(1)), **opt_args)
         dist = (c.sub(p).abs() for c in self.clip)
-        """
-        final_grad = (
-            self.norm(smap_grad, dist, self.loss.max_obj)
-            if self.norm is l0
-            else self.norm(smap_grad)
-        )
-        """
-        final_grad = smap_grad
+        final_grad = self.norm(smap_grad, dist=dist, max_obj=self.loss.max_obj)
 
         # call closure subroutines and attach grads to the perturbation vector
         [comp.closure(final_grad) for comp in self.closure]
@@ -144,7 +134,7 @@ class Surface:
         """
         return f"Surface({self.params})"
 
-    def initialize(self, ranges, clip, p):
+    def initialize(self, ranges, clip, x, p):
         """
         This method performs any preprocessing and initialization steps prior
         to crafting adversarial examples. Specifically, (1) the minimum and
@@ -154,15 +144,17 @@ class Surface:
         salient feature is at a clipping or threat-model bound; this can be
         alleviated by considering these bounds when building the saliency map,
         and (3) some attacks directly incorporate lp-norms as part of the loss
-        function (e.g., CW-L2) which requires access to the perturbation
-        vector. At this time, this initialization method attaches feature
-        ranges & clips to Surface objects and perturbation vectors to loss
-        functions (if required).
+        function (e.g., CW-L2) which requires access to the perturbation vector
+        and the original input, if using chagne of variables. At this time,
+        this initialization method attaches feature ranges & clips to Surface
+        objects and perturbation vectors to loss functions (if required).
 
         :param ranges: the range of allowable feature values
         :type ranges: tuple of torch
         :param clip: the range of allowable values for the perturbation vector
         :type clip: tuple of torch Tensor objects (n, m) Tensor objects (n, m)
+        :param x: the batch of inputs to produce adversarial examples from
+        :type x: torch Tensor object (n, m)
         :param p: the perturbation vectors used to craft adversarial examples
         :type p: torch Tensor object (n, m)
         :return: None
@@ -176,7 +168,7 @@ class Surface:
         self.clip = clip
 
         # subroutine (3): attach the perturbation vector to loss objects
-        self.loss.attach(p) if self.loss.del_req else None
+        self.loss.attach(p, x if self.loss.cov else None) if self.loss.del_req else None
         return None
 
     def min_max_scale(self, x):
@@ -220,10 +212,11 @@ class Surface:
         return x
 
 
-def linf(g):
+def linf(g, **kwargs):
     """
     This function projects gradients into the l∞-norm space. Specifically, this
-    is defined as taking the sign of the gradients.
+    is defined as taking the sign of the gradients. Keyword arguments are
+    accepted to provide a homogeneous interface across norm projections.
 
     :param g: the gradients of the perturbation vector
     :type g: torch Tensor object (n, m)
@@ -233,7 +226,7 @@ def linf(g):
     return g.sign_()
 
 
-def l0(g, dist, max_obj):
+def l0(g, dist, max_obj, **kwargs):
     """
     This function projects gradients into the l0-norm space. Specifically,
     features are scored by the product of their gradients and the distance
@@ -241,6 +234,8 @@ def l0(g, dist, max_obj):
     the sign of the gradient). Afterwards, the component with the largest
     magntiude is set to its sign (or top 1% of components, if there are more
     than 100 features) while all other component gradients are set to zero.
+    Keyword arguments are accepted to provide a homogeneous interface across
+    norm projections.
 
     :param g: the gradients of the perturbation vector
     :type g: torch Tensor object (n, m)
@@ -257,11 +252,12 @@ def l0(g, dist, max_obj):
     return g.scatter_(dim=1, index=bottom_k.indices, value=0).sign_()
 
 
-def l2(g, minimum=torch.tensor(1e-8)):
+def l2(g, minimum=torch.tensor(1e-8), **kwargs):
     """
     This function projects gradients into the l2-norm space. Specifically, this
     is defined as normalizing the gradients by thier l2-norm. The minimum
-    optional argument can be used to mitigate underflow.
+    optional argument can be used to mitigate underflow. Keyword arguments are
+    accepted to provide a homogeneous interface across norm projections.
 
     :param g: the gradients of the perturbation vector
     :type g: torch Tensor object (n, m)
