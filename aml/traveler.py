@@ -154,7 +154,9 @@ def tanh_space(x, into=False):
     return (
         x.mul_(2).sub_(1).mul_(1 - torch.finfo(x.dtype).eps).arctanh_()
         if into
-        else x.tanh().add(1).div(2)
+        else x.tanh()
+        .add(1 - torch.finfo(x.dtype).eps)
+        .div(2 * (1 - torch.finfo(x.dtype).eps))
     )
 
 
