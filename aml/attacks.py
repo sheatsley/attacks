@@ -16,22 +16,18 @@ import torch  # Tensors and Dynamic neural networks in Python with strong GPU ac
 # add perturbations visualizations in examples directory
 # l2 rr should be normlized by l2-norm and l0 norm should pick max l0 random features
 # for l0 clamp, need to check if cov makes 0s a very small number (check on prev_p == 0 would fail)
-# consider setting a min in tanh_p (like l2 norm) to mitigate underflow
 # consider showing separate batch and output accuracies (attacks like fab almost always show 50% acc)
 # probably seprate out essential from non-essential ops in progress
 # confirm progress method is correct for max-loss cov
 # consider if hparam "success" flag is needed to determine if hparams should be increased or decreased
-# consdier utils file for helper functions like tanh (anything that doens't reference self)
-# binary search should show improvement from last iteration
-# consider fab-based random-restart criterion ||x-x_org||p = min(best_lp, eps)/2
-# consider generalized record function so we dont have to repeat it in losses
-# should output buffers be inf or nan? (inf is dicey with losses to be minimized)
+# implement fab-based random-restart criterion ||x-x_org||p = min(best_lp, eps)/2
 # need to confirm maxs and mins logic works when inputs are outside [0,1] (ie unswnb15)
 # consider using pandas to store results instead of dictionary of lists
-# investigate l2 project with cwl2 (shouldn't affect performance with ET but it does).
 # consider if perturbations need to be mapped back out of [0, 1]-space on exit (they should be)
 # check if jsma "x_org proj" helps when using backwardsgd
 # consider adding a clipping subroutine to support naitive FAB
+# add fab equation into df docstring
+# update fab random restart when shrinking random start is complete
 
 
 class Adversary:
@@ -162,7 +158,7 @@ class Adversary:
         :rtype: torch Tensor object (n, m)
         """
 
-        # iterate over restarts & hyperparameters
+        # instantiate bookkeeping and iterate over restarts & hyperparameters
         x = x.clone()
         b = torch.full_like(x, torch.inf)
         for r in range(1, self.num_restarts + 1):
@@ -171,7 +167,7 @@ class Adversary:
                 f"({r / self.num_restarts:.1%})",
             ) if self.verbose else None
 
-            # instantiate bookkeeping and apply hyperparameter criterion
+            # apply hyperparameter criterion and adjust accordingly
             lb, ub = torch.tensor(self.hparam_bounds).repeat(y.numel(), 1).unbind(1)
             for h in range(1, self.hparam_steps + 1):
                 p = self.params["attack"].craft(x, y)
@@ -186,16 +182,20 @@ class Adversary:
                     lb[~success] = lb[~success].maximum(hparam[~success])
                     hparam.copy_(ub.add(lb).div(2))
                     print(
-                        f"Hyperparameter {self.hparam} updated "
-                        f"({success.sum().div(success.numel()):.2%} success)"
+                        f"Hyperparameter {self.hparam} updated.",
+                        f"{success.sum().div(success.numel()):.2%} success",
                     ) if self.verbose else None
 
                 # store the best adversarial perturbations seen thus far
                 update = self.best_criterion(x, p, b, y)
+                failed = b.isinf().any(1)
                 b[update] = p[update]
+                new = update.logical_and(failed).sum().div(update.numel())
+                improved = update.logical_and(~failed).sum().div(update.numel())
                 print(
                     f"Found {update.sum()} better adversarial examples!",
                     f"(+{update.sum().div(update.numel()):.2%})",
+                    f"(New {new:.2%}, Improved {improved:.2%}))",
                 ) if self.verbose else None
         return b.nan_to_num_(nan=None, posinf=0)
 
@@ -356,7 +356,7 @@ class Attack:
         self.et = early_termination
         self.lp = {surface.l0: 0, surface.l2: 2, surface.linf: torch.inf}[norm]
         self.project = getattr(self, norm.__name__)
-        self.verbosity = int(epochs * verbosity)
+        self.verbosity = max(int(epochs * verbosity), 1 if verbosity else 0)
         self.clip = torch.tensor(
             (-torch.inf, torch.inf) if change_of_variables else (0, 1)
         ).unbind()
@@ -584,7 +584,7 @@ class Attack:
         :rtype: NoneType
         """
         p_real = traveler.tanh_space_p(x, p) if self.change_of_variables else p
-        norm = p_real.norm(2, 1, True)
+        norm = p_real.norm(2, 1, keepdim=True)
         p.copy_(p.where(norm <= self.epsilon, p_real.div(norm).mul(self.epsilon)))
         if self.change_of_variables:
             p.copy_(p.where(norm <= self.epsilon, traveler.tanh_space_p(x, p, True)))
