@@ -19,13 +19,11 @@ import pathlib  # Object-oriented filesystem paths
 import pickle  # Python object serialization
 import unittest  # Unit testing framework
 import torch  # Tensors and Dynamic neural networks in Python with strong GPU acceleration
-import matplotlib.pyplot as plt
 
 # TODO
 # get all functional tests passing
 # get all semantic tests passing
 # implement special tests
-# expose alpha override parameter so we can set overshoot in other frameworks (and for jsma)
 # find max spot for cleverhans cwl2
 # find optimal hparam scheme for cw
 # none of the adv produced by other frameworks obey norms (except max-loss attacks)...
@@ -61,6 +59,9 @@ class BaseTest(unittest.TestCase):
 
     :func:`setUpClass`: initializes the setup for all tests cases
     :func:`build_art_classifier`: instantiates an art pytorch classifier
+    :func:`l0`: clamps inputs onto l0-based threat models
+    :func:`l2`: clamps inputs onto l0-based threat models
+    :func:`linf`: clamps inputs onto l0-based threat models
     :func:`reset_seeds`: resets seeds for RNGs
     :func:`apgdce`: craft adversarial examples with APGD-CE
     :func:`apgddlr`: craft adversarial examples with APGD-DLR
@@ -191,13 +192,19 @@ class BaseTest(unittest.TestCase):
             "model": cls.model,
             "verbosity": 0.1 if verbose else 1,
         }
+
+        # df & fab alpha must be >= 1 and cw must have at least 300 epochs
         cls.attacks = {
             "apgdce": aml.attacks.apgdce(**cls.attack_params | {"epsilon": cls.linf}),
             "apgddlr": aml.attacks.apgddlr(**cls.attack_params | {"epsilon": cls.linf}),
             "bim": aml.attacks.bim(**cls.attack_params | {"epsilon": cls.linf}),
-            "cwl2": aml.attacks.cwl2(**cls.attack_params | {"epsilon": cls.l2}),
-            "df": aml.attacks.df(**cls.attack_params | {"epsilon": cls.l2}),
-            "fab": aml.attacks.fab(**cls.attack_params | {"epsilon": cls.l2}),
+            "cwl2": aml.attacks.cwl2(
+                **cls.attack_params | {"epochs": max(1000, epochs), "epsilon": cls.l2}
+            ),
+            "df": aml.attacks.df(**cls.attack_params | {"alpha": 1, "epsilon": cls.l2}),
+            "fab": aml.attacks.fab(
+                **cls.attack_params | {"alpha": 1, "epsilon": cls.l2}
+            ),
             "jsma": aml.attacks.jsma(**cls.attack_params | {"epsilon": cls.l0}),
             "pgd": aml.attacks.pgd(**cls.attack_params | {"epsilon": cls.linf}),
         }
@@ -266,6 +273,79 @@ class BaseTest(unittest.TestCase):
         return PyTorchModel(
             model=cls.attack_params["model"].model,
             bounds=(cls.clip_min.max().item(), cls.clip_max.min().item()),
+
+    def l0(self, x, p):
+        """
+        This method projects perturbation vectors so that they are complaint
+        with the specified l0 threat model (i.e., epsilon). Specifically, this
+        method sets any newly perturbed component of perturbation vectors to
+        zero if such a perturbation exceeds the specified l0-threat model. To
+        know which components are "newly" perturbed, we save a reference to the
+        perturbation vector computed at the iteration prior.
+
+        :param x: adversarial examples in tanh-space (unused)
+        :type x: torch Tensor object (n, m)
+        :param p: perturbation vectors
+        :type p: torch Tensor object (n, m)
+        :return: None
+        :rtype: NoneType
+        """
+        i = p.norm(0, 1) > self.epsilon
+        p[i] = self.prev_p[i].where(self.prev_p[i] == 0, p[i]) if i.any() else 0.0
+        self.prev_p = p.detach().clone()
+        return None
+
+    def l2(self, x, p):
+        """
+        This method projects perturbation vectors so that they are complaint
+        with the specified l2 threat model (i.e., epsilon). Specifically,
+        perturbation vectors whose l2-norms exceed the threat model are
+        projected back onto the l2-ball. This is done by scaling such
+        perturbation vectors by their l2-norms times epsilon. Notably, when
+        using change of variables, we map scaled perturbation vectors into the
+        tanh space and set the vectors to the computed result. In other words,
+        after p is scaled according to epsilon, it is then set to:
+
+                    p = ArcTanh((x + p) * 2 - 1) - (Tanh(x) + 1) / 2
+
+        :param x: adversarial examples in tanh-space
+        :type x: torch Tensor object (n, m)
+        :param p: perturbation vectors
+        :type p: torch Tensor object (n, m)
+        :return: None
+        :rtype: NoneType
+        """
+        p_real = traveler.tanh_space_p(x, p) if self.change_of_variables else p
+        norm = p_real.norm(2, 1, keepdim=True)
+        p.copy_(p.where(norm <= self.epsilon, p_real.div(norm).mul(self.epsilon)))
+        if self.change_of_variables:
+            p.copy_(p.where(norm <= self.epsilon, traveler.tanh_space_p(x, p, True)))
+        return None
+
+    def linf(self, x, p):
+        """
+        This method projects perturbation vectors so that they are complaint
+        with the specified l∞ threat model (i.e., epsilon). Specifically,
+        perturbation vectors whose l∞-norms exceed the threat model are
+        projected back onto the l∞-ball. This is done by clipping perturbation
+        vectors by ±epsilon. Notably, when using change of variables, we map
+        clipped perturbation vectors into the tanh space and set the vectors to
+        the computed result. In other words, after p is clipped according to
+        ±epsilon, it is then set to:
+
+                    p = ArcTanh((p - x) * 2 - 1) - (Tanh(x) + 1) / 2
+
+        :param x: adversarial examples in tanh-space
+        :type x: torch Tensor object (n, m)
+        :param p: perturbation vectors
+        :type p: torch Tensor object (n, m)
+        :return: None
+        :rtype: NoneType
+        """
+        p_real = traveler.tanh_space_p(x, p) if self.change_of_variables else p
+        p_real.clamp_(-self.epsilon, self.epsilon)
+        p.copy_(traveler.tanh_space_p(x, p, True)) if self.change_of_variables else None
+        return None
         )
 
     @classmethod
@@ -566,11 +646,11 @@ class BaseTest(unittest.TestCase):
             self.attacks["cwl2"].surface.loss.k,
             self.attack_params["alpha"],
             self.attacks["cwl2"].hparam_steps,
-            self.attack_params["epochs"],
+            self.attacks["cwl2"].epochs,
             self.attacks["cwl2"].surface.loss.c.item(),
         )
         at_adv = art_adv = ch_adv = fb_adv = ta_adv = None
-        if "advertorch" in self.available:
+        if "advertorch" not in self.available:
             from advertorch.attacks import CarliniWagnerL2Attack
 
             print("Producing CW-L2 adversarial examples with AdverTorch...")
@@ -590,7 +670,7 @@ class BaseTest(unittest.TestCase):
                 ).perturb(x=self.x.clone(), y=self.y.clone()),
                 "AdverTorch",
             )
-        if "art" in self.available:
+        if "art" not in self.available:
             from art.attacks.evasion import CarliniL2Method
 
             print("Producing CW-L2 adversarial examples with ART...")
@@ -612,7 +692,7 @@ class BaseTest(unittest.TestCase):
                 ),
                 "ART",
             )
-        if "cleverhans" in self.available:
+        if "cleverhans" not in self.available:
             from cleverhans.torch.attacks.carlini_wagner_l2 import carlini_wagner_l2
 
             print("Producing CW-L2 adversarial examples with CleverHans...")
@@ -650,7 +730,7 @@ class BaseTest(unittest.TestCase):
                 epsilons=self.l2,
             )
             fb_adv = (fb_adv, "Foolbox")
-        if "torchattacks" in self.available:
+        if "torchattacks" not in self.available:
             from torchattacks import CW
 
             print("Producing CW-L2 adversarial examples with Torchattacks...")
@@ -674,8 +754,8 @@ class BaseTest(unittest.TestCase):
         (https://arxiv.org/pdf/1611.01236.pdf). The supported frameworks for DF
         include ART, Foolbox, and Torchattacks. Notably, the DF implementation
         in ART, Foolbox, and Torchattacks have an overshoot parameter which we
-        set to 0 (not to be confused with the epsilon parameter used in aml,
-        which governs the norm-ball size).
+        set to aml DF's learning rate alpha minus one (not to be confused with
+        the epsilon parameter used in aml, which governs the norm-ball size).
 
         :return: DeepFool adversarial examples
         :rtype: tuple of torch Tensor objects (n, m)
@@ -683,7 +763,7 @@ class BaseTest(unittest.TestCase):
         model, max_iter, epsilon, nb_grads, epsilons = (
             self.attack_params["model"],
             self.attack_params["epochs"],
-            0,
+            self.attacks["df"].alpha - 1,
             self.attack_params["model"].params["classes"],
             self.l2,
         )
@@ -746,12 +826,13 @@ class BaseTest(unittest.TestCase):
         :return: FAB adversarial examples
         :rtype: tuple of torch Tensor objects (n, m)
         """
-        (model, n_restarts, n_iter, eps, alpha, beta, n_classes) = (
+        (model, n_restarts, n_iter, eps, alpha, eta, beta, n_classes) = (
             self.attack_params["model"],
             self.attacks["fab"].params["num_restarts"],
             self.attack_params["epochs"],
             self.l2,
             self.attacks["fab"].traveler.optimizer.param_groups[0]["alpha_max"],
+            self.attacks["fab"].alpha,
             self.attacks["fab"].traveler.optimizer.param_groups[0]["beta"],
             self.attack_params["model"].params["classes"],
         )
@@ -768,7 +849,7 @@ class BaseTest(unittest.TestCase):
                     n_iter=n_iter,
                     eps=eps,
                     alpha_max=alpha,
-                    eta=1,
+                    eta=eta,
                     beta=beta,
                     verbose=self.verbose,
                 ).perturb(x=self.x.clone(), y=self.y.clone()),
@@ -787,7 +868,7 @@ class BaseTest(unittest.TestCase):
                     steps=self.attack_params["epochs"],
                     n_restarts=n_restarts,
                     alpha_max=alpha,
-                    eta=1,
+                    eta=eta,
                     beta=beta,
                     verbose=self.verbose,
                     seed=self.seed,
@@ -1096,32 +1177,22 @@ class FunctionalTests(BaseTest):
     def test_df(self):
         """
         This method performs a functional test for DF (DeepFool)
-        (https://arxiv.org/pdf/1511.04599.pdf). Notably, when the learning rate
-        alpha is less than one, a substantial amount of additional iterations
-        are necessary for meaningful performance, so we override alpha to be 1
-        so that tests pass.
+        (https://arxiv.org/pdf/1511.04599.pdf).
 
         :return: None
         :rtype: NoneType
         """
-        return self.functional_test(
-            aml.attacks.df(**self.attack_params | {"alpha": 1, "epsilon": self.l2})
-        )
+        return self.functional_test(self.attacks["df"])
 
     def test_fab(self):
         """
         This method performs a functional test for FAB (Fast Adaptive Boundary)
-        (https://arxiv.org/pdf/1907.02044.pdf). Notably, when the learning rate
-        alpha is less than one, a substantial amount of additional iterations
-        are necessary for meaningful performance, so we override alpha to be 1
-        so that tests pass.
+        (https://arxiv.org/pdf/1907.02044.pdf).
 
         :return: None
         :rtype: NoneType
         """
-        return self.functional_test(
-            aml.attacks.fab(**self.attack_params | {"alpha": 1, "epsilon": self.l2})
-        )
+        return self.functional_test(self.attacks["fab"])
 
     def test_jsma(self):
         """
@@ -1158,8 +1229,8 @@ class IdentityTests(BaseTest):
     tolerance, respectively. The values atol and rtol take depends on the
     datatype of the underlying tensors, as described in
     https://pytorch.org/docs/stable/testing.html. Notably, aml implementations
-    deviate in many ways from other libraries, and thus many of these tests
-    should fail.
+    deviate from other libraries in many ways, and thus a only a limited set of
+    attacks are expected to pass.
 
     The following frameworks are supported:
         AdverTorch (https://github.com/BorealisAI/advertorch)
@@ -1280,17 +1351,12 @@ class IdentityTests(BaseTest):
     def test_df(self):
         """
         This method performs an identity test for DF (DeepFool)
-        (https://arxiv.org/pdf/1611.01236.pdf). Notably, since alpha is not a
-        parameter for other implementations of deepfool attacks, we override
-        the value of alpha to be 1 so the tests are passsed.
-
+        (https://arxiv.org/pdf/1611.01236.pdf).
         :return: None
         :rtype: NoneType
         """
         attack, fws = self.df()
-        return self.identity_test(
-            aml.attacks.df(**self.attack_params | {"alpha": 1, "epsilon": self.l2}), fws
-        )
+        return self.identity_test(*self.df())
 
     def test_pgd(self):
         """
@@ -1485,33 +1551,22 @@ class SemanticTests(BaseTest):
     def test_df(self):
         """
         This method performs a semantic test for DF (DeepFool)
-        (https://arxiv.org/pdf/1611.01236.pdf). Notably, since alpha is not a
-        parameter for other implementations of deepfool attacks, we override
-        the value of alpha to be 1 so the tests are passsed.
+        (https://arxiv.org/pdf/1611.01236.pdf).
 
         :return: None
         :rtype: NoneType
         """
-        attack, fws = self.df()
-        return self.semantic_test(
-            aml.attacks.df(**self.attack_params | {"alpha": 1, "epsilon": self.l2}), fws
-        )
+        return self.semantic_test(*self.df())
 
     def test_fab(self):
         """
         This method performs a semantic test for FAB (Fast Adaptive Boundary)
-        (https://arxiv.org/pdf/1907.02044.pdf). Notably, since eta is assumed
-        to be >1, we override the value of alpha to be 1 so that meaningful
-        performance can be measured.
+        (https://arxiv.org/pdf/1907.02044.pdf).
 
         :return: None
         :rtype: NoneType
         """
-        attack, fws = self.fab()
-        return self.semantic_test(
-            aml.attacks.fab(**self.attack_params | {"alpha": 1, "epsilon": self.l2}),
-            fws,
-        )
+        return self.semantic_test(*self.fab())
 
     def test_jsma(self):
         """
