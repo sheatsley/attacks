@@ -151,12 +151,11 @@ def tanh_space(x, into=False):
     :return: x mapped into (or back out of) tanh-space
     :rtype: torch Tensor object (n, m)
     """
+    eps = 1 - torch.finfo(x.dtype).eps
     return (
-        x.mul_(2).sub_(1).mul_(1 - torch.finfo(x.dtype).eps).arctanh_()
+        x.mul_(2).sub_(1).mul_(eps).arctanh_()
         if into
-        else x.tanh()
-        .add(1 - torch.finfo(x.dtype).eps)
-        .div(2 * (1 - torch.finfo(x.dtype).eps))
+        else x.tanh().add(eps).div(2 * eps)
     )
 
 
@@ -182,8 +181,9 @@ def tanh_space_p(x, p, into=False):
     :return: perturbation vector mapped out of tanh-space
     :rtype: torch Tensor object (n, m)
     """
+    eps = 1 - torch.finfo(x.dtype).eps
     return (
-        tanh_space(x).add(p).mul(2).sub(1).arctanh().sub(x)
+        tanh_space(x).add_(p).mul_(2).sub_(1).mul_(eps).arctanh_().sub_(x)
         if into
-        else tanh_space(x.add(p)).sub(tanh_space(x))
+        else tanh_space(x.add(p)).sub_(tanh_space(x))
     )
