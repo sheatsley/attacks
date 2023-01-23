@@ -17,17 +17,16 @@ import torch  # Tensors and Dynamic neural networks in Python with strong GPU ac
 # l2 rr should be normlized by l2-norm and l0 norm should pick max l0 random features
 # for l0 clamp, need to check if cov makes 0s a very small number (check on prev_p == 0 would fail)
 # consider showing separate batch and output accuracies (attacks like fab almost always show 50% acc)
-# probably seprate out essential from non-essential ops in progress
 # confirm progress method is correct for max-loss cov
 # consider if hparam "success" flag is needed to determine if hparams should be increased or decreased
 # implement fab-based random-restart criterion ||x-x_org||p = min(best_lp, eps)/2
 # need to confirm maxs and mins logic works when inputs are outside [0,1] (ie unswnb15)
-# consider using pandas to store results instead of dictionary of lists
 # consider if perturbations need to be mapped back out of [0, 1]-space on exit (they should be)
 # check if jsma "x_org proj" helps when using backwardsgd
 # consider adding a clipping subroutine to support naitive FAB
 # add fab equation into df docstring
 # update fab random restart when shrinking random start is complete
+# consider only projecting onto threat model at the end
 
 
 class Adversary:
@@ -274,9 +273,9 @@ class Attack:
     :func:`__init__`: instantiates Attack objects
     :func:`__repr__`: returns the attack name (based on the components)
     :func:`craft`: returns a set of adversarial examples
-    :func:`linf`: clamps inputs to domain and linf threat model
     :func:`l0`: clamps inputs to domain and l0 threat model
     :func:`l2`: clamps inputs to domain and l2 threat model
+    :func:`linf`: clamps inputs to domain and linf threat model
     :func:`progress`: record various statistics on crafting progress
     :func:`tanh_p`: extracts perturbation from input when using CoV
     """
@@ -517,31 +516,6 @@ class Attack:
             self.results[m] = [sum(s) / d for s in zip(*self.results[m])]
         return o.nan_to_num_(nan=None, posinf=0)
 
-    def linf(self, x, p):
-        """
-        This method projects perturbation vectors so that they are complaint
-        with the specified l∞ threat model (i.e., epsilon). Specifically,
-        perturbation vectors whose l∞-norms exceed the threat model are
-        projected back onto the l∞-ball. This is done by clipping perturbation
-        vectors by ±epsilon. Notably, when using change of variables, we map
-        clipped perturbation vectors into the tanh space and set the vectors to
-        the computed result. In other words, after p is clipped according to
-        ±epsilon, it is then set to:
-
-                    p = ArcTanh((p - x) * 2 - 1) - (Tanh(x) + 1) / 2
-
-        :param x: adversarial examples in tanh-space
-        :type x: torch Tensor object (n, m)
-        :param p: perturbation vectors
-        :type p: torch Tensor object (n, m)
-        :return: None
-        :rtype: NoneType
-        """
-        p_real = traveler.tanh_space_p(x, p) if self.change_of_variables else p
-        p_real.clamp_(-self.epsilon, self.epsilon)
-        p.copy_(traveler.tanh_space_p(x, p, True)) if self.change_of_variables else None
-        return None
-
     def l0(self, x, p):
         """
         This method projects perturbation vectors so that they are complaint
@@ -588,6 +562,31 @@ class Attack:
         p.copy_(p.where(norm <= self.epsilon, p_real.div(norm).mul(self.epsilon)))
         if self.change_of_variables:
             p.copy_(p.where(norm <= self.epsilon, traveler.tanh_space_p(x, p, True)))
+        return None
+
+    def linf(self, x, p):
+        """
+        This method projects perturbation vectors so that they are complaint
+        with the specified l∞ threat model (i.e., epsilon). Specifically,
+        perturbation vectors whose l∞-norms exceed the threat model are
+        projected back onto the l∞-ball. This is done by clipping perturbation
+        vectors by ±epsilon. Notably, when using change of variables, we map
+        clipped perturbation vectors into the tanh space and set the vectors to
+        the computed result. In other words, after p is clipped according to
+        ±epsilon, it is then set to:
+
+                    p = ArcTanh((p - x) * 2 - 1) - (Tanh(x) + 1) / 2
+
+        :param x: adversarial examples in tanh-space
+        :type x: torch Tensor object (n, m)
+        :param p: perturbation vectors
+        :type p: torch Tensor object (n, m)
+        :return: None
+        :rtype: NoneType
+        """
+        p_real = traveler.tanh_space_p(x, p) if self.change_of_variables else p
+        p_real.clamp_(-self.epsilon, self.epsilon)
+        p.copy_(traveler.tanh_space_p(x, p, True)) if self.change_of_variables else None
         return None
 
     def progress(self, batch, epoch, xb, yb, pb, ob):
