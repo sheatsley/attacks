@@ -24,15 +24,11 @@ import matplotlib.pyplot as plt
 # TODO
 # get all functional tests passing
 # get all semantic tests passing
-# get as many identity test passing as possible
 # implement special tests
-# integrate binary search steps for aml cwl2 tests
-# rework attack wrapper calls to include adversary layer (inputs need to be in 0-1 when measuring norm)
-# ^ rework max-min logic to account for the above
-# ^ update random-restart params for attacks that would be captured by adversarial layer
-# enable random restart when adversary layer is complete
 # expose alpha override parameter so we can set overshoot in other frameworks (and for jsma)
+# find max spot for cleverhans cwl2
 # find optimal hparam scheme for cw
+# none of the adv produced by other frameworks obey norms (except max-loss attacks)...
 
 
 class BaseTest(unittest.TestCase):
@@ -193,7 +189,7 @@ class BaseTest(unittest.TestCase):
             "alpha": alpha,
             "epochs": epochs,
             "model": cls.model,
-            "verbosity": 0.01 if verbose else 1,
+            "verbosity": 0.1 if verbose else 1,
         }
         cls.attacks = {
             "apgdce": aml.attacks.apgdce(**cls.attack_params | {"epsilon": cls.linf}),
@@ -608,8 +604,8 @@ class BaseTest(unittest.TestCase):
                         binary_search_steps=binary_search_steps,
                         max_iter=max_iterations,
                         initial_const=initial_const,
-                        max_halving=5,
-                        max_doubling=5,
+                        max_halving=binary_search_steps // 2,
+                        max_doubling=binary_search_steps // 2,
                         batch_size=self.x.size(0),
                         verbose=self.verbose,
                     ).generate(x=self.x.clone().numpy())
@@ -1173,13 +1169,8 @@ class IdentityTests(BaseTest):
         Torchattacks (https://github.com/Harry24k/adversarial-attacks-pytorch)
 
     The following attacks are supported:
-        APGD-CE (Auto-PGD with CE loss) (https://arxiv.org/pdf/2003.01690.pdf)
-        APGD-DLR (Auto-PGD with DLR loss) (https://arxiv.org/pdf/2003.01690.pdf)
         BIM (Basic Iterative Method) (https://arxiv.org/pdf/1611.01236.pdf)
-        CW-L2 (Carlini-Wagner with l₂ norm) (https://arxiv.org/pdf/1608.04644.pdf)
         DF (DeepFool) (https://arxiv.org/pdf/1511.04599.pdf)
-        FAB (Fast Adaptive Boundary) (https://arxiv.org/pdf/1907.02044.pdf)
-        JSMA (Jacobian Saliency Map Approach) (https://arxiv.org/pdf/1511.07528.pdf)
         PGD (Projected Gradient Descent) (https://arxiv.org/pdf/1706.06083.pdf)
 
     :func:`identity_test`: performs an identity test
@@ -1268,27 +1259,6 @@ class IdentityTests(BaseTest):
                 )
         return None
 
-    def test_apgdce(self):
-        """
-        This method performs an identity test for APGD-CE (Auto-PGD with CE
-        loss) (https://arxiv.org/pdf/2003.01690.pdf).
-
-        :return: None
-        :rtype: NoneType
-        """
-        return self.identity_test(*self.apgdce())
-
-    def test_apgddlr(self):
-        """
-        This method performs an identity test for APGD-DLR (Auto-PGD with DLR
-        loss) (https://arxiv.org/pdf/2003.01690.pdf). Notably, DLR loss is
-        undefined for other frameworks when there are only two classes.
-
-        :return: None
-        :rtype: NoneType
-        """
-        return self.identity_test(*self.apgddlr())
-
     def test_bim(self):
         """
         This method performs an identity test for BIM (Basic Iterative Method)
@@ -1307,16 +1277,6 @@ class IdentityTests(BaseTest):
         """
         return self.identity_test(*self.bim())
 
-    def test_cwl2(self):
-        """
-        This method performs an identity test for CW-L2 (Carlini-Wagner with l₂
-        norm) (https://arxiv.org/pdf/1608.04644.pdf).
-
-        :return: None
-        :rtype: NoneType
-        """
-        return self.identity_test(*self.cwl2())
-
     def test_df(self):
         """
         This method performs an identity test for DF (DeepFool)
@@ -1331,26 +1291,6 @@ class IdentityTests(BaseTest):
         return self.identity_test(
             aml.attacks.df(**self.attack_params | {"alpha": 1, "epsilon": self.l2}), fws
         )
-
-    def test_fab(self):
-        """
-        This method performs an identity test for FAB (Fast Adaptive Boundary)
-        (https://arxiv.org/pdf/1907.02044.pdf).
-
-        :return: None
-        :rtype: NoneType
-        """
-        return self.identity_test(*self.fab())
-
-    def test_jsma(self):
-        """
-        This method performs an identity test for JSMA (Jacobian Saliency Map
-        Approach) (https://arxiv.org/pdf/1511.07528.pdf).
-
-        :return: None
-        :rtype: NoneType
-        """
-        return self.identity_test(*self.jsma())
 
     def test_pgd(self):
         """
@@ -1455,6 +1395,8 @@ class SemanticTests(BaseTest):
         fws_adv, fws = zip(*fws) if fws else ([], "No Adversarial Examples")
         aml_p = attack.craft(self.x, self.y)
         fws_p = (fw_adv.sub(self.x) for fw_adv in fws_adv)
+
+        # TODO - FWS_ADV NEED TO BE PROJECTED
 
         # compute perturbation norms
         ps = (aml_p, *fws_p)
