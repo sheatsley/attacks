@@ -118,6 +118,7 @@ class Surface:
         opt_args = {"loss": loss.view(-1, cj), "y": y, "p": p}
         smap_grad = self.saliency_map(grad.view(-1, cj, grad.size(1)), **opt_args)
         dist = (c.sub(p).abs() for c in self.clip)
+        final_grad = smap_grad
         final_grad = self.norm(smap_grad, dist=dist, max_obj=self.loss.max_obj)
 
         # call closure subroutines and attach grads to the perturbation vector
@@ -191,7 +192,7 @@ class Surface:
         """
         return x.mul_(self.maxs.sub(self.mins)).add_(self.mins)
 
-    def transform(self, x):
+    def transform(self, x, skip_cov=False):
         """
         This method applies a series of transformations before an input is
         passed into the model. At this item, this supports two transformations:
@@ -207,7 +208,7 @@ class Surface:
         :return: current batch of inputs, de-transformed
         :rtype: torch Tensor object (n, m)
         """
-        x = self.cov(x)
+        x = x if skip_cov else self.cov(x)
         self.min_max_scale(x.detach())
         return x
 
