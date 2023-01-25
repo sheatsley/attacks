@@ -114,9 +114,7 @@ class Traveler:
         """
 
         # subroutine (1): random start
-        if self.state == True:
-            self.random_start(p, b=b, norm=norm, epsilon=eps)
-            pass
+        self.random_start(p, b=b, norm=norm, epsilon=eps)
 
         # subroutine (2): change of variables
         if self.change_of_variables:
@@ -163,7 +161,6 @@ def max_start(p, norm, epsilon, **kwargs):
     """
 
     # sample from uniform, select up to l0, and permute indices
-    breakpoint()
     if norm == 0:
         p.uniform_(-1, 1)
         shuffle = torch.randint(p.size(1), p.size()).argsort()
@@ -198,7 +195,6 @@ def shrinking_start(p, b, norm, epsilon, **kwargs):
     :return: randomly perturbed vectors
     :rtype: torch Tensor object (n, m)
     """
-    breakpoint()
     b_norm = b.norm(norm, 1, keepdim=True)
     epsilon = b_norm.where(b_norm < epsilon, torch.tensor(epsilon)).div(2)
     return max_start(p, norm, epsilon.int() if norm == 0 else epsilon)
