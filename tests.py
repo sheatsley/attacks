@@ -24,7 +24,6 @@ import torch  # Tensors and Dynamic neural networks in Python with strong GPU ac
 # get all functional tests passing
 # get all semantic tests passing
 # implement special tests
-# find optimal hparam scheme for cw
 
 
 class BaseTest(unittest.TestCase):
@@ -184,7 +183,7 @@ class BaseTest(unittest.TestCase):
         cls.linf = norm
         cls.clip_min, cls.clip_max = clip
         cls.verbose = verbose
-        cls.attack_params = {
+        cls.atk_params = {
             "alpha": alpha,
             "epochs": epochs,
             "model": cls.model,
@@ -193,18 +192,16 @@ class BaseTest(unittest.TestCase):
 
         # df & fab alpha must be >= 1 and cw must have at least 300 epochs
         cls.attacks = {
-            "apgdce": aml.attacks.apgdce(**cls.attack_params | {"epsilon": cls.linf}),
-            "apgddlr": aml.attacks.apgddlr(**cls.attack_params | {"epsilon": cls.linf}),
-            "bim": aml.attacks.bim(**cls.attack_params | {"epsilon": cls.linf}),
+            "apgdce": aml.attacks.apgdce(**cls.atk_params | {"epsilon": cls.linf}),
+            "apgddlr": aml.attacks.apgddlr(**cls.atk_params | {"epsilon": cls.linf}),
+            "bim": aml.attacks.bim(**cls.atk_params | {"epsilon": cls.linf}),
             "cwl2": aml.attacks.cwl2(
-                **cls.attack_params | {"epochs": max(1000, epochs), "epsilon": cls.l2}
+                **cls.atk_params | {"epochs": max(1000, epochs), "epsilon": cls.l2}
             ),
-            "df": aml.attacks.df(**cls.attack_params | {"alpha": 1, "epsilon": cls.l2}),
-            "fab": aml.attacks.fab(
-                **cls.attack_params | {"alpha": 1, "epsilon": cls.l2}
-            ),
-            "jsma": aml.attacks.jsma(**cls.attack_params | {"epsilon": cls.l0}),
-            "pgd": aml.attacks.pgd(**cls.attack_params | {"epsilon": cls.linf}),
+            "df": aml.attacks.df(**cls.atk_params | {"alpha": 1, "epsilon": cls.l2}),
+            "fab": aml.attacks.fab(**cls.atk_params | {"alpha": 1, "epsilon": cls.l2}),
+            "jsma": aml.attacks.jsma(**cls.atk_params | {"epsilon": cls.l0}),
+            "pgd": aml.attacks.pgd(**cls.atk_params | {"epsilon": cls.linf}),
         }
 
         # determine available frameworks and set both art & foolbox classifiers
@@ -229,8 +226,8 @@ class BaseTest(unittest.TestCase):
             f"Train Acc: {cls.model.stats['train_acc'][-1]:.1%}",
             f"Craftset Acc: {cls.clean_acc:.1%}",
             f"Attack Clipping Values: {clip_info}",
-            f"Attack Strength α: {cls.attack_params['alpha']}",
-            f"Attack Epochs: {cls.attack_params['epochs']}",
+            f"Attack Strength α: {cls.atk_params['alpha']}",
+            f"Attack Epochs: {cls.atk_params['epochs']}",
             f"Max Norm Radii: l0: {cls.l0}, l2: {cls.l2:.3}, l∞: {cls.linf}",
             f"Available Frameworks: {frameworks}",
             sep="\n",
@@ -249,12 +246,12 @@ class BaseTest(unittest.TestCase):
         from art.estimators.classification import PyTorchClassifier
 
         return PyTorchClassifier(
-            model=cls.attack_params["model"].model,
+            model=cls.atk_params["model"].model,
             clip_values=(cls.clip_min.max().item(), cls.clip_max.min().item()),
-            loss=cls.attack_params["model"].loss,
-            optimizer=cls.attack_params["model"].optimizer,
+            loss=cls.atk_params["model"].loss,
+            optimizer=cls.atk_params["model"].optimizer,
             input_shape=(cls.x.size(1),),
-            nb_classes=cls.attack_params["model"].params["classes"],
+            nb_classes=cls.atk_params["model"].params["classes"],
         )
 
     @classmethod
@@ -269,7 +266,7 @@ class BaseTest(unittest.TestCase):
         from foolbox import PyTorchModel
 
         return PyTorchModel(
-            model=cls.attack_params["model"].model,
+            model=cls.atk_params["model"].model,
             bounds=(cls.clip_min.max().item(), cls.clip_max.min().item()),
         )
 
@@ -342,10 +339,10 @@ class BaseTest(unittest.TestCase):
         :rtype: tuple of torch Tensor objects (n, m)
         """
         (model, eps, eps_step, max_iter, nb_random_init, rho) = (
-            self.attack_params["model"],
+            self.atk_params["model"],
             self.linf,
-            self.attack_params["alpha"],
-            self.attack_params["epochs"],
+            self.atk_params["alpha"],
+            self.atk_params["epochs"],
             self.attacks["apgdce"].params["num_restarts"],
             self.attacks["apgdce"].traveler.optimizer.param_groups[0]["rho"],
         )
@@ -374,15 +371,13 @@ class BaseTest(unittest.TestCase):
             )
         if (
             "torchattacks" in self.available
-            and "shape" in self.attack_params["model"].params
+            and "shape" in self.atk_params["model"].params
         ):
             from torchattacks import APGD
 
             print("Producing APGD-CE adversarial examples with Torchattacks...")
             self.reset_seeds()
-            ta_x = self.x.clone().unflatten(
-                1, self.attack_params["model"].params["shape"]
-            )
+            ta_x = self.x.clone().unflatten(1, self.atk_params["model"].params["shape"])
             ta_adv = (
                 APGD(
                     model=model,
@@ -416,10 +411,10 @@ class BaseTest(unittest.TestCase):
         :rtype: tuple of torch Tensor objects (n, m)
         """
         (model, eps, eps_step, max_iter, nb_random_init, rho) = (
-            self.attack_params["model"],
+            self.atk_params["model"],
             self.linf,
-            self.attack_params["alpha"],
-            self.attack_params["epochs"],
+            self.atk_params["alpha"],
+            self.atk_params["epochs"],
             self.attacks["apgddlr"].params["num_restarts"],
             self.attacks["apgddlr"].traveler.optimizer.param_groups[0]["rho"],
         )
@@ -449,15 +444,13 @@ class BaseTest(unittest.TestCase):
         if (
             "torchattacks" in self.available
             and self.art_classifier.nb_classes > 2
-            and "shape" in self.attack_params["model"].params
+            and "shape" in self.atk_params["model"].params
         ):
             from torchattacks import APGD
 
             print("Producing APGD-DLR adversarial examples with Torchattacks...")
             self.reset_seeds()
-            ta_x = self.x.clone().unflatten(
-                1, self.attack_params["model"].params["shape"]
-            )
+            ta_x = self.x.clone().unflatten(1, self.atk_params["model"].params["shape"])
             ta_adv = (
                 APGD(
                     model=model,
@@ -491,10 +484,10 @@ class BaseTest(unittest.TestCase):
         :rtype: tuple of torch Tensor objects (n, m)
         """
         (model, eps, nb_iter, eps_iter) = (
-            self.attack_params["model"],
+            self.atk_params["model"],
             self.linf,
-            self.attack_params["epochs"],
-            self.attack_params["alpha"],
+            self.atk_params["epochs"],
+            self.atk_params["alpha"],
         )
         at_adv = art_adv = ch_adv = fb_adv = ta_adv = None
         if "advertorch" in self.available:
@@ -609,10 +602,10 @@ class BaseTest(unittest.TestCase):
             max_iterations,
             initial_const,
         ) = (
-            self.attack_params["model"],
-            self.attack_params["model"].params["classes"],
+            self.atk_params["model"],
+            self.atk_params["model"].params["classes"],
             self.attacks["cwl2"].surface.loss.k,
-            self.attack_params["alpha"],
+            self.atk_params["alpha"],
             self.attacks["cwl2"].hparam_steps,
             self.attacks["cwl2"].epochs,
             self.attacks["cwl2"].surface.loss.c.item(),
@@ -729,10 +722,10 @@ class BaseTest(unittest.TestCase):
         :rtype: tuple of torch Tensor objects (n, m)
         """
         model, max_iter, epsilon, nb_grads, epsilons = (
-            self.attack_params["model"],
-            self.attack_params["epochs"],
+            self.atk_params["model"],
+            self.atk_params["epochs"],
             self.attacks["df"].params["α"] - 1,
-            self.attack_params["model"].params["classes"],
+            self.atk_params["model"].params["classes"],
             self.l2,
         )
         art_adv = fb_adv = ta_adv = None
@@ -795,14 +788,14 @@ class BaseTest(unittest.TestCase):
         :rtype: tuple of torch Tensor objects (n, m)
         """
         (model, n_restarts, n_iter, eps, alpha, eta, beta, n_classes) = (
-            self.attack_params["model"],
+            self.atk_params["model"],
             self.attacks["fab"].params["num_restarts"],
-            self.attack_params["epochs"],
+            self.atk_params["epochs"],
             self.l2,
             self.attacks["fab"].traveler.optimizer.param_groups[0]["alpha_max"],
             self.attacks["fab"].params["attack"].params["α"],
             self.attacks["fab"].traveler.optimizer.param_groups[0]["beta"],
-            self.attack_params["model"].params["classes"],
+            self.atk_params["model"].params["classes"],
         )
         at_adv = ta_adv = None
         if "advertorch" in self.available:
@@ -833,7 +826,7 @@ class BaseTest(unittest.TestCase):
                     model=model,
                     norm="L2",
                     eps=eps,
-                    steps=self.attack_params["epochs"],
+                    steps=self.atk_params["epochs"],
                     n_restarts=n_restarts,
                     alpha_max=alpha,
                     eta=eta,
@@ -865,8 +858,8 @@ class BaseTest(unittest.TestCase):
         :rtype: tuple of torch Tensor objects (n, m)
         """
         (model, num_classes, gamma, theta) = (
-            self.attack_params["model"],
-            self.attack_params["model"].params["classes"],
+            self.atk_params["model"],
+            self.atk_params["model"].params["classes"],
             self.linf,
             1,
         )
@@ -919,10 +912,10 @@ class BaseTest(unittest.TestCase):
         :rtype: tuple of torch Tensor objects (n, m)
         """
         (model, eps, nb_iter, eps_iter) = (
-            self.attack_params["model"],
+            self.atk_params["model"],
             self.linf,
-            self.attack_params["epochs"],
-            self.attack_params["alpha"],
+            self.atk_params["epochs"],
+            self.atk_params["alpha"],
         )
         at_adv = art_adv = ch_adv = fb_adv = ta_adv = None
         if "advertorch" in self.available:
@@ -1548,7 +1541,7 @@ class SemanticTests(BaseTest):
         """
         attack, fws = self.jsma()
         return self.semantic_test(
-            aml.attacks.jsma(**self.attack_params | {"alpha": 1, "epsilon": self.l0}),
+            aml.attacks.jsma(**self.atk_params | {"alpha": 1, "epsilon": self.l0}),
             fws,
         )
 
