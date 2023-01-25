@@ -26,7 +26,13 @@ class DeepFoolSaliency:
     difference serves as the perturbation direction. Moreover, since this
     saliency map requires the gradient differences to be normalized, it
     implements a closure subroutine to multiply the resultant normalized
-    gradients by the scaled logit differences. Finally, this class defines the
+    gradients by the scaled logit differences.
+
+    Additionally, this class computes the projection above with respect to the
+    initial input, as shown in the FAB attack
+    (https://arxiv.org/pdf/1907.02044.pdf). Specifically, this entails adding
+    the sum of the product of the gradient differences and the current
+    perturbation to the logit differences.Finally, this class defines the
     jac_req attribute to signal Surface objects that this class expects a full
     model Jacobian.
 
