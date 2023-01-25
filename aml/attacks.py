@@ -10,17 +10,18 @@ import aml.saliency as saliency  # Gradient manipulation heuristics to achieve a
 import aml.surface as surface  # PyTorch-based models for crafting adversarial examples
 import aml.traveler as traveler  # PyTorch-based perturbation schemes for crafting adversarial examples
 import itertools  # Functions creating iterators for efficietn looping
+import pandas  # Python Data Analysis Library
 import torch  # Tensors and Dynamic neural networks in Python with strong GPU acceleration
 
 # TODO
-# add perturbations visualizations in examples directory
 # for l0 clamp, need to check if cov makes 0s a very small number (check on prev_p == 0 would fail)
-# consider showing separate batch and output accuracies (attacks like fab almost always show 50% acc)
 # confirm progress method is correct for max-loss cov
 # need to confirm maxs and mins logic works when inputs are outside [0,1] (ie unswnb15)
 # consider if perturbations need to be mapped back out of [0, 1]-space on exit (they should be)
 # check if jsma "x_org proj" helps when using backwardsgd
-# confirm shrinking start efficacy
+# consider refactor where all tensors are at least (n, 1)
+# investigate if we can remove all clamping during crafting loop
+# convert records to pandas dataframe
 
 
 class Adversary:
@@ -153,43 +154,51 @@ class Adversary:
 
         # instantiate bookkeeping and iterate over restarts & hyperparameters
         x = x.clone()
-        b = torch.full_like(x, torch.inf)
+        b = torch.where(
+            self.surface.model(x).argmax(1).ne(y).unsqueeze(1),
+            torch.zeros_like(x),
+            torch.full_like(x, torch.inf),
+        )
         for r in range(1, self.num_restarts + 1):
-            print(
+            self.verbose and print(
                 f"On restart iteration {r} of {self.num_restarts}...",
                 f"({r / self.num_restarts:.1%})",
-            ) if self.verbose else None
+            )
 
             # apply hyperparameter criterion and adjust accordingly
             lb, ub = torch.tensor(self.hparam_bounds).repeat(y.numel(), 1).unbind(1)
             for h in range(1, self.hparam_steps + 1):
-                p = self.params["attack"].craft(x, y)
+                p = self.params["attack"].craft(x, y, b)
                 if self.hparam is not None:
-                    print(
+                    self.verbose and print(
                         f"On hyperparameter iteration {h} of {self.hparam_steps}...",
                         f"({h / self.hparam_steps:.1%})",
-                    ) if self.verbose else None
+                    )
                     success = self.hparam_criterion(x, p, y)
                     hparam = self.params["attack"].hparams[self.hparam]
                     ub[success] = ub[success].minimum(hparam[success])
                     lb[~success] = lb[~success].maximum(hparam[~success])
                     hparam.copy_(ub.add(lb).div(2))
-                    print(
+                    self.verbose and print(
                         f"Hyperparameter {self.hparam} updated.",
                         f"{success.sum().div(success.numel()):.2%} success",
-                    ) if self.verbose else None
+                    )
 
                 # store the best adversarial perturbations seen thus far
                 update = self.best_criterion(x, p, b, y)
+                b = b.where(
+                    self.model(x + b).argmax(1).ne(y).unsqueeze(1),
+                    torch.tensor(torch.inf),
+                )
                 failed = b.isinf().any(1)
                 b[update] = p[update]
                 new = update.logical_and(failed).sum().div(update.numel())
                 improved = update.logical_and(~failed).sum().div(update.numel())
-                print(
+                self.verbose and print(
                     f"Found {update.sum()} better adversarial examples!",
                     f"(+{update.sum().div(update.numel()):.2%})",
                     f"(New {new:.2%}, Improved {improved:.2%}))",
-                ) if self.verbose else None
+                )
         return b.nan_to_num_(nan=None, posinf=0)
 
     def max_loss(self, x, p, b, y):
@@ -440,13 +449,15 @@ class Attack:
         """
         return f"{self.name}({', '.join(f'{p}={v}' for p, v in self.params.items())})"
 
-    def craft(self, x, y):
+    def craft(self, x, y, o=None):
         """
         This method crafts adversarial examples, as defined by the attack
         parameters and the instantiated Travler and Surface attribute objects.
         Specifically, it normalizes inputs to be within [0, 1] (as some
         techniques assume this range, e.g., change of variables), creates a
-        copy of x, creates the desired batch size, performs traveler
+        copy of x, creates the desired batch size, optionally initializes the
+        output buffer to a set of optimal perturbations (useful for attacks
+        that perform shrinking start), performs surface and traveler
         initilizations (i.e., change of variables and random start), and
         iterates an epoch number of times.
 
@@ -454,6 +465,8 @@ class Attack:
         :type x: torch Tensor object (n, m)
         :param y: the labels (or initial predictions) of x
         :type y: torch Tensor object (n,)
+        :param o: initialize output buffer to saved adversarial examples
+        :type o: torch Tensor object (n, m)
         :return: set of perturbation vectors
         :rtype: torch Tensor object (n, m)
         """
@@ -466,27 +479,27 @@ class Attack:
         maxs = maxs.where(maxs > 1, torch.tensor(1))
         x.sub_(mins).div_(maxs.sub(mins))
         batch_size = x.size(0) if self.batch_size == -1 else self.batch_size
-        num_batches = -(-x.size(0) // batch_size)
+        bmax = -(-x.size(0) // batch_size)
         self.results = {m: [] for m in ("acc", "aloss", "mloss", "l0", "l2", "linf")}
         verbose = self.verbosity and self.verbosity != self.epochs
-        o = torch.where(
-            self.surface.model(x).argmax(1).ne(y).unsqueeze(1),
-            torch.zeros_like(x),
-            torch.full_like(x, torch.inf),
+        o = (
+            torch.where(
+                self.surface.model(x).argmax(1).ne(y).unsqueeze(1),
+                torch.zeros_like(x),
+                torch.full_like(x, torch.inf),
+            )
+            if o is None
+            else o
         )
 
         # configure batches, attach objects, & apply perturbation inits
-        print(
-            f"Crafting {x.size(0)} adversarial examples with {self}..."
-        ) if verbose else None
+        verbose and print(f"Crafting {x.size(0)} adversarial examples with {self}...")
         xi, yi, pi, oi = (t.split(batch_size) for t in (x, y, p, o))
         for b, (xb, yb, pb, ob) in enumerate(zip(xi, yi, pi, oi)):
-            print(
-                f"On batch {b + 1} of {num_batches} {(b + 1) / num_batches:.1%}..."
-            ) if verbose else None
+            verbose and print(f"On batch {b + 1} of {bmax} {(b + 1) / bmax:.1%}...")
             cnb, cxb = (c.sub(xb) for c in self.clip)
             self.surface.initialize((mins, maxs), (cnb, cxb), xb, pb)
-            self.traveler.initialize(xb, pb, pb, self.lp, self.epsilon)
+            self.traveler.initialize(xb, pb, ob, self.lp, self.epsilon)
             pb.clamp_(cnb, cxb)
             None if self.cov else self.project(xb, pb)
             self.progress(b, 0, xb, yb, pb, ob)
@@ -498,9 +511,9 @@ class Attack:
                 pb.clamp_(cnb, cxb)
                 None if self.cov else self.project(xb, pb)
                 progress = self.progress(b, e, xb, yb, pb, ob)
-                None if not self.verbosity else print(
+                print(
                     f"Epoch {e:{len(str(self.epochs))}} / {self.epochs} {progress}"
-                ) if not e % self.verbosity and e not in {0, self.epochs} else print(
+                ) if verbose and not e % self.verbosity else print(
                     f"Epoch {e}... ({e / self.epochs:.1%})", end="\r"
                 )
 
@@ -590,13 +603,12 @@ class Attack:
     def progress(self, batch, epoch, xb, yb, pb, ob):
         """
         This method records various statistics on the adversarial example
-        crafting process, updates final perturbations when using early
-        termination, and returns a formatted string concisely representing the
-        state of the attack. Specifically, this computes the following at each
-        epoch (and the change since the last epoch): (1) model accuracy, (2)
-        model loss, (3) attack loss, (3) l0, l2, and l∞ norms. Moreover, it
-        also updates the early termination state of the current batch since
-        model accuracy is computed.
+        crafting process, updates final perturbations, and returns a formatted
+        string concisely representing the state of the attack. Specifically,
+        this computes the following at each epoch (and the change since the
+        last epoch): (1) model accuracy, (2) model loss, (3) attack loss, (3)
+        l0, l2, and l∞ norms. Moreover, it also updates the early termination
+        state of the current batch since model accuracy is computed.
 
         :param batch: current batch number
         :type batch: int
@@ -624,7 +636,6 @@ class Attack:
 
         # extract perturbation vectors from tanh-space if using cov
         pb = traveler.tanh_space_p(xb, self.project(xb, pb.clone())) if self.cov else pb
-        # pb = traveler.tanh_space_p(xb, pb) if self.cov else pb
         nb = [pb.norm(n, 1).sum().item() for n in (0, 2, torch.inf)]
 
         # update early termination and output buffer
@@ -634,7 +645,7 @@ class Attack:
             update = (~correct).logical_and_(smaller)
         else:
             ologits = self.surface.model(
-                self.suirface.transform(ox + ob.nan_to_num(posinf=0), True)
+                self.surface.transform(ox + ob.nan_to_num(posinf=0), True)
             )
             oloss = self.surface.loss(ologits, yb)
             update = oloss.lt(ali) if self.surface.loss.max_obj else oloss.gt(ali)
@@ -653,8 +664,8 @@ class Attack:
 
         # build str representation and return
         return (
-            f"O Acc: {oacc / yb.numel():.1%} "
-            f"B Acc: {acc / yb.numel():.1%} "
+            f"Output Acc: {oacc / yb.numel():.1%} "
+            f"Batch Acc: {acc / yb.numel():.1%} "
             f"({(acc - sum(self.results['acc'][batch][-2:-1])) / yb.numel():+.1%}) "
             f"Model Loss: {mloss:.2f} "
             f"({mloss - sum(self.results['mloss'][batch][-2:-1]):+6.2f}) "
@@ -957,7 +968,7 @@ def cwl2(
         num_restarts=0,
         verbose=True if verbosity not in {0, 1} else False,
         alpha=alpha,
-        change_of_variables=False,
+        change_of_variables=True,
         early_termination=True,
         epochs=epochs,
         epsilon=epsilon,
@@ -1010,7 +1021,7 @@ def df(alpha=None, epochs=None, epsilon=None, model=None, verbosity=1):
     )
 
 
-def fab(alpha=None, epochs=None, epsilon=None, model=None, num_restarts=1, verbosity=1):
+def fab(alpha=None, epochs=None, epsilon=None, model=None, num_restarts=2, verbosity=1):
     """
     This function serves as an alias to build Fast Adaptive Boundary (FAB), as
     shown in (https://arxiv.org/pdf/1907.02044.pdf) Specifically, FAB: does not
