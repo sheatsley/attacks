@@ -24,9 +24,7 @@ import torch  # Tensors and Dynamic neural networks in Python with strong GPU ac
 # get all functional tests passing
 # get all semantic tests passing
 # implement special tests
-# find max spot for cleverhans cwl2
 # find optimal hparam scheme for cw
-# none of the adv produced by other frameworks obey norms (except max-loss attacks)...
 
 
 class BaseTest(unittest.TestCase):
@@ -59,9 +57,9 @@ class BaseTest(unittest.TestCase):
 
     :func:`setUpClass`: initializes the setup for all tests cases
     :func:`build_art_classifier`: instantiates an art pytorch classifier
-    :func:`l0`: clamps inputs onto l0-based threat models
-    :func:`l2`: clamps inputs onto l0-based threat models
-    :func:`linf`: clamps inputs onto l0-based threat models
+    :func:`l0_clamp`: clamps inputs onto l0-based threat models
+    :func:`l2_clamp`: clamps inputs onto l0-based threat models
+    :func:`linf_clamp`: clamps inputs onto l0-based threat models
     :func:`reset_seeds`: resets seeds for RNGs
     :func:`apgdce`: craft adversarial examples with APGD-CE
     :func:`apgddlr`: craft adversarial examples with APGD-DLR
@@ -273,80 +271,52 @@ class BaseTest(unittest.TestCase):
         return PyTorchModel(
             model=cls.attack_params["model"].model,
             bounds=(cls.clip_min.max().item(), cls.clip_max.min().item()),
-
-    def l0(self, x, p):
-        """
-        This method projects perturbation vectors so that they are complaint
-        with the specified l0 threat model (i.e., epsilon). Specifically, this
-        method sets any newly perturbed component of perturbation vectors to
-        zero if such a perturbation exceeds the specified l0-threat model. To
-        know which components are "newly" perturbed, we save a reference to the
-        perturbation vector computed at the iteration prior.
-
-        :param x: adversarial examples in tanh-space (unused)
-        :type x: torch Tensor object (n, m)
-        :param p: perturbation vectors
-        :type p: torch Tensor object (n, m)
-        :return: None
-        :rtype: NoneType
-        """
-        i = p.norm(0, 1) > self.epsilon
-        p[i] = self.prev_p[i].where(self.prev_p[i] == 0, p[i]) if i.any() else 0.0
-        self.prev_p = p.detach().clone()
-        return None
-
-    def l2(self, x, p):
-        """
-        This method projects perturbation vectors so that they are complaint
-        with the specified l2 threat model (i.e., epsilon). Specifically,
-        perturbation vectors whose l2-norms exceed the threat model are
-        projected back onto the l2-ball. This is done by scaling such
-        perturbation vectors by their l2-norms times epsilon. Notably, when
-        using change of variables, we map scaled perturbation vectors into the
-        tanh space and set the vectors to the computed result. In other words,
-        after p is scaled according to epsilon, it is then set to:
-
-                    p = ArcTanh((x + p) * 2 - 1) - (Tanh(x) + 1) / 2
-
-        :param x: adversarial examples in tanh-space
-        :type x: torch Tensor object (n, m)
-        :param p: perturbation vectors
-        :type p: torch Tensor object (n, m)
-        :return: None
-        :rtype: NoneType
-        """
-        p_real = traveler.tanh_space_p(x, p) if self.change_of_variables else p
-        norm = p_real.norm(2, 1, keepdim=True)
-        p.copy_(p.where(norm <= self.epsilon, p_real.div(norm).mul(self.epsilon)))
-        if self.change_of_variables:
-            p.copy_(p.where(norm <= self.epsilon, traveler.tanh_space_p(x, p, True)))
-        return None
-
-    def linf(self, x, p):
-        """
-        This method projects perturbation vectors so that they are complaint
-        with the specified l∞ threat model (i.e., epsilon). Specifically,
-        perturbation vectors whose l∞-norms exceed the threat model are
-        projected back onto the l∞-ball. This is done by clipping perturbation
-        vectors by ±epsilon. Notably, when using change of variables, we map
-        clipped perturbation vectors into the tanh space and set the vectors to
-        the computed result. In other words, after p is clipped according to
-        ±epsilon, it is then set to:
-
-                    p = ArcTanh((p - x) * 2 - 1) - (Tanh(x) + 1) / 2
-
-        :param x: adversarial examples in tanh-space
-        :type x: torch Tensor object (n, m)
-        :param p: perturbation vectors
-        :type p: torch Tensor object (n, m)
-        :return: None
-        :rtype: NoneType
-        """
-        p_real = traveler.tanh_space_p(x, p) if self.change_of_variables else p
-        p_real.clamp_(-self.epsilon, self.epsilon)
-        p.copy_(traveler.tanh_space_p(x, p, True)) if self.change_of_variables else None
-        return None
         )
+
+    @classmethod
+    def l0_clamp(cls, p):
+        """
+        This method projects perturbation vectors so that they are complaint
+        with the specified l0 threat model. Specifically, the components of
+        perturbations that exceed the threat model are set to zero, sorted by
+        increasing magnitude.
+
+        :param p: perturbation vectors
+        :type p: torch Tensor object (n, m)
+        :return: threat-model-compliant perturbation vectors
+        :rtype: torch Tensor object (n, m)
+        """
+        return p.scatter(1, p.abs().sort(1).indices[:, : p.size(1) - cls.l0], 0)
+
+    @classmethod
+    def l2_clamp(cls, p):
+        """
+        This method projects perturbation vectors so that they are complaint
+        with the specified l2 threat model Specifically,
+        perturbation vectors whose l2-norms exceed the threat model are
+        normalized by their l2-norms times epsilon.
+
+        :param p: perturbation vectors
+        :type p: torch Tensor object (n, m)
+        :return: threat-model-compliant perturbation vectors
+        :rtype: torch Tensor object (n, m)
+        """
+        return p.renorm(2, 0, cls.l2)
+
+    @classmethod
+    def linf_clamp(cls, p):
+        """
+        This method projects perturbation vectors so that they are complaint
+        with the specified l∞ threat model  Specifically,
+        perturbation vectors whose l∞-norms exceed the threat model are
+        are clipped to ±epsilon.
+
+        :param p: perturbation vectors
+        :type p: torch Tensor object (n, m)
+        :return: threat-model-compliant perturbation vectors
+        :rtype: torch Tensor object (n, m)
+        """
+        return p.renorm(torch.inf, 0, cls.inf)
 
     @classmethod
     def reset_seeds(cls):
@@ -625,9 +595,7 @@ class BaseTest(unittest.TestCase):
         with l₂ norm) (https://arxiv.org/pdf/1608.04644.pdf). The supported
         frameworks for CW-L2 include AdverTorch, ART, CleverHans, Foolbox, and
         Torchattacks. Notably, Torchattacks does not explicitly support binary
-        searching on c (it expects searching manually). Moreover, the
-        CleverHans implementation suffers from a segmentation fault when the
-        number of backwards passes is roughly greater than 60.
+        searching on c (it expects searching manually).
 
         :return: CW-L2 adversarial examples
         :rtype: tuple of torch Tensor objects (n, m)
@@ -650,7 +618,7 @@ class BaseTest(unittest.TestCase):
             self.attacks["cwl2"].surface.loss.c.item(),
         )
         at_adv = art_adv = ch_adv = fb_adv = ta_adv = None
-        if "advertorch" not in self.available:
+        if "advertorch" in self.available:
             from advertorch.attacks import CarliniWagnerL2Attack
 
             print("Producing CW-L2 adversarial examples with AdverTorch...")
@@ -670,7 +638,7 @@ class BaseTest(unittest.TestCase):
                 ).perturb(x=self.x.clone(), y=self.y.clone()),
                 "AdverTorch",
             )
-        if "art" not in self.available:
+        if "art" in self.available:
             from art.attacks.evasion import CarliniL2Method
 
             print("Producing CW-L2 adversarial examples with ART...")
@@ -692,7 +660,7 @@ class BaseTest(unittest.TestCase):
                 ),
                 "ART",
             )
-        if "cleverhans" not in self.available:
+        if "cleverhans" in self.available:
             from cleverhans.torch.attacks.carlini_wagner_l2 import carlini_wagner_l2
 
             print("Producing CW-L2 adversarial examples with CleverHans...")
@@ -707,8 +675,8 @@ class BaseTest(unittest.TestCase):
                     clip_min=self.clip_min.max().item(),
                     clip_max=self.clip_max.min().item(),
                     initial_const=initial_const,
-                    binary_search_steps=min(binary_search_steps, 1),
-                    max_iterations=min(max_iterations, 30),
+                    binary_search_steps=binary_search_steps,
+                    max_iterations=max_iterations,
                 ).detach(),
                 "CleverHans",
             )
@@ -730,7 +698,7 @@ class BaseTest(unittest.TestCase):
                 epsilons=self.l2,
             )
             fb_adv = (fb_adv, "Foolbox")
-        if "torchattacks" not in self.available:
+        if "torchattacks" in self.available:
             from torchattacks import CW
 
             print("Producing CW-L2 adversarial examples with Torchattacks...")
@@ -763,7 +731,7 @@ class BaseTest(unittest.TestCase):
         model, max_iter, epsilon, nb_grads, epsilons = (
             self.attack_params["model"],
             self.attack_params["epochs"],
-            self.attacks["df"].alpha - 1,
+            self.attacks["df"].params["α"] - 1,
             self.attack_params["model"].params["classes"],
             self.l2,
         )
@@ -832,7 +800,7 @@ class BaseTest(unittest.TestCase):
             self.attack_params["epochs"],
             self.l2,
             self.attacks["fab"].traveler.optimizer.param_groups[0]["alpha_max"],
-            self.attacks["fab"].alpha,
+            self.attacks["fab"].params["attack"].params["α"],
             self.attacks["fab"].traveler.optimizer.param_groups[0]["beta"],
             self.attack_params["model"].params["classes"],
         )
@@ -1462,15 +1430,15 @@ class SemanticTests(BaseTest):
         aml_p = attack.craft(self.x, self.y)
         fws_p = (fw_adv.sub(self.x) for fw_adv in fws_adv)
 
-        # TODO - FWS_ADV NEED TO BE PROJECTED
-
-        # compute perturbation norms
-        ps = (aml_p, *fws_p)
+        # project to threat model and compute norms
+        clamp = {0: self.l0_clamp, 2: self.l2_clamp, torch.inf: self.linf_clamp}
+        ps = tuple(clamp[attack.lp](p) for p in (aml_p, *fws_p))
+        # ps = (aml_p, *fws_p)
         lp = (0, 2, torch.inf)
         norms = tuple([p.norm(d, 1).mean().item() for d in lp] for p in ps)
 
         # compute model accuracy decrease
-        advs = (self.x + aml_p, *fws_adv)
+        advs = (self.x + p for p in ps)
         acc_abs = tuple(self.model.accuracy(adv, self.y).item() for adv in advs)
         acc_dec = tuple(a / self.clean_acc for a in acc_abs)
 
