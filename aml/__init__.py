@@ -6,6 +6,5 @@ Tue Nov 29 2022
 import aml.attacks  # pytorch-based aml attacks
 import aml.loss  # pytorch-based loss functions popular in aml
 import aml.optimizer  # pytorch-based optimizers popular in aml
-import aml.saliency  # pytorch-based saliency maps popular in aml
 import aml.surface  # gradient computation for aml attacks in pytorch
 import aml.traveler  # perturbation computations for aml attacks in pytorch
