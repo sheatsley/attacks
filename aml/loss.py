@@ -12,7 +12,7 @@ class CELoss(torch.nn.CrossEntropyLoss):
     This class is identical to the CrossEntropyLoss class in PyTorch, with the
     exception that: (1) the most recently computed loss is stored in curr_loss
     (to faciliate optimizers who require it) and (2) two additional attributes
-    are added: del_req (set to False) and max_obj (set as True). We add these
+    are added: p_req (set to False) and max_obj (set as True). We add these
     attributes to state that optimizers should maximize this function and that
     a reference to perturbation vectors is not needed by this class.
 
@@ -20,10 +20,10 @@ class CELoss(torch.nn.CrossEntropyLoss):
     :func:`forward`: returns the loss for a given batch of inputs
     """
 
-    del_req = False
+    p_req = False
     max_obj = True
 
-    def __init__(self, change_of_variables, **kwargs):
+    def __init__(self, **kwargs):
         """
         This method instantiates a CELoss object. It accepts keyword arguments
         for the PyTorch parent class described in:
@@ -87,10 +87,10 @@ class CWLoss(torch.nn.Module):
     :func:`forward`: returns the loss for a given batch of inputs
     """
 
-    del_req = True
+    p_req = True
     max_obj = False
 
-    def __init__(self, change_of_variables, c=1.0, k=0.0):
+    def __init__(self, c=1.0, k=0.0):
         """
         This method instantiates a CWLoss object. It accepts three arguments:
         (1) norm, the lp-norm to use, (2) c, which emphasizes optimizing
@@ -100,8 +100,6 @@ class CWLoss(torch.nn.Module):
         and the next largest logit). Finally, a reference to c is saved and
         exposed as an optimizable hyperparameter.
 
-        :param change_of_variables: whether to map inputs out of tanh-space
-        :type change_of_variables: bool
         :param norm: lp-space to project gradients into
         :type norm: supported ord arguments in torch linalg.vector_norm function
         :param c: importance of misclassification over imperceptability
@@ -112,33 +110,29 @@ class CWLoss(torch.nn.Module):
         :rtype: CWLoss object
         """
         super().__init__()
-        self.cov = change_of_variables
         self.c = torch.tensor((c,))
         self.k = k
-        self.hparams = {"c": self.c}
+        self.hparam = ("c", self.c)
         return None
 
-    def attach(self, delta, x=None):
+    def attach(self, p):
         """
         This method serves as a setter for attaching a reference to the
         perturbation vector to CWLoss objects as an attribute, as the attribute
-        is subsequently referenced in the forward pass, as well as a reference
-        to the initial input (which is needed to compute the norm of the
-        perturbation vector when using change of variables). If necessary, c is
+        is subsequently referenced in the forward pass. If necessary, c is
         expanded in-place by the number of inputs to faciliate hyperparameter
         optimization, as done in https://arxiv.org/pdf/1608.04644.pdf.
 
-        :param delta: perturbation vector
-        :type delta: torch Tensor object (n, m)
+        :param p: perturbation vector
+        :type p: torch Tensor object (n, m)
         :param x: initial inputs
         :type x: torch Tensor object (n, m)
         :return: None
         :rtype: NoneType
         """
-        self.delta = delta
-        self.x = x
-        if self.c.size(0) < delta.size(0):
-            self.c.resize_(delta.size(0)).fill_(self.c[0])
+        self.p = p
+        if self.c.size(0) < p.size(0):
+            self.c.resize_(p.size(0)).fill_(self.c[0])
         return None
 
     def forward(self, logits, y, yt=None):
@@ -161,9 +155,8 @@ class CWLoss(torch.nn.Module):
         :rtype: torch Tensor object (n,)
         """
 
-        # compute lp-norm of perturbation vector (map out of tanh-space)
-        delta = traveler.tanh_space_p(self.x, self.delta) if self.cov else self.delta
-        lp = delta.norm(dim=1).repeat_interleave(logits.size(0) // self.delta.size(0))
+        # compute l2-norm of perturbation vector
+        lp = self.p.norm(dim=1).repeat_interleave(logits.size(0) // self.p.size(0))
 
         # compute logit differences
         y_hot = torch.nn.functional.one_hot(y).bool()
@@ -199,7 +192,7 @@ class DLRLoss(torch.nn.Module):
     :func:`forward`: returns the loss for a given batch of inputs
     """
 
-    del_req = False
+    p_req = False
     max_obj = True
 
     def __init__(self, **kwargs):
@@ -265,7 +258,7 @@ class IdentityLoss(torch.nn.Module):
     :func:`forward`: returns the yth logit component for a batch of imputs
     """
 
-    del_req = False
+    p_req = False
     max_obj = False
 
     def __init__(self, **kwargs):
