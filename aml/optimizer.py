@@ -118,11 +118,10 @@ class BackwardSGD(torch.optim.Optimizer):
         """
         for group in self.param_groups:
             for p in group["params"]:
-                grad = p.grad.data if group["maximize"] else -p.grad.data
-                p_grad = (
-                    group["saliency_map"].org_proj
+                grad, p_grad = (
+                    (p.grad.data, group["saliency_map"].org_proj)
                     if group["maximize"]
-                    else -group["saliency_map"].org_proj
+                    else (-p.grad.data, -group["saliency_map"].org_proj)
                 )
 
                 # perform a backwardstep step for misclassified inputs
