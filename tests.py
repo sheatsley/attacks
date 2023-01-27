@@ -23,7 +23,8 @@ import torch  # Tensors and Dynamic neural networks in Python with strong GPU ac
 # TODO
 # get all functional tests passing
 # get all semantic tests passing
-# implement special tests
+# consider special tests for component performance
+# add cli
 
 
 class BaseTest(unittest.TestCase):
@@ -400,7 +401,7 @@ class BaseTest(unittest.TestCase):
                     verbose=self.verbose,
                 )(inputs=ta_x, labels=self.y,).flatten(1),
                 "Torchattacks",
-            )
+            ).detach()
         self.reset_seeds()
         return self.attacks["apgdce"], tuple(
             fw for fw in (art_adv, ta_adv) if fw is not None
@@ -473,7 +474,7 @@ class BaseTest(unittest.TestCase):
                     verbose=self.verbose,
                 )(inputs=ta_x, labels=self.y).flatten(1),
                 "Torchattacks",
-            )
+            ).detach()
         self.reset_seeds()
         return self.attacks["apgddlr"], tuple(
             fw for fw in (art_adv, ta_adv) if fw is not None
@@ -547,13 +548,13 @@ class BaseTest(unittest.TestCase):
                     eps_iter=eps_iter,
                     nb_iter=nb_iter,
                     norm=float("inf"),
-                    clip_min=min(self.clip_min.max().item(), 0),
-                    clip_max=max(self.clip_max.min().item(), 1),
+                    clip_min=self.clip_min.max(),
+                    clip_max=self.clip_max.min(),
                     y=self.y,
                     targeted=False,
                     rand_init=False,
                     rand_minmax=0,
-                    sanity_checks=True,
+                    sanity_checks=False,
                 ).detach(),
                 "CleverHans",
             )
@@ -673,8 +674,8 @@ class BaseTest(unittest.TestCase):
                     y=self.y,
                     lr=learning_rate,
                     confidence=confidence,
-                    clip_min=min(self.clip_min.max().item(), 0),
-                    clip_max=max(self.clip_max.min().item(), 1),
+                    clip_min=self.clip_min.max(),
+                    clip_max=self.clip_max.min(),
                     initial_const=initial_const,
                     binary_search_steps=binary_search_steps,
                     max_iterations=max_iterations,
@@ -984,13 +985,13 @@ class BaseTest(unittest.TestCase):
                     eps_iter=eps_iter,
                     nb_iter=nb_iter,
                     norm=float("inf"),
-                    clip_min=min(self.clip_min.max().item(), 0),
-                    clip_max=max(self.clip_max.min().item(), 1),
+                    clip_min=self.clip_min.max(),
+                    clip_max=self.clip_max.min(),
                     y=self.y,
                     targeted=False,
                     rand_init=True,
                     rand_minmax=eps,
-                    sanity_checks=True,
+                    sanity_checks=False,
                 ).detach(),
                 "CleverHans",
             )
@@ -1629,11 +1630,13 @@ class SpecialTests(BaseTest):
             )
         )
         for i, attack in enumerate(attacks, start=1):
-            print(
-                f"Testing {attack.name:<10}... {i}/{len(attacks)} ({i / len(attacks):.1%})",
-                end="\r",
-            )
-            attack.craft(self.x[:samples], self.y[:samples])
+            with self.subTest(Attack=f"{i}: {attack.name}"):
+                print(
+                    f"Testing {attack.name:<10}..."
+                    f"{i}/{len(attacks)} ({i / len(attacks):.1%})",
+                    end="\r",
+                )
+                attack.craft(self.x[:samples], self.y[:samples])
         return None
 
     def test_known_components(self, samples=10, epochs=3):
@@ -1669,9 +1672,11 @@ class SpecialTests(BaseTest):
             aml.attacks.pgd(alpha, epochs, self.linf, model, verbosity=0),
         )
         for i, attack in enumerate(attacks, start=1):
-            print(
-                f"Testing {attack.name:<10}... {i}/{len(attacks)} ({i / len(attacks):.1%})",
-                end="\r",
-            )
-            attack.craft(self.x[:samples], self.y[:samples])
+            with self.subTest(Attack=f"{i}: {attack.name}"):
+                print(
+                    f"Testing {attack.name:<10}..."
+                    f"{i}/{len(attacks)} ({i / len(attacks):.1%})",
+                    end="\r",
+                )
+                attack.craft(self.x[:samples], self.y[:samples])
         return None
