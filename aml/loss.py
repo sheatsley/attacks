@@ -23,7 +23,7 @@ class CELoss(torch.nn.CrossEntropyLoss):
     p_req = False
     max_obj = True
 
-    def __init__(self, **kwargs):
+    def __init__(self, num_classes=None, **kwargs):
         """
         This method instantiates a CELoss object. It accepts keyword arguments
         for the PyTorch parent class described in:
@@ -32,6 +32,8 @@ class CELoss(torch.nn.CrossEntropyLoss):
         gradients to underflow when computing adversarial examples for large
         batch sizes.
 
+        :param num_classes: number of classes (not used)
+        :type num_classes: int
         :param kwargs: keyword arguments for torch.nn.CrossEntropyLoss
         :type kwargs: dict
         :return: Cross Entropy loss
@@ -90,7 +92,7 @@ class CWLoss(torch.nn.Module):
     p_req = True
     max_obj = False
 
-    def __init__(self, c=1.0, k=0.0):
+    def __init__(self, num_classes, c=1.0, k=0.0):
         """
         This method instantiates a CWLoss object. It accepts three arguments:
         (1) norm, the lp-norm to use, (2) c, which emphasizes optimizing
@@ -100,6 +102,8 @@ class CWLoss(torch.nn.Module):
         and the next largest logit). Finally, a reference to c is saved and
         exposed as an optimizable hyperparameter.
 
+        :param num_classses: number of classes
+        :type num_classes: int
         :param norm: lp-space to project gradients into
         :type norm: supported ord arguments in torch linalg.vector_norm function
         :param c: importance of misclassification over imperceptability
@@ -110,6 +114,7 @@ class CWLoss(torch.nn.Module):
         :rtype: CWLoss object
         """
         super().__init__()
+        self.num_classes = num_classes
         self.c = torch.tensor((c,))
         self.k = k
         self.hparam = ("c", self.c)
@@ -156,16 +161,17 @@ class CWLoss(torch.nn.Module):
         """
 
         # compute l2-norm of perturbation vector
-        lp = self.p.norm(dim=1).repeat_interleave(logits.size(0) // self.p.size(0))
+        l2 = self.p.norm(dim=1).repeat_interleave(logits.size(0) // self.p.size(0))
 
         # compute logit differences
-        y_hot = torch.nn.functional.one_hot(y).bool()
+        y_hot = torch.nn.functional.one_hot(y, num_classes=self.num_classes).bool()
         yth_logit = logits.masked_select(y_hot)
         max_logit, _ = logits.masked_select(~y_hot).view(-1, logits.size(1) - 1).max(1)
         log_diff = torch.clamp(yth_logit.sub(max_logit), min=-self.k)
 
         # save current accuracy and loss for optimizers later
-        loss = self.c.mul(log_diff).add(lp)
+        c = self.c.repeat_interleave(logits.size(0) // self.p.size(0))
+        loss = c.mul(log_diff).add(l2)
         if loss.requires_grad:
             self.loss, self.acc = record(loss, logits, y, y if yt is None else yt)
         return loss
