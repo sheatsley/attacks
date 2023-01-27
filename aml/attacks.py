@@ -13,7 +13,6 @@ import pandas  # Python Data Analysis Library
 import torch  # Tensors and Dynamic neural networks in Python with strong GPU acceleration
 
 # TODO
-# resolve max start linf (want to use tensor for shrinking norm but cant with uniform and clamping caps everything out)
 # check if jsma "x_org proj" helps when using backwardsgd
 
 
@@ -184,7 +183,7 @@ class Adversary:
 
         # instantiate bookkeeping and iterate over restarts & hyperparameters
         x = x.clone()
-        b = x.clone()
+        b = torch.full_like(x, torch.inf)
         b[self.misclassified(x, torch.zeros_like(x), y)] = 0
         for r in range(self.num_restarts):
             self.num_restarts > 1 and self.verbose and print(
@@ -494,7 +493,7 @@ class Attack:
                 print(
                     f"Epoch {e:{len(str(self.epochs))}} / {self.epochs} {progress}"
                 ) if verbose and not e % self.verbosity else print(
-                    f"Epoch {e}... ({e / self.epochs:.1%})", end="\r"
+                    f"{self.name}: Epoch {e}... ({e / self.epochs:.1%})", end="\r"
                 )
 
         # compute final statistics, set failed perturbations to zero and return
