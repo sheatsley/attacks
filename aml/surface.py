@@ -185,18 +185,22 @@ class DeepFoolSaliency:
 
     jac_req = True
 
-    def __init__(self, q, **kwargs):
+    def __init__(self, q, num_classes, **kwargs):
         """
         This method instantiates a DeepFoolSaliency object. As described above,
         ith class is defined as the minimum logit difference scaled by the
         q-norm of the logit differences. Thus, upon initilization, this class
-        saves q as an attribute.
+        saves q as an attribute as well as the number of classes (so that the
+        yth gradient can be retrieved correctly with small batches).
 
         :param q: the lp-norm to apply
         :return: a DeepFool saliency map
+        :param num_classes: number of classes
+        :type num_classes: int
         :rtype: DeepFoolSaliency object
         """
         self.q = q
+        self.num_classes = num_classes
         return None
 
     def __call__(self, g, loss, y, p, minimum=1e-4, **kwargs):
@@ -227,7 +231,7 @@ class DeepFoolSaliency:
         """
 
         # retrieve yth gradient and logit
-        y_hot = torch.nn.functional.one_hot(y).bool()
+        y_hot = torch.nn.functional.one_hot(y, num_classes=self.num_classes).bool()
         yth_grad = g[y_hot].unsqueeze(1)
         yth_logit = loss[y_hot].unsqueeze(1)
 
@@ -317,6 +321,7 @@ class IdentitySaliency:
         :return: squeezed gradients of the perturbation vector
         :rtype: torch Tensor object (n, m)
         """
+        self.org_proj = torch.zeros((g.size(0), g.size(2)))
         return g.squeeze_()
 
 
@@ -381,6 +386,7 @@ class JacobianSaliency:
         """
 
         # get yth row and "gather" ith rows by subtracting yth row
+        self.org_proj = torch.zeros((g.size(0), g.size(2)))
         yth_row = g[torch.arange(g.size(0)), y, :]
         ith_row = g.sum(1).sub(yth_row)
 
@@ -415,7 +421,7 @@ def l0(g, dist, max_obj, **kwargs):
     return g.scatter_(dim=1, index=bottom_k.indices, value=0).sign_()
 
 
-def l2(g, minimum=1e-8, **kwargs):
+def l2(g, minimum=1e-4, **kwargs):
     """
     This function projects gradients into the l2-norm space. Specifically, this
     is defined as normalizing the gradients by thier l2-norm. The minimum
