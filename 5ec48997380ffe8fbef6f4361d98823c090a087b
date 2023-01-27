@@ -1,0 +1,1 @@
+this is it. we are finally at the end. passing all semantic tests for phishing with the paramaters within this commit (includes all random restarts, binary search steps, etc.). checking uswnb-15 right now at the time of writing.... full component test is about 30% passing right now... likely completely done by tomorrow.
