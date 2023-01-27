@@ -52,7 +52,6 @@ class Traveler:
             "optim": type(optimizer).__name__,
             "rstart": type(random_start).__name__,
         }
-        self.state = False
         return None
 
     def __call__(self):
@@ -210,7 +209,7 @@ class MaxStart:
         keep = torch.arange(1, p.size(1) + 1).repeat(p.size(0), 1).add_(epsilon)
         return p.scatter_(1, shuffle, p.where(keep > p.size(1), torch.tensor(0)))
 
-    def l2(self, p, epsilon, minimum=1e-8):
+    def l2(self, p, epsilon, minimum=1e-4):
         """
         This function randomly perturbs inputs, based on the l2-norm budget.
         Specifically, feature values are sampled from a normal distribution and
@@ -225,7 +224,11 @@ class MaxStart:
         :type minimum: float
         :rtype: torch Tensor object (n, m)
         """
-        return p.normal_().div_(p.norm(2, dim=1, keepdim=True).clamp_(minimum))
+        return (
+            p.normal_()
+            .div_(p.norm(2, dim=1, keepdim=True).clamp_(minimum))
+            .mul_(epsilon)
+        )
 
     def linf(self, p, epsilon):
         """
@@ -239,7 +242,7 @@ class MaxStart:
         :return: randomly perturbed vectors
         :rtype: torch Tensor object (n, m)
         """
-        return p.uniform_(-1, 1).clamp_(-epsilon, epsilon)
+        return p.uniform_(-epsilon, epsilon)
 
 
 class ShrinkingStart(MaxStart):
@@ -248,7 +251,8 @@ class ShrinkingStart(MaxStart):
     (https://arxiv.org/pdf/1907.02044.pdf). Specifically, shrinking start
     randomly perturbs inputs based on the norm fo the best adversarial example
     seen thus far. This class inherits from the MaxStart class as this class
-    serves to set epsilon to be the minimum of itself and the smallest norm
+    serves to set epsilon to be: (1) zero, if we have yet to craft any
+    adversarial examples, or (2) the minimum of itself and the smallest norm
     seen thus far, divided by two, and subsequently call the appropriate
     MaxNorm subroutine.
 
@@ -287,6 +291,9 @@ class ShrinkingStart(MaxStart):
         :return: the perturbation vector used to craft adversarial examples
         :rtype: torch Tensor object (n, m)
         """
+
+        # set the "smallest" norm to zero if we have yet to craft
+        b = b if b.nan_to_num(posinf=0).nonzero().any() else b.nan_to_num(posinf=0)
         b_norm = b.norm(self.norm, dim=1, keepdim=True)
         epsilon = b_norm.where(b_norm < self.epsilon, self.epsilon).div(2)
-        return self.lp(p, self.norm, epsilon.int() if self.norm == 0 else epsilon)
+        return self.lp(p, epsilon.int() if self.norm == 0 else epsilon)
