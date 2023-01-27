@@ -56,9 +56,9 @@ class BaseTest(unittest.TestCase):
 
     :func:`setUpClass`: initializes the setup for all tests cases
     :func:`build_art_classifier`: instantiates an art pytorch classifier
-    :func:`l0_clamp`: clamps inputs onto l0-based threat models
-    :func:`l2_clamp`: clamps inputs onto l0-based threat models
-    :func:`linf_clamp`: clamps inputs onto l0-based threat models
+    :func:`l0_proj`: projects inputs onto l0-based threat models
+    :func:`l2_proj`: projects inputs onto l2-based threat models
+    :func:`linf_proj`: projects inputs onto l∞-based threat models
     :func:`reset_seeds`: resets seeds for RNGs
     :func:`apgdce`: craft adversarial examples with APGD-CE
     :func:`apgddlr`: craft adversarial examples with APGD-DLR
@@ -133,13 +133,14 @@ class BaseTest(unittest.TestCase):
         )
 
         # determine clipping range (non-image datasets may not be 0-1)
-        mins, idx = (torch.zeros(cls.x.size(1)), None) if shape else cls.x.min(0)
-        maxs, idx = (torch.ones(cls.x.size(1)), None) if shape else cls.x.max(0)
+        mins = torch.zeros(cls.x.size(1)) if shape else cls.x.min(0).values.clamp(0)
+        maxs = torch.ones(cls.x.size(1)) if shape else cls.x.max(0).values.clamp(1)
         clip = (mins, maxs)
+        p_clip = (mins.sub(cls.x), maxs.sub(cls.x))
         clip_info = (
             (mins[0].item(), maxs[0].item())
             if (mins[0].eq(mins).all() and maxs[0].eq(maxs).all())
-            else f"(({mins.min().item()}, ..., {mins.max().item()}),"
+            else f"(({mins.min().item()}, ..., {mins.max().item()}), "
             f"({maxs.min().item()}, ..., {maxs.max().item()}))"
         )
 
@@ -182,6 +183,7 @@ class BaseTest(unittest.TestCase):
         cls.linf_max = 1
         cls.linf = norm
         cls.clip_min, cls.clip_max = clip
+        cls.p_min, cls.p_max = p_clip
         cls.verbose = verbose
         cls.atk_params = {
             "alpha": alpha,
@@ -196,7 +198,7 @@ class BaseTest(unittest.TestCase):
             "apgddlr": aml.attacks.apgddlr(**cls.atk_params | {"epsilon": cls.linf}),
             "bim": aml.attacks.bim(**cls.atk_params | {"epsilon": cls.linf}),
             "cwl2": aml.attacks.cwl2(
-                **cls.atk_params | {"epochs": max(1000, epochs), "epsilon": cls.l2}
+                **cls.atk_params | {"epochs": max(300, epochs), "epsilon": cls.l2}
             ),
             "df": aml.attacks.df(**cls.atk_params | {"alpha": 1, "epsilon": cls.l2}),
             "fab": aml.attacks.fab(**cls.atk_params | {"alpha": 1, "epsilon": cls.l2}),
@@ -247,7 +249,10 @@ class BaseTest(unittest.TestCase):
 
         return PyTorchClassifier(
             model=cls.atk_params["model"].model,
-            clip_values=(cls.clip_min.max().item(), cls.clip_max.min().item()),
+            clip_values=(
+                min(cls.clip_min.max().item(), 0),
+                max(cls.clip_max.min().item(), 1),
+            ),
             loss=cls.atk_params["model"].loss,
             optimizer=cls.atk_params["model"].optimizer,
             input_shape=(cls.x.size(1),),
@@ -267,11 +272,14 @@ class BaseTest(unittest.TestCase):
 
         return PyTorchModel(
             model=cls.atk_params["model"].model,
-            bounds=(cls.clip_min.max().item(), cls.clip_max.min().item()),
+            bounds=(
+                min(cls.clip_min.max().item(), 0),
+                max(cls.clip_max.min().item(), 1),
+            ),
         )
 
     @classmethod
-    def l0_clamp(cls, p):
+    def l0_proj(cls, p):
         """
         This method projects perturbation vectors so that they are complaint
         with the specified l0 threat model. Specifically, the components of
@@ -286,7 +294,7 @@ class BaseTest(unittest.TestCase):
         return p.scatter(1, p.abs().sort(1).indices[:, : p.size(1) - cls.l0], 0)
 
     @classmethod
-    def l2_clamp(cls, p):
+    def l2_proj(cls, p):
         """
         This method projects perturbation vectors so that they are complaint
         with the specified l2 threat model Specifically,
@@ -301,7 +309,7 @@ class BaseTest(unittest.TestCase):
         return p.renorm(2, 0, cls.l2)
 
     @classmethod
-    def linf_clamp(cls, p):
+    def linf_proj(cls, p):
         """
         This method projects perturbation vectors so that they are complaint
         with the specified l∞ threat model  Specifically,
@@ -313,7 +321,7 @@ class BaseTest(unittest.TestCase):
         :return: threat-model-compliant perturbation vectors
         :rtype: torch Tensor object (n, m)
         """
-        return p.renorm(torch.inf, 0, cls.inf)
+        return p.clamp(-cls.linf, cls.linf)
 
     @classmethod
     def reset_seeds(cls):
@@ -539,8 +547,8 @@ class BaseTest(unittest.TestCase):
                     eps_iter=eps_iter,
                     nb_iter=nb_iter,
                     norm=float("inf"),
-                    clip_min=self.clip_min.max().item(),
-                    clip_max=self.clip_max.min().item(),
+                    clip_min=min(self.clip_min.max().item(), 0),
+                    clip_max=max(self.clip_max.min().item(), 1),
                     y=self.y,
                     targeted=False,
                     rand_init=False,
@@ -665,8 +673,8 @@ class BaseTest(unittest.TestCase):
                     y=self.y,
                     lr=learning_rate,
                     confidence=confidence,
-                    clip_min=self.clip_min.max().item(),
-                    clip_max=self.clip_max.min().item(),
+                    clip_min=min(self.clip_min.max().item(), 0),
+                    clip_max=max(self.clip_max.min().item(), 1),
                     initial_const=initial_const,
                     binary_search_steps=binary_search_steps,
                     max_iterations=max_iterations,
@@ -976,8 +984,8 @@ class BaseTest(unittest.TestCase):
                     eps_iter=eps_iter,
                     nb_iter=nb_iter,
                     norm=float("inf"),
-                    clip_min=self.clip_min.max().item(),
-                    clip_max=self.clip_max.min().item(),
+                    clip_min=min(self.clip_min.max().item(), 0),
+                    clip_max=max(self.clip_max.min().item(), 1),
                     y=self.y,
                     targeted=False,
                     rand_init=True,
@@ -1423,11 +1431,10 @@ class SemanticTests(BaseTest):
         aml_p = attack.craft(self.x, self.y)
         fws_p = (fw_adv.sub(self.x) for fw_adv in fws_adv)
 
-        # project to threat model and compute norms
-        clamp = {0: self.l0_clamp, 2: self.l2_clamp, torch.inf: self.linf_clamp}
-        ps = tuple(clamp[attack.lp](p) for p in (aml_p, *fws_p))
-        # ps = (aml_p, *fws_p)
+        # project to threat model, clip to domain, and compute norms
         lp = (0, 2, torch.inf)
+        proj = {0: self.l0_proj, 2: self.l2_proj, torch.inf: self.linf_proj}[attack.lp]
+        ps = tuple(proj(p).clamp(self.p_min, self.p_max) for p in (aml_p, *fws_p))
         norms = tuple([p.norm(d, 1).mean().item() for d in lp] for p in ps)
 
         # compute model accuracy decrease
@@ -1556,7 +1563,7 @@ class SemanticTests(BaseTest):
         return self.semantic_test(*self.pgd())
 
 
-class SpecialTest(unittest.TestCase):
+class SpecialTests(BaseTest):
     """
     The following class implements the special test case. Special tests are
     designed to exercise components of the Space of Adversarial Strategies
@@ -1564,5 +1571,107 @@ class SpecialTest(unittest.TestCase):
     purpose and detailed description of each test can be found in their
     respecitve methods.
 
-    :func:`test_all_components`: coverage test that stresses all components
+    :func:`test_all_components`: severe component coverage test
+    :func:`test_known_attacks`: moderate component coverage test
     """
+
+    @classmethod
+    def setUpClass(cls):
+        """
+        This method initializes the special testing framework. Given the naturally
+        unique nature of special tests, it accepts no arguments.
+
+        :return: None
+        :rtype: NoneType
+        """
+        super().setUpClass()
+        return None
+
+    def test_all_components(self, samples=10, epochs=3):
+        """
+        This method is a heavyweight coverage test. It calls the attack builder
+        function in the attacks module to instantiate 2x every possible
+        combination of attacks (one set corresponding to max-loss adversaries
+        and the other corresponding to min-accuracy adversaries). Naturally, to
+        make this a reasonable test to run regularly, we attack a handful
+        samples for a couple iterations, per attack. Notably, the Adversary
+        layer is not tested (that is, no restarts and no hyperparameter
+        optimization). This test is considered successful if no exceptions are
+        raised.
+
+        :param samples: number of samples to attack
+        :type samples: int
+        :param epochs: number of attack iterations
+        :type epochs: int
+        :return: None
+        :rtype: NoneType
+        """
+        alpha, epochs, model = (
+            self.atk_params["alpha"],
+            min(epochs, self.atk_params["epochs"]),
+            self.atk_params["model"],
+        )
+        attacks = tuple(
+            a
+            for early_termination in (True, False)
+            for epsilon, norm in zip(
+                (self.l0, self.l2, self.linf),
+                (aml.surface.l0, aml.surface.l2, aml.surface.linf),
+            )
+            for a in aml.attacks.attack_builder(
+                alpha=alpha,
+                epochs=epochs,
+                early_termination=early_termination,
+                epsilon=epsilon,
+                model=model,
+                norms=(norm,),
+                verbosity=0,
+            )
+        )
+        for i, attack in enumerate(attacks, start=1):
+            print(
+                f"Testing {attack.name:<10}... {i}/{len(attacks)} ({i / len(attacks):.1%})",
+                end="\r",
+            )
+            attack.craft(self.x[:samples], self.y[:samples])
+        return None
+
+    def test_known_components(self, samples=10, epochs=3):
+        """
+        This method is a moderat coverage test. It calls all of the known
+        attack helper functions in the aml attacks, i.e., APGD-CE, APGD-DLR,
+        BIM, CW-L2, DF, FAB, JSMA, and PGD. With these attacks, all components
+        are individually tests (but complex interactions may be missed).
+        Naturally, to make this a reasonable test to run regularly, we attack a
+        handful of samples for a couple iterations, per attack. This test is
+        considered successful if no exceptions are raised.
+
+        :param samples: number of samples to attack
+        :type samples: int
+        :param epochs: number of attack iterations
+        :type epochs: int
+        :return: None
+        :rtype: NoneType
+        """
+        alpha, epochs, model = (
+            self.atk_params["alpha"],
+            min(epochs, self.atk_params["epochs"]),
+            self.atk_params["model"],
+        )
+        attacks = (
+            aml.attacks.apgdce(alpha, epochs, self.linf, model, verbosity=0),
+            aml.attacks.apgddlr(alpha, epochs, self.linf, model, verbosity=0),
+            aml.attacks.bim(alpha, epochs, self.linf, model, verbosity=0),
+            aml.attacks.cwl2(alpha, epochs, self.l2, model, verbosity=0),
+            aml.attacks.df(alpha, epochs, self.l2, model, verbosity=0),
+            aml.attacks.fab(alpha, epochs, self.linf, model, verbosity=0),
+            aml.attacks.jsma(alpha, epochs, self.l0, model, verbosity=0),
+            aml.attacks.pgd(alpha, epochs, self.linf, model, verbosity=0),
+        )
+        for i, attack in enumerate(attacks, start=1):
+            print(
+                f"Testing {attack.name:<10}... {i}/{len(attacks)} ({i / len(attacks):.1%})",
+                end="\r",
+            )
+            attack.craft(self.x[:samples], self.y[:samples])
+        return None
