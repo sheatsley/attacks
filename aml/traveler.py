@@ -200,7 +200,7 @@ class MaxStart:
         :param p: the perturbation vectors used to craft adversarial examples
         :type p: torch Tensor object (n, m)
         :param epsilon: maximum allowable distortion (per input)
-        :type epsilon: torch Tensor object (n,)
+        :type epsilon: torch Tensor object (n, 1)
         :return: randomly perturbed vectors
         :rtype: torch Tensor object (n, m)
         """
@@ -242,7 +242,7 @@ class MaxStart:
         :return: randomly perturbed vectors
         :rtype: torch Tensor object (n, m)
         """
-        return p.uniform_(-epsilon, epsilon)
+        return p.uniform_(-1, 1).mul_(epsilon)
 
 
 class ShrinkingStart(MaxStart):
