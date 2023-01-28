@@ -14,6 +14,8 @@ import torch  # Tensors and Dynamic neural networks in Python with strong GPU ac
 
 # TODO
 # check if jsma "x_org proj" helps when using backwardsgd
+# find source of extreme slow down
+# convert to as many in-place operations as possible
 
 
 class Adversary:
@@ -383,6 +385,8 @@ class Attack:
             ("S", "I", "Id", "J", "0"): "JSMA",
         }
         self.name = name_map.get(name, "-".join(name))
+        # if len(self.name) > 8 and self.name[0] in {"B", "S"} and self.name[7] == "D":
+        #    alpha = 1
         self.params = {"α": alpha, "ε": epsilon, "epochs": epochs, "min dist": self.et}
 
         # instantiate traveler, surface, and necessary subcomponents
@@ -467,8 +471,9 @@ class Attack:
         correct = self.surface.model(x).argmax(1).eq(y)
         o = torch.full_like(x, torch.inf) if o is None else o.clone()
         o[correct] = torch.inf
-        rows = (e for i in range(bmax) for e in range(self.epochs + 1))
+        rows = [e for i in range(bmax) for e in range(self.epochs + 1)]
         metrics = "accuracy", "model_loss", "attack_loss", "l0", "l2", "linf"
+        self.batch_results = pandas.DataFrame(0, index=rows, columns=metrics)
         self.results = pandas.DataFrame(0, index=rows, columns=metrics)
 
         # configure batches, attach objects, & apply perturbation inits
@@ -497,8 +502,12 @@ class Attack:
                 )
 
         # compute final statistics, set failed perturbations to zero and return
+        self.batch_results = self.batch_results.groupby(self.batch_results.index).sum()
         self.results = self.results.groupby(self.results.index).sum()
+        self.batch_results[["accuracy", "l0", "l2", "linf"]] /= y.numel()
         self.results[["accuracy", "l0", "l2", "linf"]] /= y.numel()
+        # if self.results.accuracy[100] > 0.5:
+        #    breakpoint()
         return o.nan_to_num_(nan=None, posinf=0)
 
     def l0(self, p):
@@ -575,8 +584,9 @@ class Attack:
         :rtype: str
         """
 
-        # project onto lp-threat model and compute stats
+        # project onto lp-threat model and compute batch stats
         idx = batch * (self.epochs + 1) + epoch
+        norms = (0, 2, torch.inf)
         pb = self.project(pb.clone())
         logits = self.surface.model(xb + pb)
         mloss = self.surface.model.loss(logits, yb).item()
@@ -584,8 +594,8 @@ class Attack:
         aloss = ali.sum().item()
         correct = logits.argmax(1).eq(yb)
         acc = correct.sum().item()
-        nb = [pb.norm(n, 1).sum().item() for n in (0, 2, torch.inf)]
-        self.results.iloc[idx] += (acc, aloss, mloss, *nb)
+        nb = [pb.norm(n, 1).sum().item() for n in norms]
+        self.batch_results.iloc[idx] += (acc, mloss, aloss, *nb)
 
         # update output buffer based on min accuracy or max loss
         if self.et:
@@ -593,25 +603,32 @@ class Attack:
             update = (~correct).logical_and_(smaller)
         else:
             ologits = self.surface.model(xb + ob.nan_to_num(posinf=0))
-            oloss = self.surface.loss(ologits, yb)
-            update = oloss.lt(ali) if self.surface.loss.max_obj else oloss.gt(ali)
+            oli = self.surface.loss(ologits, yb)
+            update = oli.lt(ali) if self.surface.loss.max_obj else oli.gt(ali)
         ob[update] = pb[update]
-        oacc = self.surface.model(xb + ob.nan_to_num(posinf=0)).argmax(1).eq(yb).sum()
+
+        # compute output buffer stats and update results
+        ologits = self.surface.model(xb + ob.nan_to_num(posinf=0))
+        omloss = self.surface.model.loss(ologits, yb).item()
+        oaloss = self.surface.loss(logits, yb).sum().item()
+        oacc = ologits.argmax(1).eq(yb).sum().item()
+        on = [ob.nan_to_num(posinf=0).norm(n, 1).sum().item() for n in norms]
+        self.results.iloc[idx] += (oacc, omloss, oaloss, *on)
 
         # build str representation and return
         return (
             f"Output Acc: {oacc / yb.numel():.1%} Batch Acc: {acc / yb.numel():.1%} "
-            f"({(acc - self.results.accuracy.iloc[idx - 1]) / yb.numel():+.1%}) "
+            f"({(acc - self.batch_results.accuracy.iloc[idx - 1]) / yb.numel():+.1%}) "
             f"Model Loss: {mloss:.2f} "
-            f"({(mloss - self.results.model_loss.iloc[idx - 1]):+6.2f}) "
+            f"({(mloss - self.batch_results.model_loss.iloc[idx - 1]):+6.2f}) "
             f"{self.name} Loss: {aloss:.2f} "
-            f"({(aloss - self.results.attack_loss.iloc[idx - 1]):+6.2f}) "
+            f"({(aloss - self.batch_results.attack_loss.iloc[idx - 1]):+6.2f}) "
             f"l0: {nb[0] / yb.numel():.2f} "
-            f"({(nb[0] -  self.results.l0.iloc[idx - 1]) / yb.numel():+.2f}) "
+            f"({(nb[0] -  self.batch_results.l0.iloc[idx - 1]) / yb.numel():+.2f}) "
             f"l2: {nb[1] / yb.numel():.2f} "
-            f"({(nb[1] - self.results.l2.iloc[idx - 1]) / yb.numel():+.2f}) "
+            f"({(nb[1] - self.batch_results.l2.iloc[idx - 1]) / yb.numel():+.2f}) "
             f"l∞: {nb[2] / yb.numel():.2f} "
-            f"({(nb[2] - self.results.linf.iloc[idx - 1]) / yb.numel():+.2f})"
+            f"({(nb[2] - self.batch_results.linf.iloc[idx - 1]) / yb.numel():+.2f})"
         )
 
 
