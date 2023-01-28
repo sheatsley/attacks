@@ -386,9 +386,14 @@ class JacobianSaliency:
         """
 
         # get yth row and "gather" ith rows by subtracting yth row
-        self.org_proj = torch.zeros((g.size(0), g.size(2)))
         yth_row = g[torch.arange(g.size(0)), y, :]
         ith_row = g.sum(1).sub(yth_row)
+
+        # compute biased projection & add stability when using unique losses
+        self.org_proj = torch.zeros((g.size(0), g.size(2)))
+        ith_row = ith_row.where(
+            ith_row.sum(1, keepdim=True) != 0, yth_row.sign().mul(-1)
+        )
 
         # zero out components whose yth and ith signs are equal and compute product
         smap = (yth_row.sign() != ith_row.sign()).mul(yth_row).mul(ith_row.abs())
