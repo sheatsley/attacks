@@ -1,0 +1,1 @@
+Looks like this is it. All tests are passing at 100 epochs with phishing. Currently running tests on mnist, nslkdd, and unswnb15.. (will have to get around foolbox freaking out about unswnb15 and their clipping issues...)
