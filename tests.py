@@ -23,8 +23,8 @@ import torch  # Tensors and Dynamic neural networks in Python with strong GPU ac
 # TODO
 # get all functional tests passing
 # get all semantic tests passing
+# set semantic performance to be median norm
 # consider special tests for component performance
-# add cli
 
 
 class BaseTest(unittest.TestCase):
@@ -77,7 +77,7 @@ class BaseTest(unittest.TestCase):
         alpha=0.01,
         dataset="phishing",
         debug=False,
-        epochs=30,
+        epochs=100,
         norm=0.15,
         seed=5115,
         verbose=False,
@@ -95,7 +95,7 @@ class BaseTest(unittest.TestCase):
         :param dataset: dataset to run tests over
         :type dataset: str
         :param debug: whether to set the autograd engine in debug mode
-        :type debugf: bool
+        :type debug: bool
         :param epochs: number of attack iterations
         :type epochs: int
         :param norm: maximum % of lp-budget consumption
@@ -399,9 +399,11 @@ class BaseTest(unittest.TestCase):
                     eot_iter=1,
                     rho=rho,
                     verbose=self.verbose,
-                )(inputs=ta_x, labels=self.y,).flatten(1),
+                )(inputs=ta_x, labels=self.y)
+                .flatten(1)
+                .detach(),
                 "Torchattacks",
-            ).detach()
+            )
         self.reset_seeds()
         return self.attacks["apgdce"], tuple(
             fw for fw in (art_adv, ta_adv) if fw is not None
@@ -472,9 +474,11 @@ class BaseTest(unittest.TestCase):
                     eot_iter=1,
                     rho=rho,
                     verbose=self.verbose,
-                )(inputs=ta_x, labels=self.y).flatten(1),
+                )(inputs=ta_x, labels=self.y)
+                .flatten(1)
+                .detach(),
                 "Torchattacks",
-            ).detach()
+            )
         self.reset_seeds()
         return self.attacks["apgddlr"], tuple(
             fw for fw in (art_adv, ta_adv) if fw is not None
@@ -1094,7 +1098,7 @@ class FunctionalTests(BaseTest):
         """
         with self.subTest(Attack=attack.name):
             p = attack.craft(self.x, self.y)
-            norms = (p.norm(d, 1).mean().item() for d in (0, 2, torch.inf))
+            norms = (p.norm(d, 1).median().item() for d in (0, 2, torch.inf))
             norm_results = ", ".join(
                 f"l{p}: {n:.3}/{b} ({n/b:.2%})"
                 for n, b, p in zip(norms, (self.l0, self.l2, self.linf), (0, 2, "∞"))
@@ -1436,7 +1440,7 @@ class SemanticTests(BaseTest):
         lp = (0, 2, torch.inf)
         proj = {0: self.l0_proj, 2: self.l2_proj, torch.inf: self.linf_proj}[attack.lp]
         ps = tuple(proj(p).clamp(self.p_min, self.p_max) for p in (aml_p, *fws_p))
-        norms = tuple([p.norm(d, 1).mean().item() for d in lp] for p in ps)
+        norms = tuple([p.norm(d, 1).median().item() for d in lp] for p in ps)
 
         # compute model accuracy decrease
         advs = (self.x + p for p in ps)
@@ -1579,14 +1583,66 @@ class SpecialTests(BaseTest):
     @classmethod
     def setUpClass(cls):
         """
-        This method initializes the special testing framework. Given the naturally
-        unique nature of special tests, it accepts no arguments.
+        This method initializes the special testing framework. Given the
+        naturally unique nature of special tests, it accepts no arguments.
 
         :return: None
         :rtype: NoneType
         """
         super().setUpClass()
+        cls.functional_test = FunctionalTests.functional_test.__get__(cls)
         return None
+
+    def test_all_attacks(self, epochs=100, min_norm=True, min_acc=0.1, norm=0.3):
+        """
+        This method ostensibly performs a functional test for *all* component
+        combinations. This should be considered the most computationally
+        intensive test within this test suite. This should be run rarely (and
+        with smaller datasets). Like functional tests, this test is considered
+        successful if model accuracy can be dropped below some threshold (i.e.,
+        1%), with the parameterized threat model. This test is defined here
+        (instead of the functional test suite) to ensure it is ran as intended.
+
+        :param epochs: number of attack iterations
+        :type epochs: int
+        :param max_loss: whether to use a min-norm (or max-loss) adversary
+        :type max_loss: bool
+        :param min_acc: minimum accuracy to be considered successful
+        :type min_acc: float
+        :param norm: maximum % of lp-budget consumption
+        :type norm: float
+        :return: None
+        :rtype: NoneType
+        :return: None
+        :rtype: NoneType
+        """
+        alpha, epochs, model, l0, l2, linf = (
+            self.atk_params["alpha"],
+            min(epochs, self.atk_params["epochs"]),
+            self.atk_params["model"],
+            int(self.l0_max * norm) + 1,
+            self.l2_max * norm,
+            norm,
+        )
+        attacks = tuple(
+            a
+            for epsilon, norm in zip(
+                # (l0, l2, linf),
+                (l2, linf),
+                # (aml.surface.l0, aml.surface.l2, aml.surface.linf),
+                (aml.surface.l2, aml.surface.linf),
+            )
+            for a in aml.attacks.attack_builder(
+                alpha=alpha,
+                epochs=epochs,
+                early_termination=min_norm,
+                epsilon=epsilon,
+                model=model,
+                norms=(norm,),
+                verbosity=0,
+            )
+        )
+        return [FunctionalTests.functional_test(self, a) for a in attacks]
 
     def test_all_components(self, samples=10, epochs=3):
         """
@@ -1641,7 +1697,7 @@ class SpecialTests(BaseTest):
 
     def test_known_components(self, samples=10, epochs=3):
         """
-        This method is a moderat coverage test. It calls all of the known
+        This method is a moderate coverage test. It calls all of the known
         attack helper functions in the aml attacks, i.e., APGD-CE, APGD-DLR,
         BIM, CW-L2, DF, FAB, JSMA, and PGD. With these attacks, all components
         are individually tests (but complex interactions may be missed).
