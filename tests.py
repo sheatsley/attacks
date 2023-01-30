@@ -22,9 +22,7 @@ import torch  # Tensors and Dynamic neural networks in Python with strong GPU ac
 
 # TODO
 # get all functional tests passing
-# get all semantic tests passing
-# set semantic performance to be median norm
-# consider special tests for component performance
+# determine tweaks needed to make some attacks work (alpha for l2 df, binary search on c for linf cw df)
 
 
 class BaseTest(unittest.TestCase):
@@ -57,6 +55,7 @@ class BaseTest(unittest.TestCase):
 
     :func:`setUpClass`: initializes the setup for all tests cases
     :func:`build_art_classifier`: instantiates an art pytorch classifier
+    :func:`build_fb_classifier`: instantiates a foolbox pytorch classifier
     :func:`l0_proj`: projects inputs onto l0-based threat models
     :func:`l2_proj`: projects inputs onto l2-based threat models
     :func:`linf_proj`: projects inputs onto l∞-based threat models
@@ -77,7 +76,7 @@ class BaseTest(unittest.TestCase):
         alpha=0.01,
         dataset="phishing",
         debug=False,
-        epochs=100,
+        epochs=30,
         norm=0.15,
         seed=5115,
         verbose=False,
@@ -134,8 +133,8 @@ class BaseTest(unittest.TestCase):
         )
 
         # determine clipping range (non-image datasets may not be 0-1)
-        mins = torch.zeros(cls.x.size(1)) if shape else cls.x.min(0).values.clamp(0)
-        maxs = torch.ones(cls.x.size(1)) if shape else cls.x.max(0).values.clamp(1)
+        mins = torch.zeros(cls.x.size(1)) if shape else cls.x.min(0).values.clamp(max=0)
+        maxs = torch.ones(cls.x.size(1)) if shape else cls.x.max(0).values.clamp(min=1)
         clip = (mins, maxs)
         p_clip = (mins.sub(cls.x), maxs.sub(cls.x))
         clip_info = (
@@ -250,10 +249,7 @@ class BaseTest(unittest.TestCase):
 
         return PyTorchClassifier(
             model=cls.atk_params["model"].model,
-            clip_values=(
-                min(cls.clip_min.max().item(), 0),
-                max(cls.clip_max.min().item(), 1),
-            ),
+            clip_values=(cls.clip_min.max().item(), cls.clip_max.min().item()),
             loss=cls.atk_params["model"].loss,
             optimizer=cls.atk_params["model"].optimizer,
             input_shape=(cls.x.size(1),),
@@ -273,10 +269,7 @@ class BaseTest(unittest.TestCase):
 
         return PyTorchModel(
             model=cls.atk_params["model"].model,
-            bounds=(
-                min(cls.clip_min.max().item(), 0),
-                max(cls.clip_max.min().item(), 1),
-            ),
+            bounds=(cls.clip_min.min().item(), cls.clip_max.max().item()),
         )
 
     @classmethod
@@ -708,16 +701,16 @@ class BaseTest(unittest.TestCase):
             from torchattacks import CW
 
             print("Producing CW-L2 adversarial examples with Torchattacks...")
-            ta_adv = (
-                CW(
-                    model=model,
-                    c=initial_const,
-                    kappa=confidence,
-                    steps=max_iterations,
-                    lr=learning_rate,
-                )(inputs=self.x.clone(), labels=self.y),
-                "Torchattacks",
-            )
+            ta_adv = CW(
+                model=model,
+                c=initial_const,
+                kappa=confidence,
+                steps=max_iterations,
+                lr=learning_rate,
+            )(inputs=self.x.clone(), labels=self.y)
+
+            # torchattack's implementation can return nans
+            ta_adv = (torch.where(ta_adv.isnan(), self.x, ta_adv), "Torchattacks")
         return self.attacks["cwl2"], tuple(
             fw for fw in (at_adv, art_adv, ch_adv, fb_adv, ta_adv) if fw is not None
         )
@@ -864,8 +857,10 @@ class BaseTest(unittest.TestCase):
         implementation in AdverTorch and ART both assume the l0-norm is passed
         in as a percentage (which is why we pass in linf) and we set theta to
         be 1 since features can only be perturbed once. Moreover, the
-        AdverTorch implementation does not suport an untargetted scheme, so we
-        supply random targets.
+        AdverTorch implementation: (1) does not suport an untargetted scheme
+        (so we supply random targets), and (2) computes every pixel pair at
+        once, often leading to memory crashes (e.g., it'll terminate on a 16GB
+        system with MNIST).
 
         :return: JSMA adversarial examples
         :rtype: tuple of torch Tensor objects (n, m)
@@ -877,7 +872,7 @@ class BaseTest(unittest.TestCase):
             1,
         )
         at_adv = art_adv = None
-        if "advertorch" in self.available:
+        if "advertorch" in self.available and self.x.size(1) < 784:
             from advertorch.attacks import JacobianSaliencyMapAttack
 
             print("Producing JSMA adversarial examples with AdverTorch...")
@@ -1057,7 +1052,6 @@ class FunctionalTests(BaseTest):
         PGD (Projected Gradient Descent) (https://arxiv.org/pdf/1706.06083.pdf)
 
     :func:`functional_test`: performs a functional test
-    :func:`setUpClass`: sets functional test parameters
     :func:`test_apgdce`: functional test for APGD-CE
     :func:`test_apgddlr`: functional test for APGD-DLR
     :func:`test_bim`: functional test for BIM
@@ -1068,44 +1062,30 @@ class FunctionalTests(BaseTest):
     :func:`test_pgd`: functional test for PGD
     """
 
-    @classmethod
-    def setUpClass(cls, min_acc=0.01):
+    def functional_test(self, attacks, min_acc=0.01):
         """
-        This method initializes the functional testing framework by setting
-        parameters unique to the tests within this test case. At this time,
-        this just sets the minimum accuracy needed for an attack to be
+        This method performs a functional test for a given attack. The min_acc
+        parameter sets the minimum accuracy needed for an attack to be
         considered "functionally" correct (notably, this should be tuned
         appropriately with the number of epochs and norm-ball size defined in
-        the setUpModule function).
-
-        :param min_acc: the minimum accuracy necessary for a "successful" attack
-        :type min_acc: float
-        :return: None
-        :rtype: NoneType
-        """
-        super().setUpClass()
-        cls.min_acc = min_acc
-        return None
-
-    def functional_test(self, attack):
-        """
-        This method performs a functional test for a given attack.
+        the BaseTest setUpClass method).
 
         :param adversary: adversary to test
         :type adversary: aml Adversary or Attack object
         :return: None
         :rtype: NoneType
         """
-        with self.subTest(Attack=attack.name):
-            p = attack.craft(self.x, self.y)
-            norms = (p.norm(d, 1).median().item() for d in (0, 2, torch.inf))
-            norm_results = ", ".join(
-                f"l{p}: {n:.3}/{b} ({n/b:.2%})"
-                for n, b, p in zip(norms, (self.l0, self.l2, self.linf), (0, 2, "∞"))
-            )
-            adv_acc = self.model.accuracy(self.x + p, self.y).item()
-            print(f"{attack.name} complete! Model Acc: {adv_acc:.2%},", norm_results)
-            self.assertLess(adv_acc, self.min_acc)
+        for i, attack in enumerate(attacks, start=1):
+            with self.subTest(Attack=f"{i}. {attack.name}"):
+                p = attack.craft(self.x, self.y)
+                n = (p.norm(d, 1).median().item() for d in (0, 2, torch.inf))
+                norm_results = ", ".join(
+                    f"l{p}: {n:.3}/{float(b):.3} ({n/b:.2%})"
+                    for n, b, p in zip(n, (self.l0, self.l2, self.linf), (0, 2, "∞"))
+                )
+                acc = self.model.accuracy(self.x + p, self.y).item()
+                print(f"{attack.name} complete! Model Acc: {acc:.2%},", norm_results)
+                self.assertLess(acc, min_acc)
         return None
 
     def test_apgdce(self):
@@ -1116,7 +1096,7 @@ class FunctionalTests(BaseTest):
         :return: None
         :rtype: NoneType
         """
-        return self.functional_test(self.attacks["apgdce"])
+        return self.functional_test((self.attacks["apgdce"],))
 
     def test_apgddlr(self):
         """
@@ -1126,7 +1106,7 @@ class FunctionalTests(BaseTest):
         :return: None
         :rtype: NoneType
         """
-        return self.functional_test(self.attacks["apgddlr"])
+        return self.functional_test((self.attacks["apgddlr"],))
 
     def test_bim(self):
         """
@@ -1136,7 +1116,7 @@ class FunctionalTests(BaseTest):
         :return: None
         :rtype: NoneType
         """
-        return self.functional_test(self.attacks["bim"])
+        return self.functional_test((self.attacks["bim"],))
 
     def test_cwl2(self):
         """
@@ -1146,7 +1126,7 @@ class FunctionalTests(BaseTest):
         :return: None
         :rtype: NoneType
         """
-        return self.functional_test(self.attacks["cwl2"])
+        return self.functional_test((self.attacks["cwl2"],))
 
     def test_df(self):
         """
@@ -1156,7 +1136,7 @@ class FunctionalTests(BaseTest):
         :return: None
         :rtype: NoneType
         """
-        return self.functional_test(self.attacks["df"])
+        return self.functional_test((self.attacks["df"],))
 
     def test_fab(self):
         """
@@ -1166,7 +1146,7 @@ class FunctionalTests(BaseTest):
         :return: None
         :rtype: NoneType
         """
-        return self.functional_test(self.attacks["fab"])
+        return self.functional_test((self.attacks["fab"],))
 
     def test_jsma(self):
         """
@@ -1176,7 +1156,7 @@ class FunctionalTests(BaseTest):
         :return: None
         :rtype: NoneType
         """
-        return self.functional_test(self.attacks["jsma"])
+        return self.functional_test((self.attacks["jsma"],))
 
     def test_pgd(self):
         """
@@ -1186,15 +1166,14 @@ class FunctionalTests(BaseTest):
         :return: None
         :rtype: NoneType
         """
-        return self.functional_test(self.attacks["pgd"])
+        return self.functional_test((self.attacks["pgd"],))
 
 
 class IdentityTests(BaseTest):
     """
     The following class implements identity tests. Identity correctness tests
-    assert that the feature values of aml adversarial examples themselves must
-    be at least 99% similar to adversarial examples of other frameworks.
-    Feature values are considered similar if their difference satifies:
+    assert that the difference of all feature values of aml adversarial examples
+    compared to other frameworks must satisfy:
 
                         |other - aml| ≤ atol + rtol * |aml|
 
@@ -1219,7 +1198,6 @@ class IdentityTests(BaseTest):
         PGD (Projected Gradient Descent) (https://arxiv.org/pdf/1706.06083.pdf)
 
     :func:`identity_test`: performs an identity test
-    :func:`setUpClass`: sets identity test parameters
     :func:`test_apgdce`: identity test for APGD-CE
     :func:`test_apgddlr`: identity test for APGD-DLR
     :func:`test_bim`: identity test for BIM
@@ -1229,20 +1207,6 @@ class IdentityTests(BaseTest):
     :func:`test_jsma`: identity test for JSMA
     :func:`test_pgd`: identity test for PGD
     """
-
-    @classmethod
-    def setUpClass(cls, max_distance=0.001):
-        """
-        This method initializes the identity testing case.
-
-        :param max_distance: the maximum allowable distance between features
-        :type max_distance: float
-        :return: None
-        :rtype: NoneType
-        """
-        super().setUpClass()
-        cls.max_distance = max_distance
-        return None
 
     def identity_test(self, attack, fws):
         """
@@ -1290,7 +1254,7 @@ class IdentityTests(BaseTest):
                 org_msg = torch.testing._comparison.make_tensor_mismatch_msg(
                     diff, torch.zeros_like(diff), ~close, rtol=rtol, atol=atol
                 )
-                targets = close.all(1) == self.model.correct
+                targets = close.all(1) == self.model(self.x).argmax(1).eq(self.y)
                 targets_msg = (
                     "Percentage of failed inputs that were initially misclassified: "
                     f"{targets.sum().div(targets.numel()):.2%}"
@@ -1380,7 +1344,6 @@ class SemanticTests(BaseTest):
         PGD (Projected Gradient Descent) (https://arxiv.org/pdf/1706.06083.pdf)
 
     :func:`semantic_test`: performs a semantic test
-    :func:`setUpClass`: sets semantic test parameters
     :func:`test_apgdce`: semantic test for APGD-CE
     :func:`test_apgddlr`: semantic test for APGD-DLR
     :func:`test_bim`: semantic test for BIM
@@ -1391,11 +1354,9 @@ class SemanticTests(BaseTest):
     :func:`test_pgd`: semantic test for PGD
     """
 
-    @classmethod
-    def setUpClass(cls, max_perf_degrad=0.01):
+    def semantic_test(self, attack, fws, max_perf_degrad=0.01):
         """
-        This method initializes the semantic testing case by setting parameters
-        unique to the tests within this test case. At this time, this sets the
+        This method performs a semantic test for a given attack. This sets the
         maximum allowable performance degration between adversarial examples
         produced by aml and other frameworks such that the aml attacks are
         considered to be "semantically" correct. Performance (denoted as 𝒫) is
@@ -1406,27 +1367,14 @@ class SemanticTests(BaseTest):
         feautres are always between 0 and 1. Notably, if aml attacks are
         *better* than other frameworks by greater than the maximum allowable
         performance degradation, the tests still pass (failure can only occurs
-        if aml attacks are worse). Finally, this method also instantiates an
-        ART PyTorch classifier to be used by all ART-based attacks.
-
-        :param max_perf_degrad: the maximum allowable difference in performance
-        :type max_perf_degrad: float
-        :return: None
-        :rtype: NoneType
-        """
-        super().setUpClass()
-        cls.max_perf_degrad = max_perf_degrad
-        cls.state = 0
-        return None
-
-    def semantic_test(self, attack, fws):
-        """
-        This method performs a semantic test for a given attack.
+        if aml attacks are worse).
 
         :param adversary: attack to test
         :type adversary: aml Adversary object
         :param fws: adversarial examples produced by other frameworks
         :type fws: tuple of tuples of torch Tensor object (n, m) and str
+        :param max_perf_degrad: the maximum allowable difference in performance
+        :type max_perf_degrad: float
         :return: None
         :rtype: NoneType
         """
@@ -1477,7 +1425,7 @@ class SemanticTests(BaseTest):
         aml_perf, fws_perf = next(norm_perfs), tuple(norm_perfs)
         for fw, fw_perf in zip(fws, fws_perf):
             with self.subTest(Attack=f"{attack.name} v. {fw}"):
-                self.assertGreaterEqual(aml_perf + self.max_perf_degrad, fw_perf)
+                self.assertGreaterEqual(aml_perf + max_perf_degrad, fw_perf)
         return None
 
     def test_apgdce(self):
@@ -1576,24 +1524,48 @@ class SpecialTests(BaseTest):
     purpose and detailed description of each test can be found in their
     respecitve methods.
 
-    :func:`test_all_components`: severe component coverage test
-    :func:`test_known_attacks`: moderate component coverage test
+    :func:`test_all_coverage`: severe component coverage test
+    :func:`test_all_performance`: functional test for all possible attacks
+    :func:`test_attack_performance`: functional test for one attack
+    :func:`test_known_coverage`: moderate component coverage test
     """
 
-    @classmethod
-    def setUpClass(cls):
+    def test_all_coverage(self, samples=10, epochs=3):
         """
-        This method initializes the special testing framework. Given the
-        naturally unique nature of special tests, it accepts no arguments.
+        This method is a heavyweight coverage test. It calls the attack builder
+        function in the attacks module to instantiate 2x every possible
+        combination of attacks (one set corresponding to max-loss adversaries
+        and the other corresponding to min-accuracy adversaries). Naturally, to
+        make this a reasonable test to run regularly, we attack a handful
+        samples for a couple iterations, per attack. Notably, the Adversary
+        layer is not tested (that is, no restarts and no hyperparameter
+        optimization). This test is considered successful if no exceptions are
+        raised.
 
+        :param samples: number of samples to attack
+        :type samples: int
+        :param epochs: number of attack iterations
+        :type epochs: int
         :return: None
         :rtype: NoneType
         """
-        super().setUpClass()
-        cls.functional_test = FunctionalTests.functional_test.__get__(cls)
+        p = self.atk_params | {"epochs": epochs, "epsilon": self.l2}
+        attacks = tuple(
+            attack
+            for et in (True, False)
+            for attack in aml.attacks.attack_builder(**p, early_termination=et)
+        )
+        for i, attack in enumerate(attacks, start=1):
+            with self.subTest(Attack=f"{i}/{len(attacks)}: {attack.name}"):
+                print(
+                    f"Testing {attack.name:<10}..."
+                    f"{i}/{len(attacks)} ({i / len(attacks):.1%})",
+                    end="\r",
+                )
+                attack.craft(self.x[:samples], self.y[:samples])
         return None
 
-    def test_all_attacks(self, epochs=100, min_norm=True, min_acc=0.1, norm=0.3):
+    def test_all_performance(self, epochs=1000, min_norm=True, min_acc=0.1, norm=0.3):
         """
         This method ostensibly performs a functional test for *all* component
         combinations. This should be considered the most computationally
@@ -1624,15 +1596,11 @@ class SpecialTests(BaseTest):
             self.l2_max * norm,
             norm,
         )
+        ns = zip((l0, l2, linf), (aml.surface.l0, aml.surface.l2, aml.surface.linf))
         attacks = tuple(
-            a
-            for epsilon, norm in zip(
-                # (l0, l2, linf),
-                (l2, linf),
-                # (aml.surface.l0, aml.surface.l2, aml.surface.linf),
-                (aml.surface.l2, aml.surface.linf),
-            )
-            for a in aml.attacks.attack_builder(
+            attack
+            for epsilon, norm in ns
+            for attack in aml.attacks.attack_builder(
                 alpha=alpha,
                 epochs=epochs,
                 early_termination=min_norm,
@@ -1642,60 +1610,29 @@ class SpecialTests(BaseTest):
                 verbosity=0,
             )
         )
-        return [FunctionalTests.functional_test(self, a) for a in attacks]
+        return FunctionalTests.functional_test(self, attacks, min_acc)
 
-    def test_all_components(self, samples=10, epochs=3):
+    def test_attack_performance(self, name="M-I-CW-D-∞"):
         """
-        This method is a heavyweight coverage test. It calls the attack builder
-        function in the attacks module to instantiate 2x every possible
-        combination of attacks (one set corresponding to max-loss adversaries
-        and the other corresponding to min-accuracy adversaries). Naturally, to
-        make this a reasonable test to run regularly, we attack a handful
-        samples for a couple iterations, per attack. Notably, the Adversary
-        layer is not tested (that is, no restarts and no hyperparameter
-        optimization). This test is considered successful if no exceptions are
-        raised.
+        This method serves to help debug individual attacks. Given the attack
+        name, it will instantiate an attack object with the associated
+        parameters and run the attack for many iterations. This test is
+        considered successful if the attack can drop model accuracy below some
+        threshold (e.g., 10%).
 
-        :param samples: number of samples to attack
-        :type samples: int
-        :param epochs: number of attack iterations
-        :type epochs: int
+        :param name: attack name to instantiate
+        :type name: str
         :return: None
         :rtype: NoneType
         """
-        alpha, epochs, model = (
-            self.atk_params["alpha"],
-            min(epochs, self.atk_params["epochs"]),
-            self.atk_params["model"],
+        norms = {"0": self.l0, "2": self.l2, "∞": self.linf}
+        params = {"epsilon": norms[name[-1]]}
+        attacks = {attack.name: attack for attack in aml.attacks.attack_builder()}
+        return FunctionalTests.functional_test(
+            self, attacks[name].__init__(**self.atk_params | params)
         )
-        attacks = tuple(
-            a
-            for early_termination in (True, False)
-            for epsilon, norm in zip(
-                (self.l0, self.l2, self.linf),
-                (aml.surface.l0, aml.surface.l2, aml.surface.linf),
-            )
-            for a in aml.attacks.attack_builder(
-                alpha=alpha,
-                epochs=epochs,
-                early_termination=early_termination,
-                epsilon=epsilon,
-                model=model,
-                norms=(norm,),
-                verbosity=0,
-            )
-        )
-        for i, attack in enumerate(attacks, start=1):
-            with self.subTest(Attack=f"{i}: {attack.name}"):
-                print(
-                    f"Testing {attack.name:<10}..."
-                    f"{i}/{len(attacks)} ({i / len(attacks):.1%})",
-                    end="\r",
-                )
-                attack.craft(self.x[:samples], self.y[:samples])
-        return None
 
-    def test_known_components(self, samples=10, epochs=3):
+    def test_known_coverage(self, samples=10, epochs=3):
         """
         This method is a moderate coverage test. It calls all of the known
         attack helper functions in the aml attacks, i.e., APGD-CE, APGD-DLR,
@@ -1712,27 +1649,10 @@ class SpecialTests(BaseTest):
         :return: None
         :rtype: NoneType
         """
-        alpha, epochs, model = (
-            self.atk_params["alpha"],
-            min(epochs, self.atk_params["epochs"]),
-            self.atk_params["model"],
-        )
-        attacks = (
-            aml.attacks.apgdce(alpha, epochs, self.linf, model, verbosity=0),
-            aml.attacks.apgddlr(alpha, epochs, self.linf, model, verbosity=0),
-            aml.attacks.bim(alpha, epochs, self.linf, model, verbosity=0),
-            aml.attacks.cwl2(alpha, epochs, self.l2, model, verbosity=0),
-            aml.attacks.df(alpha, epochs, self.l2, model, verbosity=0),
-            aml.attacks.fab(alpha, epochs, self.linf, model, verbosity=0),
-            aml.attacks.jsma(alpha, epochs, self.l0, model, verbosity=0),
-            aml.attacks.pgd(alpha, epochs, self.linf, model, verbosity=0),
-        )
-        for i, attack in enumerate(attacks, start=1):
-            with self.subTest(Attack=f"{i}: {attack.name}"):
-                print(
-                    f"Testing {attack.name:<10}..."
-                    f"{i}/{len(attacks)} ({i / len(attacks):.1%})",
-                    end="\r",
-                )
-                attack.craft(self.x[:samples], self.y[:samples])
+        e = {"epochs": epochs}
+        atks = (a.__init__(**self.atk_params | e) for a in self.attacks.values())
+        for i, atk in enumerate(atks, start=1):
+            with self.subTest(Attack=f"{i}: {atk.name}"):
+                print(f"Testing {atk.name:<10}... {i}/{len(atks)}", end="\r")
+                atk.craft(self.x[:samples], self.y[:samples])
         return None
