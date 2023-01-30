@@ -23,7 +23,7 @@ class CELoss(torch.nn.CrossEntropyLoss):
     p_req = False
     max_obj = True
 
-    def __init__(self, num_classes=None, **kwargs):
+    def __init__(self, classes=None, **kwargs):
         """
         This method instantiates a CELoss object. It accepts keyword arguments
         for the PyTorch parent class described in:
@@ -32,8 +32,8 @@ class CELoss(torch.nn.CrossEntropyLoss):
         gradients to underflow when computing adversarial examples for large
         batch sizes.
 
-        :param num_classes: number of classes (not used)
-        :type num_classes: int
+        :param classes: number of classes (not used)
+        :type classes: int
         :param kwargs: keyword arguments for torch.nn.CrossEntropyLoss
         :type kwargs: dict
         :return: Cross Entropy loss
@@ -92,18 +92,19 @@ class CWLoss(torch.nn.Module):
     p_req = True
     max_obj = False
 
-    def __init__(self, num_classes, c=1.0, k=0.0):
+    def __init__(self, classes, c=1.0, k=0.0):
         """
-        This method instantiates a CWLoss object. It accepts three arguments:
-        (1) norm, the lp-norm to use, (2) c, which emphasizes optimizing
-        adversarial goals over the introduced distortion, and (3) k, which
-        controls how far adversarial examples are pushed across the decision
-        boundary (as measured through the logit differences of the yth logit
-        and the next largest logit). Finally, a reference to c is saved and
-        exposed as an optimizable hyperparameter.
+        This method instantiates a CWLoss object. It accepts four arguments:
+        (1) the number of classes (so that logit differences can be computed
+        accurately) (2) norm, the lp-norm to use, (3) c, which emphasizes
+        optimizing adversarial goals over the introduced distortion, and (4) k,
+        which controls how far adversarial examples are pushed across the
+        decision boundary (as measured through the logit differences of the yth
+        logit and the next largest logit). Finally, a reference to c is saved
+        and exposed as an optimizable hyperparameter.
 
         :param num_classses: number of classes
-        :type num_classes: int
+        :type classes: int
         :param norm: lp-space to project gradients into
         :type norm: supported ord arguments in torch linalg.vector_norm function
         :param c: importance of misclassification over imperceptability
@@ -114,7 +115,7 @@ class CWLoss(torch.nn.Module):
         :rtype: CWLoss object
         """
         super().__init__()
-        self.num_classes = num_classes
+        self.classes = classes
         self.c = torch.tensor((c,))
         self.k = k
         self.hparam = ("c", self.c)
@@ -147,8 +148,8 @@ class CWLoss(torch.nn.Module):
         logit difference between the true class and the maximum logit not equal
         to the true class. Moreover, if attack parameters require a saliency
         map (detected via a shape mismatch between the pertrubation vector and
-        the model logts), the l2-norm vector is expanded by a factor c (where c
-        is the number of classes).
+        the model logits), the l2-norm vector is expanded by a factor c (where
+        c is the number of classes).
 
         :param logits: the model logits
         :type logits: torch Tensor object (n, c)
@@ -164,7 +165,7 @@ class CWLoss(torch.nn.Module):
         l2 = self.p.norm(dim=1).repeat_interleave(logits.size(0) // self.p.size(0))
 
         # compute logit differences
-        y_hot = torch.nn.functional.one_hot(y, num_classes=self.num_classes).bool()
+        y_hot = torch.nn.functional.one_hot(y, num_classes=self.classes).bool()
         yth_logit = logits.masked_select(y_hot)
         max_logit, _ = logits.masked_select(~y_hot).view(-1, logits.size(1) - 1).max(1)
         log_diff = torch.clamp(yth_logit.sub(max_logit), min=-self.k)
@@ -201,15 +202,21 @@ class DLRLoss(torch.nn.Module):
     p_req = False
     max_obj = True
 
-    def __init__(self, **kwargs):
+    def __init__(self, classes, **kwargs):
         """
-        This method instantiates an IdentityLoss object. It accepts no
-        arguments.
+        This method instantiates an IdentityLoss object. It accepts the number
+        of classes (so that logit differences can be computed accurately).
+        Notably, the denominator in the loss above is set to 1 for binary
+        classification.
 
+        :param classses: number of classes
+        :type classes: int
         :return: Identity loss
         :rtype: IdentityLoss object
         """
         super().__init__()
+        self.classes = classes
+        self.d = lambda x: x[:, 0].sub(x[:, 2]) if classes > 2 else torch.tensor(1.0)
         return None
 
     def forward(self, logits, y, yt=None, minimum=1e-8):
@@ -217,8 +224,8 @@ class DLRLoss(torch.nn.Module):
         This method computes the loss described above. Specifically, it
         computes the division of: (1) the logit difference between the yth
         logit and largest non-yth logit, and (2) the difference between the
-        largest logit and 3rd largest logit. Notably, for binary classification
-        tasks the 2nd largest logit is returned.
+        largest logit and 3rd largest logit (when the number of classes is
+        greater than three, otherwise 1 is returned).
 
         :param logits: the model logits
         :type logits: torch Tensor object (n, c)
@@ -233,15 +240,15 @@ class DLRLoss(torch.nn.Module):
         """
 
         # compute logit differences
-        y_hot = torch.nn.functional.one_hot(y).bool()
+        y_hot = torch.nn.functional.one_hot(y, num_classes=self.classes).bool()
         yth_logit = logits.masked_select(y_hot)
         max_logit, _ = logits.masked_select(~y_hot).view(-1, logits.size(1) - 1).max(1)
         log_diff = yth_logit.sub(max_logit)
 
         # compute ordered logit differences
         log_desc = logits.sort(dim=1, descending=True).values
-        pi_diff = log_desc[:, 0].sub(log_desc[:, min(2, logits.size(1) - 1)])
-        loss = -(log_diff.div(pi_diff).clamp_(minimum))
+        pi_diff = self.d(log_desc)
+        loss = -(log_diff.div(pi_diff.clamp_(minimum)))
         if loss.requires_grad:
             self.loss, self.acc = record(loss, logits, y, y if yt is None else yt)
         return loss
