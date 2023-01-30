@@ -16,7 +16,7 @@ import torch  # Tensors and Dynamic neural networks in Python with strong GPU ac
 # check if jsma "x_org proj" helps when using backwardsgd
 # find source of extreme slow down
 # convert to as many in-place operations as possible
-# write reinit methods
+# check verbosity is all working again
 
 
 class Adversary:
@@ -153,10 +153,10 @@ class Adversary:
         :rtype: generator of torch Tensor objects (n, m)
         """
         lb, ub = torch.tensor(self.hparam_bounds).repeat(y.numel(), 1).unbind(1)
-        for h in range(self.hparam_steps):
+        for h in range(1, self.hparam_steps + 1):
             p = self.params["attack"].craft(x, y, b)
             self.verbose and print(
-                f"On hyperparameter iteration {h + 1} of {self.hparam_steps}...",
+                f"On hyperparameter iteration {h} of {self.hparam_steps}...",
                 f"({h / self.hparam_steps:.1%})",
             )
             success = self.hparam_update(x, p, y)
@@ -189,9 +189,9 @@ class Adversary:
         b = torch.full_like(x, torch.inf)
         b[self.misclassified(x, torch.zeros_like(x), y)] = 0
         for r in range(self.num_restarts):
-            self.num_restarts > 1 and self.verbose and print(
-                f"On restart iteration {r + 1} of {self.num_restarts + 1}...",
-                f"({r / self.num_restarts:.1%})",
+            r > 0 and self.verbose and print(
+                f"On restart iteration {r} of {self.num_restarts - 1}...",
+                f"({r / (self.num_restarts - 1):.1%})",
             )
 
             # store the best adversarial perturbations seen thus far
@@ -628,11 +628,11 @@ class Attack:
 
 
 def attack_builder(
-    alpha=None,
-    epochs=None,
-    early_termination=None,
-    epsilon=None,
-    model=None,
+    alpha,
+    epochs,
+    early_termination,
+    epsilon,
+    model,
     optimizers=(
         optimizer.Adam,
         optimizer.BackwardSGD,
@@ -681,15 +681,30 @@ def attack_builder(
     :type early_termination: bool
     :param epochs: number of optimization steps to perform
     :type epochs: int
-    :param epsilon: lp-norm ball threat model
-    :type epsilon: float
+    :param epsilon: lp-norm ball threat model(s)
+    :type epsilon: float or tuple of floats
     :param model: neural network
+    :type model: dlm LinearClassifier-inherited object
+    :param optimizers: optimizers to consider
+    :type optimizers: tuple of optimizer module classes
+    :param random_starts: random start strategies to consider
+    :type random_starts: tuple of traveler module classes
+    :param losses: losses to consider
+    :type losses: tuple of loss module classes
+    :param norms: lp-norms to consider
+    :type norms: tuple of surface module functions
+    :param saliency_maps: saliency maps to consider
+    :type saliency_maps: tuple of surface module callables
     :param verbosity: print attack statistics every verbosity%
     :type verbosity: float
-    :type model: dlm LinearClassifier-inherited object
     :return: a generator yielding attack combinations
     :rtype: generator of Attack objects
     """
+
+    # create epsilon mapping
+    ns = (surface.l0, surface.l2, surface.linf)
+    eps = epsilon if type(epsilon) is tuple else itertools.repeat(epsilon)
+    lp = {n: e for n, e in zip(ns, eps)}
 
     # generate combinations of components and instantiate Attack objects
     num_attacks = (
@@ -717,7 +732,7 @@ def attack_builder(
             alpha=alpha,
             early_termination=early_termination,
             epochs=epochs,
-            epsilon=epsilon,
+            epsilon=lp[norm],
             loss_func=loss_func,
             model=model,
             norm=norm,
@@ -728,9 +743,7 @@ def attack_builder(
         )
 
 
-def apgdce(
-    alpha=None, epochs=None, epsilon=None, model=None, num_restarts=3, verbosity=1
-):
+def apgdce(alpha, epochs, epsilon, model, num_restarts=3, verbosity=1):
     """
     This function serves as an alias to build Auto-PGD with Cross-Entropy loss
     (APGD-CE), as shown in https://arxiv.org/abs/2003.01690. Specifically,
@@ -774,9 +787,7 @@ def apgdce(
     )
 
 
-def apgddlr(
-    alpha=None, epochs=None, epsilon=None, model=None, num_restarts=3, verbosity=1
-):
+def apgddlr(alpha, epochs, epsilon, model, num_restarts=3, verbosity=1):
     """
     This function serves as an alias to build Auto-PGD with the Difference of
     Logits Ratio loss (APGD-DLR), as shown in https://arxiv.org/abs/2003.01690.
@@ -823,7 +834,7 @@ def apgddlr(
     )
 
 
-def bim(alpha=None, epochs=None, epsilon=None, model=None, verbosity=1):
+def bim(alpha, epochs, epsilon, model, verbosity=1):
     """
     This function serves as an alias to build the Basic Iterative Method (BIM),
     as shown in (https://arxiv.org/pdf/1611.01236.pdf) Specifically, BIM: uses
@@ -861,13 +872,7 @@ def bim(alpha=None, epochs=None, epsilon=None, model=None, verbosity=1):
 
 
 def cwl2(
-    alpha=None,
-    epochs=None,
-    epsilon=None,
-    model=None,
-    hparam_bounds=(0, 1e10),
-    hparam_steps=9,
-    verbosity=1,
+    alpha, epochs, epsilon, model, hparam_bounds=(0, 1e10), hparam_steps=9, verbosity=1
 ):
     """
     This function serves as an alias to build Carlini-Wagner l₂ (CW-L2), as
@@ -918,7 +923,7 @@ def cwl2(
     )
 
 
-def df(alpha=None, epochs=None, epsilon=None, model=None, verbosity=1):
+def df(alpha, epochs, epsilon, model, verbosity=1):
     """
     This function serves as an alias to build DeepFool (DF), as shown in
     (https://arxiv.org/pdf/1511.04599.pdf) Specifically, DF: uses the
@@ -955,7 +960,7 @@ def df(alpha=None, epochs=None, epsilon=None, model=None, verbosity=1):
     )
 
 
-def fab(alpha=None, epochs=None, epsilon=None, model=None, num_restarts=2, verbosity=1):
+def fab(alpha, epochs, epsilon, model, num_restarts=2, verbosity=1):
     """
     This function serves as an alias to build Fast Adaptive Boundary (FAB), as
     shown in (https://arxiv.org/pdf/1907.02044.pdf) Specifically, FAB: uses the
@@ -1001,7 +1006,7 @@ def fab(alpha=None, epochs=None, epsilon=None, model=None, num_restarts=2, verbo
     )
 
 
-def jsma(alpha=None, epochs=None, epsilon=None, model=None, verbosity=1):
+def jsma(alpha, epochs, epsilon, model, verbosity=1):
     """
     This function serves as an alias to build the Jacobian-based Saliency Map
     Approach (JSMA), as shown in (https://arxiv.org/pdf/1511.07528.pdf)
@@ -1037,7 +1042,7 @@ def jsma(alpha=None, epochs=None, epsilon=None, model=None, verbosity=1):
     )
 
 
-def pgd(alpha=None, epochs=None, epsilon=None, model=None, verbosity=1):
+def pgd(alpha, epochs, epsilon, model, verbosity=1):
     """
     This function serves as an alias to build Projected Gradient Descent (PGD),
     as shown in (https://arxiv.org/pdf/1706.06083.pdf) Specifically, PGD: uses
