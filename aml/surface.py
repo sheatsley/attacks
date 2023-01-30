@@ -185,7 +185,7 @@ class DeepFoolSaliency:
 
     jac_req = True
 
-    def __init__(self, q, num_classes, **kwargs):
+    def __init__(self, p, classes, **kwargs):
         """
         This method instantiates a DeepFoolSaliency object. As described above,
         ith class is defined as the minimum logit difference scaled by the
@@ -193,14 +193,14 @@ class DeepFoolSaliency:
         saves q as an attribute as well as the number of classes (so that the
         yth gradient can be retrieved correctly with small batches).
 
-        :param q: the lp-norm to apply
+        :param p: the lp-norm to apply
         :return: a DeepFool saliency map
-        :param num_classes: number of classes
-        :type num_classes: int
+        :param classes: number of classes
+        :type classes: int
         :rtype: DeepFoolSaliency object
         """
-        self.q = q
-        self.num_classes = num_classes
+        self.q = 1 if p == torch.inf else p
+        self.classes = classes
         return None
 
     def __call__(self, g, loss, y, p, minimum=1e-4, **kwargs):
@@ -231,7 +231,7 @@ class DeepFoolSaliency:
         """
 
         # retrieve yth gradient and logit
-        y_hot = torch.nn.functional.one_hot(y, num_classes=self.num_classes).bool()
+        y_hot = torch.nn.functional.one_hot(y, num_classes=self.classes).bool()
         yth_grad = g[y_hot].unsqueeze(1)
         yth_logit = loss[y_hot].unsqueeze(1)
 
