@@ -16,6 +16,7 @@ import torch  # Tensors and Dynamic neural networks in Python with strong GPU ac
 # check if jsma "x_org proj" helps when using backwardsgd
 # find source of extreme slow down
 # convert to as many in-place operations as possible
+# write reinit methods
 
 
 class Adversary:
@@ -385,16 +386,12 @@ class Attack:
             ("S", "I", "Id", "J", "0"): "JSMA",
         }
         self.name = name_map.get(name, "-".join(name))
-        # if len(self.name) > 8 and self.name[0] in {"B", "S"} and self.name[7] == "D":
-        #    alpha = 1
         self.params = {"α": alpha, "ε": epsilon, "epochs": epochs, "min dist": self.et}
 
         # instantiate traveler, surface, and necessary subcomponents
-        num_classes = model.params["classes"]
-        saliency_map = saliency_map(
-            num_classes=num_classes, q=1 if self.lp == torch.inf else self.lp
-        )
-        loss_func = loss_func(num_classes=num_classes)
+        classes = model.params["classes"]
+        saliency_map = saliency_map(classes=classes, q=self.lp)
+        loss_func = loss_func(classes=classes)
         custom_opt_params = {
             "atk_loss": loss_func,
             "epochs": epochs,
@@ -506,8 +503,6 @@ class Attack:
         self.results = self.results.groupby(self.results.index).sum()
         self.batch_results[["accuracy", "l0", "l2", "linf"]] /= y.numel()
         self.results[["accuracy", "l0", "l2", "linf"]] /= y.numel()
-        # if self.results.accuracy[100] > 0.5:
-        #    breakpoint()
         return o.nan_to_num_(nan=None, posinf=0)
 
     def l0(self, p):
@@ -673,8 +668,8 @@ def attack_builder(
         Surface Components:
         Loss: Carlini-Wagner, Categorical Cross-Entropy,
                 Difference of Logits Ratio, and Identity
-        Norm: l0, l2, and l∞
         Saliency map: DeepFool, Identity, and Jacobian
+        Norm: l0, l2, and l∞
 
     We expose these supported components as arguments above for ease of
     instantiating a subset of the total combination space. Moreover, we also
@@ -706,17 +701,17 @@ def attack_builder(
     )
     print(f"Yielding {num_attacks} attacks...")
     for (
-        loss_func,
         norm,
-        optimizer_alg,
-        random_start,
         saliency_map,
+        loss_func,
+        random_start,
+        optimizer_alg,
     ) in itertools.product(
-        losses,
         norms,
-        optimizers,
-        random_starts,
         saliency_maps,
+        losses,
+        random_starts,
+        optimizers,
     ):
         yield Attack(
             alpha=alpha,
