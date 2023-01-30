@@ -390,7 +390,7 @@ class Attack:
 
         # instantiate traveler, surface, and necessary subcomponents
         classes = model.params["classes"]
-        saliency_map = saliency_map(classes=classes, q=self.lp)
+        saliency_map = saliency_map(classes=classes, p=self.lp)
         loss_func = loss_func(classes=classes)
         custom_opt_params = {
             "atk_loss": loss_func,
