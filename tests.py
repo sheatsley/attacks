@@ -76,7 +76,7 @@ class BaseTest(unittest.TestCase):
         alpha=0.01,
         dataset="phishing",
         debug=False,
-        epochs=30,
+        epochs=100,
         norm=0.15,
         seed=5115,
         verbose=False,
@@ -1549,7 +1549,10 @@ class SpecialTests(BaseTest):
         :return: None
         :rtype: NoneType
         """
-        p = self.atk_params | {"epochs": epochs, "epsilon": self.l2}
+        p = self.atk_params | {
+            "epochs": epochs,
+            "epsilon": (self.l0, self.l2, self.linf),
+        }
         attacks = tuple(
             attack
             for et in (True, False)
@@ -1565,7 +1568,7 @@ class SpecialTests(BaseTest):
                 attack.craft(self.x[:samples], self.y[:samples])
         return None
 
-    def test_all_performance(self, epochs=1000, min_norm=True, min_acc=0.1, norm=0.3):
+    def test_all_performance(self, min_norm=True, min_acc=0.1):
         """
         This method ostensibly performs a functional test for *all* component
         combinations. This should be considered the most computationally
@@ -1588,25 +1591,14 @@ class SpecialTests(BaseTest):
         :return: None
         :rtype: NoneType
         """
-        alpha, epochs, model, l0, l2, linf = (
-            self.atk_params["alpha"],
-            min(epochs, self.atk_params["epochs"]),
-            self.atk_params["model"],
-            int(self.l0_max * norm) + 1,
-            self.l2_max * norm,
-            norm,
-        )
-        ns = zip((l0, l2, linf), (aml.surface.l0, aml.surface.l2, aml.surface.linf))
         attacks = tuple(
             attack
-            for epsilon, norm in ns
             for attack in aml.attacks.attack_builder(
-                alpha=alpha,
-                epochs=epochs,
+                alpha=self.atk_params["alpha"],
+                epochs=self.atk_params["epochs"],
                 early_termination=min_norm,
-                epsilon=epsilon,
-                model=model,
-                norms=(norm,),
+                epsilon=(self.l0, self.l2, self.linf),
+                model=self.atk_params["model"],
                 verbosity=0,
             )
         )
@@ -1632,27 +1624,33 @@ class SpecialTests(BaseTest):
             self, attacks[name].__init__(**self.atk_params | params)
         )
 
-    def test_known_coverage(self, samples=10, epochs=3):
+    def test_known_coverage(self, samples=10):
         """
         This method is a moderate coverage test. It calls all of the known
         attack helper functions in the aml attacks, i.e., APGD-CE, APGD-DLR,
         BIM, CW-L2, DF, FAB, JSMA, and PGD. With these attacks, all components
         are individually tests (but complex interactions may be missed).
-        Naturally, to make this a reasonable test to run regularly, we attack a
-        handful of samples for a couple iterations, per attack. This test is
-        considered successful if no exceptions are raised.
+        Naturally, to make this a reasonable test to run regularly, attacks
+        craft adversarial examples from a small handful of samples. This test
+        is considered successful if no exceptions are raised.
 
         :param samples: number of samples to attack
         :type samples: int
-        :param epochs: number of attack iterations
-        :type epochs: int
         :return: None
         :rtype: NoneType
         """
-        e = {"epochs": epochs}
-        atks = (a.__init__(**self.atk_params | e) for a in self.attacks.values())
-        for i, atk in enumerate(atks, start=1):
-            with self.subTest(Attack=f"{i}: {atk.name}"):
-                print(f"Testing {atk.name:<10}... {i}/{len(atks)}", end="\r")
-                atk.craft(self.x[:samples], self.y[:samples])
+        attacks = (
+            aml.attacks.apgdce(epsilon=self.linf, **self.atk_params),
+            aml.attacks.apgddlr(epsilon=self.linf, **self.atk_params),
+            aml.attacks.bim(epsilon=self.linf, **self.atk_params),
+            aml.attacks.cwl2(epsilon=self.l2, **self.atk_params),
+            aml.attacks.df(epsilon=self.l2, **self.atk_params),
+            aml.attacks.fab(epsilon=self.l2, **self.atk_params),
+            aml.attacks.jsma(epsilon=self.l0, **self.atk_params),
+            aml.attacks.pgd(epsilon=self.linf, **self.atk_params),
+        )
+        for i, attack in enumerate(attacks, start=1):
+            with self.subTest(Attack=f"{i}: {attack.name}"):
+                print(f"Testing {attack.name:<10}... {i}/{len(attacks)}", end="\r")
+                attack.craft(self.x[:samples], self.y[:samples])
         return None
