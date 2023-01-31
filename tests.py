@@ -1,9 +1,9 @@
 """
 This module runs attack performance and correctness tests against other AML
 libraries. Specifically, this defines three types of tests: (1) functional, (2)
-semantic, and (3) identity. Details surrounding these tests can be found in the
-respecetive classes: FunctionalTests, SemanticTests, and IdentityTests. Aside
-from these standard tests, special tests can be found in the SpecialTests
+performance, and (3) identity. Details surrounding these tests can be found in
+the respecetive classes: FunctionalTests, PerformanceTests, and IdentityTests.
+Aside from these standard tests, special tests can be found in the SpecialTests
 class, which evaluate particulars of the implementation in the Space of
 Adversarial Strategies (https://arxiv.org/pdf/2209.04521.pdf).
 Authors: Ryan Sheatsley and Blaine Hoak
@@ -21,7 +21,6 @@ import unittest  # Unit testing framework
 import torch  # Tensors and Dynamic neural networks in Python with strong GPU acceleration
 
 # TODO
-# get all functional tests passing
 # determine tweaks needed to make some attacks work (alpha for l2 df, binary search on c for linf cw df)
 
 
@@ -85,7 +84,7 @@ class BaseTest(unittest.TestCase):
         This function initializes the setup necessary for all test cases within
         this module. Specifically, this method retrieves data, processes it,
         trains a model, instantiates attacks, imports availabe external
-        libraries (used for semantic and identity tests), loads PyTorch in
+        libraries (used for performance and identity tests), loads PyTorch in
         debug mode if desired (to assist debugging autograd), and sets the seed
         used to make attacks with randomized components deterministic.
 
@@ -153,7 +152,7 @@ class BaseTest(unittest.TestCase):
             else dlm.MLPClassifier(**template.MLPClassifier)
         )
 
-        # train (or load) model and save craftset accuracy (for semantic tests)
+        # train (or load) model and save craftset accuracy (for performance tests)
         try:
             path = pathlib.Path(f"/tmp/aml_trained_{dataset}_model.pkl")
             with path.open("rb") as f:
@@ -189,17 +188,16 @@ class BaseTest(unittest.TestCase):
             "alpha": alpha,
             "epochs": epochs,
             "model": cls.model,
+            "statistics": verbose,
             "verbosity": 0.1 if verbose else 1,
         }
 
-        # df & fab alpha must be >= 1 and cw must have at least 300 epochs
+        # alpha for df and fab
         cls.attacks = {
             "apgdce": aml.attacks.apgdce(**cls.atk_params | {"epsilon": cls.linf}),
             "apgddlr": aml.attacks.apgddlr(**cls.atk_params | {"epsilon": cls.linf}),
             "bim": aml.attacks.bim(**cls.atk_params | {"epsilon": cls.linf}),
-            "cwl2": aml.attacks.cwl2(
-                **cls.atk_params | {"epochs": max(300, epochs), "epsilon": cls.l2}
-            ),
+            "cwl2": aml.attacks.cwl2(**cls.atk_params | {"epsilon": cls.l2}),
             "df": aml.attacks.df(**cls.atk_params | {"alpha": 1, "epsilon": cls.l2}),
             "fab": aml.attacks.fab(**cls.atk_params | {"alpha": 1, "epsilon": cls.l2}),
             "jsma": aml.attacks.jsma(**cls.atk_params | {"epsilon": cls.l0}),
@@ -212,12 +210,12 @@ class BaseTest(unittest.TestCase):
         frameworks = ", ".join(cls.available)
         cls.art_classifier = (
             cls.build_art_classifier()
-            if cls in (IdentityTests, SemanticTests) and "art" in cls.available
+            if cls in (IdentityTests, PerformanceTests) and "art" in cls.available
             else None
         )
         cls.fb_classifier = (
             cls.build_fb_classifier()
-            if cls in (IdentityTests, SemanticTests) and "foolbox" in cls.available
+            if cls in (IdentityTests, PerformanceTests) and "foolbox" in cls.available
             else None
         )
         print(
@@ -345,7 +343,7 @@ class BaseTest(unittest.TestCase):
             self.linf,
             self.atk_params["alpha"],
             self.atk_params["epochs"],
-            self.attacks["apgdce"].params["num_restarts"],
+            self.attacks["apgdce"].params["num_restarts"] + 1,
             self.attacks["apgdce"].traveler.optimizer.param_groups[0]["rho"],
         )
         art_adv = ta_adv = None
@@ -419,7 +417,7 @@ class BaseTest(unittest.TestCase):
             self.linf,
             self.atk_params["alpha"],
             self.atk_params["epochs"],
-            self.attacks["apgddlr"].params["num_restarts"],
+            self.attacks["apgddlr"].params["num_restarts"] + 1,
             self.attacks["apgddlr"].traveler.optimizer.param_groups[0]["rho"],
         )
         art_adv = ta_adv = None
@@ -594,7 +592,10 @@ class BaseTest(unittest.TestCase):
         with l₂ norm) (https://arxiv.org/pdf/1608.04644.pdf). The supported
         frameworks for CW-L2 include AdverTorch, ART, CleverHans, Foolbox, and
         Torchattacks. Notably, Torchattacks does not explicitly support binary
-        searching on c (it expects searching manually).
+        searching on c (it expects searching manually). Notably, while our
+        implementation shows competitive performance with low iterations, other
+        implementations (sans ART) require a substantial number of additional
+        iterations, so the minimum number of steps is set to be at least 300.
 
         :return: CW-L2 adversarial examples
         :rtype: tuple of torch Tensor objects (n, m)
@@ -613,7 +614,7 @@ class BaseTest(unittest.TestCase):
             self.attacks["cwl2"].surface.loss.k,
             self.atk_params["alpha"],
             self.attacks["cwl2"].hparam_steps,
-            self.attacks["cwl2"].epochs,
+            max(self.atk_params["epochs"], 300),
             self.attacks["cwl2"].surface.loss.c.item(),
         )
         at_adv = art_adv = ch_adv = fb_adv = ta_adv = None
@@ -795,7 +796,7 @@ class BaseTest(unittest.TestCase):
         """
         (model, n_restarts, n_iter, eps, alpha, eta, beta, n_classes) = (
             self.atk_params["model"],
-            self.attacks["fab"].params["num_restarts"],
+            self.attacks["fab"].params["num_restarts"] + 1,
             self.atk_params["epochs"],
             self.l2,
             self.attacks["fab"].traveler.optimizer.param_groups[0]["alpha_max"],
@@ -1121,7 +1122,7 @@ class FunctionalTests(BaseTest):
     def test_cwl2(self):
         """
         This method performs a functional test for CW-L2 (Carlini-Wagner with
-        l₂ norm) (https://arxiv.org/pdf/1608.04644.pdf).
+        l2 norm) (https://arxiv.org/pdf/1608.04644.pdf).
 
         :return: None
         :rtype: NoneType
@@ -1314,17 +1315,18 @@ class IdentityTests(BaseTest):
         return self.identity_test(*self.pgd())
 
 
-class SemanticTests(BaseTest):
+class PerformanceTests(BaseTest):
     """
-    The following class implements semantic tests. Semantic correctness tests
-    are more sophisticated than functional tests, in that they compare the the
+    The following class implements performance tests. Performance tests are
+    more sophisticated than functional tests, in that they compare the the
     performance of adversarial examples produced by known attacks within aml to
     those implemented in other adversarial machine learning frameworks. Attacks
-    in aml are determined to be semantically correct if the produced
-    adversarial examples are within no worse than 1% of the performance of
-    adversarial examples produced by other frameworks. Performance is defined
-    as one minus the l2-norm of normalized decrease in model accuracy and
-    normalized lp-norm.
+    in aml are determined to be performant if the produced adversarial examples
+    are within no worse than 1% of the performance of adversarial examples
+    produced by other frameworks. Performance is defined as one minus the
+    l2-norm of normalized decrease in model accuracy and normalized lp-norm (In
+    other words, the closer the ratio of model accuracy over lp-norm to the
+    origin, the better the attack performance).
 
     The following frameworks are supported:
         AdverTorch (https://github.com/BorealisAI/advertorch)
@@ -1343,31 +1345,36 @@ class SemanticTests(BaseTest):
         JSMA (Jacobian Saliency Map Approach) (https://arxiv.org/pdf/1511.07528.pdf)
         PGD (Projected Gradient Descent) (https://arxiv.org/pdf/1706.06083.pdf)
 
-    :func:`semantic_test`: performs a semantic test
-    :func:`test_apgdce`: semantic test for APGD-CE
-    :func:`test_apgddlr`: semantic test for APGD-DLR
-    :func:`test_bim`: semantic test for BIM
-    :func:`test_cwl2`: semantic test for CW-L2
-    :func:`test_df`: semantic test for DF
-    :func:`test_fab`: semantic test for FAB
-    :func:`test_jsma`: semantic test for JSMA
-    :func:`test_pgd`: semantic test for PGD
+    :func:`performance_test`: performs a performance test
+    :func:`test_apgdce`: performance test for APGD-CE
+    :func:`test_apgddlr`: performance test for APGD-DLR
+    :func:`test_bim`: performance test for BIM
+    :func:`test_cwl2`: performance test for CW-L2
+    :func:`test_df`: performance test for DF
+    :func:`test_fab`: performance test for FAB
+    :func:`test_jsma`: performance test for JSMA
+    :func:`test_pgd`: performance test for PGD
     """
 
-    def semantic_test(self, attack, fws, max_perf_degrad=0.01):
+    def performance_test(self, attack, fws, max_perf_degrad=0.01):
         """
-        This method performs a semantic test for a given attack. This sets the
-        maximum allowable performance degration between adversarial examples
-        produced by aml and other frameworks such that the aml attacks are
-        considered to be "semantically" correct. Performance (denoted as 𝒫) is
+        This method performs a performance test for a given attack. This sets
+        the maximum allowable performance degration between adversarial
+        examples produced by aml and other frameworks such that the aml attacks
+        are considered to be "performant". Performance (denoted as 𝒫) is
         measured as the one minus the l2-norm of normalized decrease in model
         accuracy and normalized lp-norm, where l0 is normalized by the total
         number of features, l2 by the square root of the total number of
-        features, and l∞ need not be normalized since, during crafting,
-        feautres are always between 0 and 1. Notably, if aml attacks are
-        *better* than other frameworks by greater than the maximum allowable
-        performance degradation, the tests still pass (failure can only occurs
-        if aml attacks are worse).
+        features, and l∞ is not normalized (If l∞ is to be normalized, the two
+        options are either (1) the smallest feature range, which is always
+        assumed to be 1, or (2) the largest feature range, which in practice is
+        often slightly larger than 1 and only applicable for a small handful of
+        features; we opt for (1) here given that most l∞ attacks consume the
+        entire budget anyways, yielding no meaningful difference across the two
+        normalization schema). Notably, if aml attacks are *better* than other
+        frameworks by greater than the maximum allowable performance
+        degradation, the tests still pass (failure can only occurs if aml
+        attacks are worse).
 
         :param adversary: attack to test
         :type adversary: aml Adversary object
@@ -1430,68 +1437,67 @@ class SemanticTests(BaseTest):
 
     def test_apgdce(self):
         """
-        This method performs a semantic test for APGD-CE (Auto-PGD with CE
+        This method performs a performance test for APGD-CE (Auto-PGD with CE
         loss) (https://arxiv.org/pdf/2003.01690.pdf).
 
         :return: None
         :rtype: NoneType
         """
-        return self.semantic_test(*self.apgdce())
+        return self.performance_test(*self.apgdce())
 
     def test_apgddlr(self):
         """
-        This method performs a semantic test for APGD-DLR (Auto-PGD with DLR
+        This method performs a performance test for APGD-DLR (Auto-PGD with DLR
         loss) (https://arxiv.org/pdf/2003.01690.pdf). Notably, DLR loss is
         undefined for other frameworks when there are only two classes.
 
         :return: None
         :rtype: NoneType
         """
-        return self.semantic_test(*self.apgddlr())
+        return self.performance_test(*self.apgddlr())
 
     def test_bim(self):
         """
-        This method performs a semantic test for BIM (Basic Iterative Method)
-        (https://arxiv.org/pdf/1611.01236.pdf).
+        This method performs a performance test for BIM (Basic Iterative
+        Method) (https://arxiv.org/pdf/1611.01236.pdf).
 
         :return: None
         :rtype: NoneType
         """
-        return self.semantic_test(*self.bim())
+        return self.performance_test(*self.bim())
 
     def test_cwl2(self):
         """
-        This method performs a semantic test for CW-L2 (Carlini-Wagner with l₂
-        norm) (https://arxiv.org/pdf/1608.04644.pdf).
-
+        This method performs a performance test for CW-L2 (Carlini-Wagner with
+        l2 norm) (https://arxiv.org/pdf/1608.04644.pdf).
         :return: None
         :rtype: NoneType
         """
-        return self.semantic_test(*self.cwl2())
+        return self.performance_test(*self.cwl2())
 
     def test_df(self):
         """
-        This method performs a semantic test for DF (DeepFool)
+        This method performs a performance test for DF (DeepFool)
         (https://arxiv.org/pdf/1611.01236.pdf).
 
         :return: None
         :rtype: NoneType
         """
-        return self.semantic_test(*self.df())
+        return self.performance_test(*self.df())
 
     def test_fab(self):
         """
-        This method performs a semantic test for FAB (Fast Adaptive Boundary)
-        (https://arxiv.org/pdf/1907.02044.pdf).
+        This method performs a performance test for FAB (Fast Adaptive
+        Boundary) (https://arxiv.org/pdf/1907.02044.pdf).
 
         :return: None
         :rtype: NoneType
         """
-        return self.semantic_test(*self.fab())
+        return self.performance_test(*self.fab())
 
     def test_jsma(self):
         """
-        This method performs a semantic test for JSMA (Jacobian Saliency Map
+        This method performs a performance test for JSMA (Jacobian Saliency Map
         Approach) (https://arxiv.org/pdf/1511.07528.pdf). Notably, the JSMA
         traditionally can only perturb a feature once, we override the value of
         alpha to be 1 so that tests are passed.
@@ -1500,20 +1506,20 @@ class SemanticTests(BaseTest):
         :rtype: NoneType
         """
         attack, fws = self.jsma()
-        return self.semantic_test(
+        return self.performance_test(
             aml.attacks.jsma(**self.atk_params | {"alpha": 1, "epsilon": self.l0}),
             fws,
         )
 
     def test_pgd(self):
         """
-        This method performs a semantic test for PGD (Projected Gradient
+        This method performs a performance test for PGD (Projected Gradient
         Descent) (https://arxiv.org/pdf/1706.06083.pdf).
 
         :return: None
         :rtype: NoneType
         """
-        return self.semantic_test(*self.pgd())
+        return self.performance_test(*self.pgd())
 
 
 class SpecialTests(BaseTest):
@@ -1568,7 +1574,7 @@ class SpecialTests(BaseTest):
                 attack.craft(self.x[:samples], self.y[:samples])
         return None
 
-    def test_all_performance(self, min_norm=True, min_acc=0.1):
+    def test_all_performance(self, min_norm=False, min_acc=0.1):
         """
         This method ostensibly performs a functional test for *all* component
         combinations. This should be considered the most computationally
@@ -1595,8 +1601,8 @@ class SpecialTests(BaseTest):
             attack
             for attack in aml.attacks.attack_builder(
                 alpha=self.atk_params["alpha"],
-                epochs=self.atk_params["epochs"],
                 early_termination=min_norm,
+                epochs=self.atk_params["epochs"],
                 epsilon=(self.l0, self.l2, self.linf),
                 model=self.atk_params["model"],
                 verbosity=0,
@@ -1604,7 +1610,7 @@ class SpecialTests(BaseTest):
         )
         return FunctionalTests.functional_test(self, attacks, min_acc)
 
-    def test_attack_performance(self, name="M-I-CW-D-∞"):
+    def test_attack_performance(self, name="S-I-CE-J-0"):
         """
         This method serves to help debug individual attacks. Given the attack
         name, it will instantiate an attack object with the associated
@@ -1617,12 +1623,14 @@ class SpecialTests(BaseTest):
         :return: None
         :rtype: NoneType
         """
-        norms = {"0": self.l0, "2": self.l2, "∞": self.linf}
-        params = {"epsilon": norms[name[-1]]}
-        attacks = {attack.name: attack for attack in aml.attacks.attack_builder()}
-        return FunctionalTests.functional_test(
-            self, attacks[name].__init__(**self.atk_params | params)
-        )
+        params = self.atk_params | {
+            "epsilon": (self.l0, self.l2, self.linf),
+            "early_termination": True,
+            "statistics": True,
+            "verbosity": 0.1,
+        }
+        atks = {atk.name: atk for atk in aml.attacks.attack_builder(**params)}
+        return FunctionalTests.functional_test(self, (atks[name],))
 
     def test_known_coverage(self, samples=10):
         """
