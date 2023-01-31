@@ -4,7 +4,6 @@ https://arxiv.org/pdf/2209.04521.pdf.
 Authors: Ryan Sheatsley & Blaine Hoak
 Thu June 30 2022
 """
-import aml.traveler as traveler  # PyTorch-based custom optimizers for crafting adversarial examples
 import torch  # Tensors and Dynamic neural networks in Python with strong GPU acceleration
 
 
@@ -22,16 +21,19 @@ class Surface:
     :func:`initialize`: prepares Surface objects to operate over inputs
     """
 
-    def __init__(self, loss, model, norm, saliency_map):
+    def __init__(self, epsilon, loss, model, norm, saliency_map):
         """
         This method instantiates Surface objects with a variety of attributes
         necessary for the remaining methods in this class. Conceputally,
         Surfaces are responsible for producing gradients from inputs, and thus,
-        the following attributes are collected: (1) a PyTorch-based loss object
-        from the loss module, (2) a PyTorch-based model object from dlm
-        (https://github.com/sheatsley/models), (3) the lp-norm to project
-        gradients into, and (4) the saliency map to apply.
+        the following attributes are collected: (1) the lp-based threat model,
+        (2) a PyTorch-based loss object from the loss module, (3) a
+        PyTorch-based model object from dlm
+        (https://github.com/sheatsley/models), (5) the lp-norm to project
+        gradients into, and (6) the saliency map to apply.
 
+        :param epsilon: lp threat model (used for l0 attacks)
+        :type epsilon: float
         :param loss: objective function to differentiate
         :type loss: loss module object
         :param model: feedforward differentiable neural network
@@ -44,6 +46,7 @@ class Surface:
         :rtype: Surface object
         """
         components = (loss, norm, saliency_map)
+        self.epsilon = epsilon
         self.loss = loss
         self.model = model
         self.norm = norm
@@ -103,8 +106,9 @@ class Surface:
         # apply saliency map and lp-norm filter
         smap_args = {"loss": loss, "y": y, "p": p}
         smap_grad = self.saliency_map(grad.view(-1, cj, grad.size(1)), **smap_args)
-        dist = (c.sub(p).abs() for c in self.clip)
-        final_grad = self.norm(smap_grad, dist=dist, max_obj=self.loss.max_obj)
+        dist = (c.sub(p).abs_() for c in self.clip)
+        lp_args = {"dist": dist, "max_obj": self.loss.max_obj, "epsilon": self.epsilon}
+        final_grad = self.norm(smap_grad, **lp_args)
 
         # call closure subroutines and attach grads to the perturbation vector
         [comp.closure(final_grad) for comp in self.closure]
@@ -232,19 +236,19 @@ class DeepFoolSaliency:
 
         # retrieve yth gradient and logit
         y_hot = torch.nn.functional.one_hot(y, num_classes=self.classes).bool()
-        yth_grad = g[y_hot].unsqueeze(1)
-        yth_logit = loss[y_hot].unsqueeze(1)
+        yth_grad = g[y_hot].unsqueeze_(1)
+        yth_logit = loss[y_hot].unsqueeze_(1)
 
         # retrieve all non-yth gradients and logits
         other_grad = g[~y_hot].view(g.size(0), -1, g.size(2))
         other_logits = loss[~y_hot].view(loss.size(0), -1)
 
         # compute ith class
-        grad_diffs = yth_grad.sub(other_grad)
-        logit_diffs = yth_logit.sub(other_logits)
+        grad_diffs = yth_grad.sub_(other_grad)
+        logit_diffs = yth_logit.sub_(other_logits)
         normed_ith_logit_diff, i = (
             logit_diffs.abs()
-            .div(grad_diffs.norm(self.q, dim=2).clamp(minimum))
+            .div(grad_diffs.norm(self.q, dim=2).clamp_(minimum))
             .add_(minimum)
             .topk(1, dim=1, largest=False)
         )
@@ -257,14 +261,13 @@ class DeepFoolSaliency:
 
         # compute projection wrt original input to support BackwardsSGD
         pith_logit_diff = ith_grad_diff.mul(p).sum(1, keepdim=True).add_(ith_logit_diff)
-        ith_grad_diff_norm = ith_grad_diff.norm(self.q, dim=1, keepdim=True)
         self.org_proj = (
-            pith_logit_diff.abs()
-            .div(ith_grad_diff_norm.pow(self.q).clamp(minimum))
+            pith_logit_diff.abs_()
+            .div_(ith_grad_diff.pow(self.q).sum(1, keepdim=True))
             .add_(minimum)
             .mul(ith_grad_diff)
         )
-        return ith_grad_diff.abs()
+        return ith_grad_diff.abs_()
 
     def closure(self, g):
         """
@@ -321,7 +324,6 @@ class IdentitySaliency:
         :return: squeezed gradients of the perturbation vector
         :rtype: torch Tensor object (n, m)
         """
-        self.org_proj = torch.zeros((g.size(0), g.size(2)))
         return g.squeeze_()
 
 
@@ -386,43 +388,45 @@ class JacobianSaliency:
         """
 
         # get yth row and "gather" ith rows by subtracting yth row
-        yth_row = g[torch.arange(g.size(0)), y, :]
-        ith_row = g.sum(1).sub(yth_row)
+        yth = g[torch.arange(g.size(0)), y, :]
+        ith = g.sum(1).sub_(yth)
 
         # compute biased projection & add stability when using unique losses
         self.org_proj = torch.zeros((g.size(0), g.size(2)))
-        ith_row = ith_row.where(
-            ith_row.sum(1, keepdim=True) != 0, yth_row.sign().mul(-1)
-        )
+        ith = ith.where(ith.sum(1, keepdim=True) != 0, yth.sign().mul(-1))
 
         # zero out components whose yth and ith signs are equal and compute product
-        smap = (yth_row.sign() != ith_row.sign()).mul(yth_row).mul(ith_row.abs())
+        smap = (yth.sign() != ith.sign()).float().mul_(yth).mul_(ith.abs_())
         return smap
 
 
-def l0(g, dist, max_obj, **kwargs):
+def l0(g, dist, epsilon, max_obj, top=0.01, **kwargs):
     """
     This function projects gradients into the l0-norm space. Specifically,
     features are scored by the product of their gradients and the distance
     remaining to either the minimum or maximum clipping bounds (depending on
-    the sign of the gradient). Afterwards, the component with the largest
-    magntiude is set to its sign (or top 1% of components, if there are more
-    than 100 features) while all other component gradients are set to zero.
-    Keyword arguments are accepted to provide a homogeneous interface across
-    norm projections.
+    the sign of the gradient). Afterwards, the minimum of the lp threat model
+    and the top% of components (measured by magnitude), are set to their signs,
+    while all other component gradients are set to zero. Keyword arguments are
+    accepted to provide a homogeneous interface across norm projections.
 
     :param g: the gradients of the perturbation vector
     :type g: torch Tensor object (n, m)
     :param dist: distance remaining for the perturbation vector
     :type dist: tuple of torch Tensor objects (n, m)
+    :param epsilon: lp threat model (used for l0 attacks)
+    :type epsilon: float
     :param max_obj: whether the used loss function is to be maximized
     :type max_obj: bool
+    :param top: percentage of features to perturb
+    :type top: float
     :return: gradients projected into the l0-norm space
     :rtype: torch Tensor object (n, m)
     """
+    fix = g.size(1) - max(min(int(g.size(1) * top), epsilon), 1)
     min_clip = g.sign().mul_(-1 if max_obj else 1).eq(1)
     g.mul_(torch.where(min_clip, *dist))
-    bottom_k = g.abs().topk(int(g.size(1) * 0.99), dim=1, largest=False)
+    bottom_k = g.abs().topk(fix, dim=1, largest=False)
     return g.scatter_(dim=1, index=bottom_k.indices, value=0).sign_()
 
 
