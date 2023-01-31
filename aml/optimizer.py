@@ -99,7 +99,7 @@ class BackwardSGD(torch.optim.Optimizer):
                 "lr": lr,
                 "maximize": maximize,
                 "norm": norm,
-                "saliency_map": saliency_map,
+                "smap": saliency_map,
             },
         )
 
@@ -107,9 +107,11 @@ class BackwardSGD(torch.optim.Optimizer):
     def step(self, minimum=1e-8):
         """
         This method applies one optimization step as described above.
-        Specifically, this optimizer: (1) sets ß based on whether samples are
-        misclassified, and (2) steps in the direction of the gradient of the
-        loss with static learning rate η.
+        Specifically, this optimizer: (1) performs a backward step for
+        misclassified inputs parameterized by ß, and (2) steps in the direction
+        of the gradient of the loss with static learning rate η. (2) computes a
+        biased projection between the current gradient of the loss with static
+        learning rate η and the original input (if provided), set by α.
 
         :param minimum: minimum gradient value (to mitigate underflow)
         :type minimum: float
@@ -118,21 +120,21 @@ class BackwardSGD(torch.optim.Optimizer):
         """
         for group in self.param_groups:
             for p in group["params"]:
-                grad, p_grad = (
-                    (p.grad.data, group["saliency_map"].org_proj)
-                    if group["maximize"]
-                    else (-p.grad.data, -group["saliency_map"].org_proj)
-                )
+                lp = group["norm"]
+                loss = group["atk_loss"]
+                grad = p.grad.data
+                p_grad = getattr(group["smap"], "org_proj", torch.zeros_like(grad))
+                grad, p_grad = (grad, p_grad) if group["maximize"] else (-grad, -p_grad)
 
                 # perform a backwardstep step for misclassified inputs
-                misclassified = ~(group["atk_loss"].acc)
+                misclassified = ~loss.acc
                 p[misclassified] = p[misclassified].mul_(group["beta"])
 
                 # compute alpha for biased projection
-                grad_norm = grad.norm(group["norm"], 1, keepdim=True).clamp(minimum)
-                p_grad_norm = p_grad.norm(group["norm"], 1, keepdim=True).clamp(minimum)
-                norm_sum = grad_norm.add(p_grad_norm)
-                alpha = grad_norm.div(norm_sum).clamp(max=group["alpha_max"])
+                grad_norm = grad.norm(lp, dim=1, keepdim=True).clamp_(minimum)
+                p_grad_norm = p_grad.norm(lp, dim=1, keepdim=True).clamp_(minimum)
+                norm_sum = p_grad_norm.add_(grad_norm)
+                alpha = grad_norm.div_(norm_sum).clamp_(max=group["alpha_max"])
 
                 # apply biased projection and update step
                 bias = p_grad.mul_(group["lr"]).mul_(alpha)
