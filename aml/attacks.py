@@ -14,9 +14,6 @@ import torch  # Tensors and Dynamic neural networks in Python with strong GPU ac
 
 # TODO
 # check if jsma "x_org proj" helps when using backwardsgd
-# find source of extreme slow down
-# convert to as many in-place operations as possible
-# check verbosity is all working again
 
 
 class Adversary:
@@ -187,7 +184,7 @@ class Adversary:
         # instantiate bookkeeping and iterate over restarts & hyperparameters
         x = x.clone()
         b = torch.full_like(x, torch.inf)
-        b[self.misclassified(x, torch.zeros_like(x), y)] = 0
+        b[self.model(x).argmax(1).ne(y)] = 0
         for r in range(self.num_restarts):
             r > 0 and self.verbose and print(
                 f"On restart iteration {r} of {self.num_restarts - 1}...",
@@ -204,7 +201,7 @@ class Adversary:
                 self.verbose and print(
                     f"Found {update.sum()} better adversarial examples!",
                     f"(+{update.sum().div(update.numel()):.2%})",
-                    f"(New {new:.2%}, Improved {improved:.2%}))",
+                    f"(New {new:.2%}, Improved {improved:.2%})",
                 )
         return b.nan_to_num_(nan=None, posinf=0)
 
@@ -212,9 +209,7 @@ class Adversary:
         """
         This method serves as a restart rule as used in
         https://arxiv.org/pdf/1706.06083.pdf. Specifically, it returns the set
-        of perturbations whose loss is maximal. Notably, if the loss is to be
-        minimized and early termination is disabled, then the set of
-        pertrubations whose loss is minimal is returned instead.
+        of perturbations whose loss improved.
 
         :param x: inputs to produce adversarial examples from
         :type x: torch Tensor object (n, m)
@@ -286,8 +281,8 @@ class Attack:
     :func:`l0`: clamps inputs to domain and l0 threat model
     :func:`l2`: clamps inputs to domain and l2 threat model
     :func:`linf`: clamps inputs to domain and linf threat model
-    :func:`progress`: record various statistics on crafting progress
-    :func:`tanh_p`: extracts perturbation from input when using CoV
+    :func:`progress`: records various statistics on crafting progress
+    :func:`update`: updates output adversarial perturbations
     """
 
     def __init__(
@@ -303,6 +298,7 @@ class Attack:
         random_start,
         saliency_map,
         batch_size=-1,
+        statistics=False,
         verbosity=0.25,
     ):
         """
@@ -319,6 +315,8 @@ class Attack:
         :type epochs: int
         :param epsilon: lp-norm ball threat model
         :type epsilon: float
+        :param statistics: save attack progress (heavily increases compute)
+        :type statistics: bool
         :param verbosity: print attack statistics every verbosity%
         :type verbosity: float
 
@@ -360,6 +358,7 @@ class Attack:
         self.et = early_termination
         self.lp = {surface.l0: 0, surface.l2: 2, surface.linf: torch.inf}[norm]
         self.project = getattr(self, norm.__name__)
+        self.statistics = statistics
         self.verbosity = max(int(epochs * verbosity), 1 if verbosity else 0)
         self.components = {
             "loss function": loss_func.__name__,
@@ -395,7 +394,7 @@ class Attack:
         custom_opt_params = {
             "atk_loss": loss_func,
             "epochs": epochs,
-            "epsilon": alpha if self.lp == 0 else self.epsilon,
+            "epsilon": alpha if self.lp == 0 else epsilon,
             "model": model,
             "norm": self.lp,
             "saliency_map": saliency_map,
@@ -410,9 +409,9 @@ class Attack:
             if optimizer_alg.__module__ == optimizer.__name__
             else torch_opt_params
         )
-        random_start = random_start(norm=self.lp, epsilon=self.epsilon)
+        random_start = random_start(norm=self.lp, epsilon=epsilon)
         self.traveler = traveler.Traveler(optimizer_alg, random_start)
-        self.surface = surface.Surface(loss_func, model, norm, saliency_map)
+        self.surface = surface.Surface(epsilon, loss_func, model, norm, saliency_map)
 
         # collect any registered hyperparameters
         self.hparams = self.traveler.hparams | self.surface.hparams
@@ -425,14 +424,14 @@ class Attack:
         defines an attack made popular in the literature, it's full name is
         returned instead. The following named attacks are supported:
 
-            APGD-CE (Auto-PGD with CE loss) (https://arxiv.org/pdf/2003.01690.pdf)
-            APGD-DLR (Auto-PGD with DLR loss) (https://arxiv.org/pdf/2003.01690.pdf)
-            BIM (Basic Iterative Method) (https://arxiv.org/pdf/1611.01236.pdf)
-            CW-L2 (Carlini-Wagner with l2 norm) (https://arxiv.org/pdf/1608.04644.pdf)
-            DF (DeepFool) (https://arxiv.org/pdf/1511.04599.pdf)
-            FAB (Fast Adaptive Boundary) (https://arxiv.org/pdf/1907.02044.pdf)
-            JSMA (Jacobian Saliency Map Approach) (https://arxiv.org/pdf/1511.07528.pdf)
-            PGD (Projected Gradient Descent) (https://arxiv.org/pdf/1706.06083.pdf)
+        APGD-CE (Auto-PGD with CE loss) (https://arxiv.org/pdf/2003.01690.pdf)
+        APGD-DLR (Auto-PGD with DLR loss) (https://arxiv.org/pdf/2003.01690.pdf)
+        BIM (Basic Iterative Method) (https://arxiv.org/pdf/1611.01236.pdf)
+        CW-L2 (Carlini-Wagner with l2 norm) (https://arxiv.org/pdf/1608.04644.pdf)
+        DF (DeepFool) (https://arxiv.org/pdf/1511.04599.pdf)
+        FAB (Fast Adaptive Boundary) (https://arxiv.org/pdf/1907.02044.pdf)
+        JSMA (Jacobian Saliency Map Approach) (https://arxiv.org/pdf/1511.07528.pdf)
+        PGD (Projected Gradient Descent) (https://arxiv.org/pdf/1706.06083.pdf)
 
         :return: the attack name with parameters
         :rtype: str
@@ -458,19 +457,22 @@ class Attack:
         :rtype: torch Tensor object (n, m)
         """
 
-        # set perturbations, batches, ranges, verbosity, outputs, & results
+        # initialize perturbations & ranges and compute batch sizes
         x = x.detach().clone()
         p = torch.zeros_like(x)
+        mins, maxs = (x.min(0).values.clamp(max=0), x.max(0).values.clamp(min=1))
         batch_size = x.size(0) if self.batch_size == -1 else self.batch_size
         bmax = -(-x.size(0) // batch_size)
-        mins, maxs = (x.min(0).values.clamp(max=0), x.max(0).values.clamp(min=1))
+
+        # if needed, init output buffer & set misclassified perturbations to 0
+        correct = self.surface.model(x).argmax(1).eq(y).unsqueeze_(1)
+        o = torch.full_like(p, torch.inf).where(correct, p) if o is None else o.clone()
+
+        # set verbosity and configure batch & output results dataframes
         verbose = self.verbosity and self.verbosity != self.epochs
-        correct = self.surface.model(x).argmax(1).eq(y)
-        o = torch.full_like(x, torch.inf) if o is None else o.clone()
-        o[correct] = torch.inf
         rows = [e for i in range(bmax) for e in range(self.epochs + 1)]
         metrics = "accuracy", "model_loss", "attack_loss", "l0", "l2", "linf"
-        self.batch_results = pandas.DataFrame(0, index=rows, columns=metrics)
+        self.b_results = pandas.DataFrame(0, index=rows, columns=metrics)
         self.results = pandas.DataFrame(0, index=rows, columns=metrics)
 
         # configure batches, attach objects, & apply perturbation inits
@@ -491,37 +493,38 @@ class Attack:
                 self.traveler()
                 pb.clamp_(cnb, cxb)
                 None if self.et else self.project(pb)
-                progress = self.progress(b, e, xb, yb, pb, ob)
+                self.update(xb, yb, pb, ob)
+                prog = self.progress(b, e, xb, yb, pb, ob) if self.statistics else ""
                 print(
-                    f"Epoch {e:{len(str(self.epochs))}} / {self.epochs} {progress}"
+                    f"Epoch {e:{len(str(self.epochs))}} / {self.epochs} {prog:<15}"
                 ) if verbose and not e % self.verbosity else print(
                     f"{self.name}: Epoch {e}... ({e / self.epochs:.1%})", end="\r"
                 )
 
         # compute final statistics, set failed perturbations to zero and return
-        self.batch_results = self.batch_results.groupby(self.batch_results.index).sum()
+        self.b_results = self.b_results.groupby(self.b_results.index).sum()
         self.results = self.results.groupby(self.results.index).sum()
-        self.batch_results[["accuracy", "l0", "l2", "linf"]] /= y.numel()
+        self.b_results[["accuracy", "l0", "l2", "linf"]] /= y.numel()
         self.results[["accuracy", "l0", "l2", "linf"]] /= y.numel()
         return o.nan_to_num_(nan=None, posinf=0)
 
     def l0(self, p):
         """
-        This method projects perturbation vectors so that they are complaint
+        This method "projects" perturbation vectors so that they are compliant
         with the specified l0 threat model (i.e., epsilon). Specifically, this
-        method sets any newly perturbed component of perturbation vectors to
-        zero if such a perturbation exceeds the specified l0-threat model. To
-        know which components are "newly" perturbed, we save a reference to the
-        perturbation vector computed at the iteration prior.
+        method manipulates the clip attribute of surface objects (which are
+        subsequently used in surface lp functions) as to constrain
+        perturbations within the threat model.
 
         :param p: perturbation vectors
         :type p: torch Tensor object (n, m)
         :return: l0-complaint adversarial examples
         :rtype: torch Tensor object (n, m)
         """
-        i = p.norm(0, 1) > self.epsilon
-        p[i] = self.prev_p[i].where(self.prev_p[i] == 0, p[i]) if i.any() else 0.0
-        self.prev_p = p.clone()
+        mins, maxs = self.surface.clip
+        idx = p.eq(0).logical_and_(p.norm(0, dim=1, keepdim=True).eq_(self.epsilon))
+        mins[idx] = p[idx]
+        maxs[idx] = p[idx]
         return p
 
     def l2(self, p):
@@ -555,13 +558,14 @@ class Attack:
 
     def progress(self, batch, epoch, xb, yb, pb, ob):
         """
-        This method records various statistics on the adversarial example
-        crafting process, updates final perturbations, and returns a formatted
-        string concisely representing the state of the attack. Specifically,
-        this computes the following at each epoch (and the change since the
-        last epoch): (1) model accuracy, (2) model loss, (3) attack loss, (3)
-        l0, l2, and l∞ norms. Moreover, it also updates the early termination
-        state of the current batch since model accuracy is computed.
+        This method measures various statistics on the adversarial crafting
+        process & a formatted string concisely representing the state of the
+        attack. Specifically, this computes the following at each epoch (and
+        the change since the last epoch): (1) model accuracy, (2) model loss,
+        (3) attack loss, (3) l0, l2, and l∞ norms. Notably, due to performance
+        bugs in PyTorch (https://github.com/pytorch/pytorch/issues/51509) and
+        the number of forward passes necessary to compute interesting
+        statistics, this method can have a high performance impact.
 
         :param batch: current batch number
         :type batch: int
@@ -579,60 +583,86 @@ class Attack:
         :rtype: str
         """
 
-        # project onto lp-threat model and compute batch stats
+        # compute current index and project onto lp-threat model
         idx = batch * (self.epochs + 1) + epoch
         norms = (0, 2, torch.inf)
         pb = self.project(pb.clone())
+
+        # compute batch buffer stats and update results
         logits = self.surface.model(xb + pb)
         mloss = self.surface.model.loss(logits, yb).item()
-        ali = self.surface.loss(logits, yb)
-        aloss = ali.sum().item()
-        correct = logits.argmax(1).eq(yb)
-        acc = correct.sum().item()
+        aloss = self.surface.loss(logits, yb).sum().item()
+        acc = logits.argmax(1).eq_(yb).sum().item()
         nb = [pb.norm(n, 1).sum().item() for n in norms]
-        self.batch_results.iloc[idx] += (acc, mloss, aloss, *nb)
-
-        # update output buffer based on min accuracy or max loss
-        if self.et:
-            smaller = pb.norm(self.lp, dim=1).lt(ob.norm(self.lp, dim=1))
-            update = (~correct).logical_and_(smaller)
-        else:
-            ologits = self.surface.model(xb + ob.nan_to_num(posinf=0))
-            oli = self.surface.loss(ologits, yb)
-            update = oli.lt(ali) if self.surface.loss.max_obj else oli.gt(ali)
-        ob[update] = pb[update]
+        self.b_results.iloc[idx] += (acc, mloss, aloss, *nb)
 
         # compute output buffer stats and update results
         ologits = self.surface.model(xb + ob.nan_to_num(posinf=0))
         omloss = self.surface.model.loss(ologits, yb).item()
         oaloss = self.surface.loss(logits, yb).sum().item()
-        oacc = ologits.argmax(1).eq(yb).sum().item()
+        oacc = ologits.argmax(1).eq_(yb).sum().item()
         on = [ob.nan_to_num(posinf=0).norm(n, 1).sum().item() for n in norms]
         self.results.iloc[idx] += (oacc, omloss, oaloss, *on)
 
         # build str representation and return
         return (
             f"Output Acc: {oacc / yb.numel():.1%} Batch Acc: {acc / yb.numel():.1%} "
-            f"({(acc - self.batch_results.accuracy.iloc[idx - 1]) / yb.numel():+.1%}) "
+            f"({(acc - self.b_results.accuracy.iloc[idx - 1]) / yb.numel():+.1%}) "
             f"Model Loss: {mloss:.2f} "
-            f"({(mloss - self.batch_results.model_loss.iloc[idx - 1]):+6.2f}) "
+            f"({(mloss - self.b_results.model_loss.iloc[idx - 1]):+6.2f}) "
             f"{self.name} Loss: {aloss:.2f} "
-            f"({(aloss - self.batch_results.attack_loss.iloc[idx - 1]):+6.2f}) "
+            f"({(aloss - self.b_results.attack_loss.iloc[idx - 1]):+6.2f}) "
             f"l0: {nb[0] / yb.numel():.2f} "
-            f"({(nb[0] -  self.batch_results.l0.iloc[idx - 1]) / yb.numel():+.2f}) "
+            f"({(nb[0] -  self.b_results.l0.iloc[idx - 1]) / yb.numel():+.2f}) "
             f"l2: {nb[1] / yb.numel():.2f} "
-            f"({(nb[1] - self.batch_results.l2.iloc[idx - 1]) / yb.numel():+.2f}) "
+            f"({(nb[1] - self.b_results.l2.iloc[idx - 1]) / yb.numel():+.2f}) "
             f"l∞: {nb[2] / yb.numel():.2f} "
-            f"({(nb[2] - self.batch_results.linf.iloc[idx - 1]) / yb.numel():+.2f})"
+            f"({(nb[2] - self.b_results.linf.iloc[idx - 1]) / yb.numel():+.2f})"
         )
+
+    def update(self, xb, yb, pb, ob):
+        """
+        This method updates the final perturbations returned by attacks.
+        Specifically, the update is determined as: (1) for minimum-norm
+        adversaries, perturbations that are both (a) misclassified, and (b) a
+        smaller lp-norm than the current best perturbations are saved, while
+        (2) for maximum-loss adversaries, perturbations that have greater model
+        loss than the current best perturbations are saved.
+
+        :param xb: current batch of inputs
+        :type xb: torch Tensor object (n, m)
+        :param yb: current batch of labels
+        :type yb: torch Tensor object (n,)
+        :param pb: current batch of perturbations
+        :type pb: torch Tensor object (n, m)
+        :param ob: final batch of perturbations (when using early termination)
+        :type ob: torch Tensor object (n, m)
+        :return: None
+        :rtype: NoneType
+        """
+        pb = self.project(pb.clone())
+        logits = self.surface.model(xb + pb)
+        if self.et:
+            correct = logits.argmax(1).eq(yb)
+            smaller = pb.norm(self.lp, dim=1).lt(ob.norm(self.lp, dim=1))
+            update = (~correct).logical_and_(smaller)
+        else:
+            ploss = self.surface.loss(logits, yb)
+            ologits = self.surface.model(xb + ob.nan_to_num(posinf=0))
+            oloss = self.surface.loss(ologits, yb)
+            update = oloss.lt(ploss) if self.surface.loss.max_obj else oloss.gt(ploss)
+        ob[update] = pb[update]
+        return None
 
 
 def attack_builder(
     alpha,
-    epochs,
     early_termination,
+    epochs,
     epsilon,
     model,
+    losses=(loss.CWLoss, loss.CELoss, loss.DLRLoss, loss.IdentityLoss),
+    norms=(surface.l0, surface.l2, surface.linf),
     optimizers=(
         optimizer.Adam,
         optimizer.BackwardSGD,
@@ -644,13 +674,12 @@ def attack_builder(
         traveler.MaxStart,
         traveler.ShrinkingStart,
     ),
-    losses=(loss.CWLoss, loss.CELoss, loss.DLRLoss, loss.IdentityLoss),
-    norms=(surface.l0, surface.l2, surface.linf),
     saliency_maps=(
         surface.DeepFoolSaliency,
         surface.IdentitySaliency,
         surface.JacobianSaliency,
     ),
+    statistics=False,
     verbosity=1,
 ):
     """
@@ -685,16 +714,18 @@ def attack_builder(
     :type epsilon: float or tuple of floats
     :param model: neural network
     :type model: dlm LinearClassifier-inherited object
-    :param optimizers: optimizers to consider
-    :type optimizers: tuple of optimizer module classes
-    :param random_starts: random start strategies to consider
-    :type random_starts: tuple of traveler module classes
     :param losses: losses to consider
     :type losses: tuple of loss module classes
     :param norms: lp-norms to consider
     :type norms: tuple of surface module functions
+    :param optimizers: optimizers to consider
+    :type optimizers: tuple of optimizer module classes
+    :param random_starts: random start strategies to consider
+    :type random_starts: tuple of traveler module classes
     :param saliency_maps: saliency maps to consider
     :type saliency_maps: tuple of surface module callables
+    :param statistics: save attack progress (heavily increases compute)
+    :type statistics: bool
     :param verbosity: print attack statistics every verbosity%
     :type verbosity: float
     :return: a generator yielding attack combinations
@@ -739,11 +770,14 @@ def attack_builder(
             optimizer_alg=optimizer_alg,
             random_start=random_start,
             saliency_map=saliency_map,
+            statistics=statistics,
             verbosity=verbosity,
         )
 
 
-def apgdce(alpha, epochs, epsilon, model, num_restarts=3, verbosity=1):
+def apgdce(
+    alpha, epochs, epsilon, model, num_restarts=3, statistics=False, verbosity=1
+):
     """
     This function serves as an alias to build Auto-PGD with Cross-Entropy loss
     (APGD-CE), as shown in https://arxiv.org/abs/2003.01690. Specifically,
@@ -761,6 +795,10 @@ def apgdce(alpha, epochs, epsilon, model, num_restarts=3, verbosity=1):
     :type epsilon: float
     :param model: neural network
     :type model: dlm LinearClassifier-inherited object
+    :param num_restarts: number of restarts to perform
+    :type num_restarts: int
+    :param statistics: save attack progress (heavily increases compute)
+    :type statistics: bool
     :param verbosity: print attack statistics every verbosity%
     :type verbosity: float
     :return: APGD-CE attack
@@ -783,11 +821,14 @@ def apgdce(alpha, epochs, epsilon, model, num_restarts=3, verbosity=1):
         loss_func=loss.CELoss,
         norm=surface.linf,
         saliency_map=surface.IdentitySaliency,
+        statistics=statistics,
         verbosity=verbosity,
     )
 
 
-def apgddlr(alpha, epochs, epsilon, model, num_restarts=3, verbosity=1):
+def apgddlr(
+    alpha, epochs, epsilon, model, num_restarts=3, statistics=False, verbosity=1
+):
     """
     This function serves as an alias to build Auto-PGD with the Difference of
     Logits Ratio loss (APGD-DLR), as shown in https://arxiv.org/abs/2003.01690.
@@ -806,7 +847,9 @@ def apgddlr(alpha, epochs, epsilon, model, num_restarts=3, verbosity=1):
     :param model: neural network
     :type model: dlm LinearClassifier-inherited object
     :param num_restarts: number of restarts to perform
-    :param verbosity: print attack statistics every verbosity%
+    :type num_restarts: int
+    :param statistics: save attack progress (heavily increases compute)
+    :type statistics: bool
     :param verbosity: print attack statistics every verbosity%
     :type verbosity: float
     :return: APGD-DLR attack
@@ -830,11 +873,12 @@ def apgddlr(alpha, epochs, epsilon, model, num_restarts=3, verbosity=1):
         optimizer_alg=optimizer.MomentumBestStart,
         random_start=traveler.MaxStart,
         saliency_map=surface.IdentitySaliency,
+        statistics=statistics,
         verbosity=verbosity,
     )
 
 
-def bim(alpha, epochs, epsilon, model, verbosity=1):
+def bim(alpha, epochs, epsilon, model, statistics=False, verbosity=1):
     """
     This function serves as an alias to build the Basic Iterative Method (BIM),
     as shown in (https://arxiv.org/pdf/1611.01236.pdf) Specifically, BIM: uses
@@ -851,6 +895,8 @@ def bim(alpha, epochs, epsilon, model, verbosity=1):
     :type epsilon: float
     :param model: neural network
     :type model: dlm LinearClassifier-inherited object
+    :param statistics: save attack progress (heavily increases compute)
+    :type statistics: bool
     :param verbosity: print attack statistics every verbosity%
     :type verbosity: float
     :return: BIM attack
@@ -867,12 +913,20 @@ def bim(alpha, epochs, epsilon, model, verbosity=1):
         optimizer_alg=optimizer.SGD,
         random_start=traveler.IdentityStart,
         saliency_map=surface.IdentitySaliency,
+        statistics=statistics,
         verbosity=verbosity,
     )
 
 
 def cwl2(
-    alpha, epochs, epsilon, model, hparam_bounds=(0, 1e10), hparam_steps=9, verbosity=1
+    alpha,
+    epochs,
+    epsilon,
+    model,
+    hparam_bounds=(0, 1e10),
+    hparam_steps=9,
+    statistics=False,
+    verbosity=1,
 ):
     """
     This function serves as an alias to build Carlini-Wagner l₂ (CW-L2), as
@@ -896,6 +950,8 @@ def cwl2(
     :type hparam_bounds: tuple of floats
     :param hparam_steps: the number of hyperparameter optimization steps
     :type hparam_steps: int
+    :param statistics: save attack progress (heavily increases compute)
+    :type statistics: bool
     :param verbosity: print attack statistics every verbosity%
     :type verbosity: float
     :return: Carlini-Wagner l₂ attack
@@ -919,11 +975,12 @@ def cwl2(
         optimizer_alg=optimizer.Adam,
         random_start=traveler.IdentityStart,
         saliency_map=surface.IdentitySaliency,
+        statistics=statistics,
         verbosity=verbosity,
     )
 
 
-def df(alpha, epochs, epsilon, model, verbosity=1):
+def df(alpha, epochs, epsilon, model, statistics=True, verbosity=1):
     """
     This function serves as an alias to build DeepFool (DF), as shown in
     (https://arxiv.org/pdf/1511.04599.pdf) Specifically, DF: uses the
@@ -940,6 +997,8 @@ def df(alpha, epochs, epsilon, model, verbosity=1):
     :type epsilon: float
     :param model: neural network
     :type model: dlm LinearClassifier-inherited object
+    :param statistics: save attack progress (heavily increases compute)
+    :type statistics: bool
     :param verbosity: print attack statistics every verbosity%
     :type verbosity: float
     :return: DeepFool attack
@@ -956,11 +1015,12 @@ def df(alpha, epochs, epsilon, model, verbosity=1):
         optimizer_alg=optimizer.SGD,
         random_start=traveler.IdentityStart,
         saliency_map=surface.DeepFoolSaliency,
+        statistics=statistics,
         verbosity=verbosity,
     )
 
 
-def fab(alpha, epochs, epsilon, model, num_restarts=2, verbosity=1):
+def fab(alpha, epochs, epsilon, model, num_restarts=2, statistics=False, verbosity=1):
     """
     This function serves as an alias to build Fast Adaptive Boundary (FAB), as
     shown in (https://arxiv.org/pdf/1907.02044.pdf) Specifically, FAB: uses the
@@ -979,6 +1039,9 @@ def fab(alpha, epochs, epsilon, model, num_restarts=2, verbosity=1):
     :param model: neural network
     :type model: dlm LinearClassifier-inherited object
     :param num_restarts: number of restarts to perform
+    :type num_restarts: int
+    :param statistics: save attack progress (heavily increases compute)
+    :type statistics: bool
     :param verbosity: print attack statistics every verbosity%
     :type verbosity: float
     :return: DeepFool attack
@@ -1002,11 +1065,12 @@ def fab(alpha, epochs, epsilon, model, num_restarts=2, verbosity=1):
         optimizer_alg=optimizer.BackwardSGD,
         random_start=traveler.ShrinkingStart,
         saliency_map=surface.DeepFoolSaliency,
+        statistics=statistics,
         verbosity=verbosity,
     )
 
 
-def jsma(alpha, epochs, epsilon, model, verbosity=1):
+def jsma(alpha, epochs, epsilon, model, statistics=False, verbosity=1):
     """
     This function serves as an alias to build the Jacobian-based Saliency Map
     Approach (JSMA), as shown in (https://arxiv.org/pdf/1511.07528.pdf)
@@ -1022,6 +1086,8 @@ def jsma(alpha, epochs, epsilon, model, verbosity=1):
     :type epsilon: float
     :param model: neural network
     :type model: dlm LinearClassifier-inherited object
+    :param statistics: save attack progress (heavily increases compute)
+    :type statistics: bool
     :param verbosity: print attack statistics every verbosity%
     :type verbosity: float
     :return: DeepFool attack
@@ -1038,11 +1104,12 @@ def jsma(alpha, epochs, epsilon, model, verbosity=1):
         optimizer_alg=optimizer.SGD,
         random_start=traveler.IdentityStart,
         saliency_map=surface.JacobianSaliency,
+        statistics=statistics,
         verbosity=verbosity,
     )
 
 
-def pgd(alpha, epochs, epsilon, model, verbosity=1):
+def pgd(alpha, epochs, epsilon, model, statistics=False, verbosity=1):
     """
     This function serves as an alias to build Projected Gradient Descent (PGD),
     as shown in (https://arxiv.org/pdf/1706.06083.pdf) Specifically, PGD: uses
@@ -1057,6 +1124,8 @@ def pgd(alpha, epochs, epsilon, model, verbosity=1):
     :type epsilon: float
     :param model: neural network
     :type model: dlm LinearClassifier-inherited object
+    :param statistics: save attack progress (heavily increases compute)
+    :type statistics: bool
     :param verbosity: print attack statistics every verbosity%
     :type verbosity: float
     :return: DeepFool attack
@@ -1073,5 +1142,6 @@ def pgd(alpha, epochs, epsilon, model, verbosity=1):
         optimizer_alg=optimizer.SGD,
         random_start=traveler.MaxStart,
         saliency_map=surface.IdentitySaliency,
+        statistics=statistics,
         verbosity=verbosity,
     )
