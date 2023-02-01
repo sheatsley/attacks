@@ -56,7 +56,7 @@ class BackwardSGD(torch.optim.Optimizer):
         lr,
         maximize,
         norm,
-        saliency_map,
+        smap,
         alpha_max=0.1,
         beta=0.9,
         **kwargs,
@@ -85,8 +85,8 @@ class BackwardSGD(torch.optim.Optimizer):
         :type minimum: float
         :param params: the parameters to optimize over
         :type params: tuple of torch Tensor objects (n, m)
-        :param saliency_map: saliency map that computes P
-        :type saliency_map: Saliency module object
+        :param smap: saliency map that computes P
+        :type smap: surface module object
         :return: Backward SGD optimizer
         :rtype: BackwardSGD object
         """
@@ -99,7 +99,7 @@ class BackwardSGD(torch.optim.Optimizer):
                 "lr": lr,
                 "maximize": maximize,
                 "norm": norm,
-                "smap": saliency_map,
+                "smap": smap,
             },
         )
 
