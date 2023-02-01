@@ -31,8 +31,6 @@ class Traveler:
         module (which is initialized with α, the learning rate), and (2) the
         random start strategy (if any).
 
-        :param change_of_variables: whether to map inputs to tanh-space
-        :type change_of_variables: bool
         :param optimizer: optimization algorithm to use
         :type optimizer: optimizer module object
         :param random_start: desired random start heuristic
@@ -209,7 +207,7 @@ class MaxStart:
         keep = torch.arange(1, p.size(1) + 1).repeat(p.size(0), 1).add_(epsilon)
         return p.scatter_(1, shuffle, p.where(keep > p.size(1), torch.tensor(0)))
 
-    def l2(self, p, epsilon, minimum=1e-4):
+    def l2(self, p, epsilon, minimum=1e-12):
         """
         This function randomly perturbs inputs, based on the l2-norm budget.
         Specifically, feature values are sampled from a normal distribution and
