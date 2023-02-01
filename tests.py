@@ -22,6 +22,7 @@ import torch  # Tensors and Dynamic neural networks in Python with strong GPU ac
 
 # TODO
 # determine tweaks needed to make some attacks work (alpha for l2 df, binary search on c for linf cw df)
+# add all other attack variants (pgd l2, cw-linf, df-linf, fab-linf?)
 
 
 class BaseTest(unittest.TestCase):
@@ -1080,12 +1081,12 @@ class FunctionalTests(BaseTest):
             with self.subTest(Attack=f"{i}. {attack.name}"):
                 p = attack.craft(self.x, self.y)
                 n = (p.norm(d, 1).median().item() for d in (0, 2, torch.inf))
-                norm_results = ", ".join(
+                norm_results = (
                     f"l{p}: {n:.3}/{float(b):.3} ({n/b:.2%})"
                     for n, b, p in zip(n, (self.l0, self.l2, self.linf), (0, 2, "∞"))
                 )
                 acc = self.model.accuracy(self.x + p, self.y).item()
-                print(f"{attack.name} complete! Model Acc: {acc:.2%},", norm_results)
+                print(f"{attack.name} complete! Model Acc: {acc:.2%},", *norm_results)
                 self.assertLess(acc, min_acc)
         return None
 
@@ -1574,14 +1575,14 @@ class SpecialTests(BaseTest):
                 attack.craft(self.x[:samples], self.y[:samples])
         return None
 
-    def test_all_performance(self, min_norm=False, min_acc=0.1):
+    def test_all_performance(self, min_norm=True, min_acc=0.1):
         """
         This method ostensibly performs a functional test for *all* component
         combinations. This should be considered the most computationally
         intensive test within this test suite. This should be run rarely (and
         with smaller datasets). Like functional tests, this test is considered
         successful if model accuracy can be dropped below some threshold (i.e.,
-        1%), with the parameterized threat model. This test is defined here
+        10%), with the parameterized threat model. This test is defined here
         (instead of the functional test suite) to ensure it is ran as intended.
 
         :param epochs: number of attack iterations
@@ -1606,17 +1607,18 @@ class SpecialTests(BaseTest):
                 epsilon=(self.l0, self.l2, self.linf),
                 model=self.atk_params["model"],
                 verbosity=0,
+                norms=(aml.surface.l0,),
             )
         )
         return FunctionalTests.functional_test(self, attacks, min_acc)
 
-    def test_attack_performance(self, name="S-I-CE-J-0"):
+    def test_attack_performance(self, name="B-I-CE-J-2"):
         """
         This method serves to help debug individual attacks. Given the attack
         name, it will instantiate an attack object with the associated
         parameters and run the attack for many iterations. This test is
         considered successful if the attack can drop model accuracy below some
-        threshold (e.g., 10%).
+        threshold (e.g., 1%).
 
         :param name: attack name to instantiate
         :type name: str
