@@ -12,9 +12,6 @@ import itertools  # Functions creating iterators for efficietn looping
 import pandas  # Python Data Analysis Library
 import torch  # Tensors and Dynamic neural networks in Python with strong GPU acceleration
 
-# TODO
-# check if jsma "x_org proj" helps when using backwardsgd
-
 
 class Adversary:
     """
@@ -385,6 +382,23 @@ class Attack:
             ("S", "I", "Id", "J", "0"): "JSMA",
         }
         self.name = name_map.get(name, "-".join(name))
+        """
+        Corrections:
+            (1) for L2, BackwardSGD or SGD opt with DF smap
+            (2) for Linf, MomentumBestStart opt with CW or Id loss with DF smap
+        """
+        if (
+            optimizer_alg in {optimizer.BackwardSGD, optimizer.SGD}
+            and saliency_map is surface.DeepFoolSaliency
+        ):
+            alpha = 1
+        if (
+            optimizer_alg in {optimizer.MomentumBestStart}
+            and loss_func in {loss.CWLoss, loss.IdentityLoss}
+            and saliency_map is surface.DeepFoolSaliency
+        ):
+            # need to skip norm
+            alpha = 1
         self.params = {"α": alpha, "ε": epsilon, "epochs": epochs, "min dist": self.et}
 
         # instantiate traveler, surface, and necessary subcomponents
@@ -397,7 +411,7 @@ class Attack:
             "epsilon": alpha if self.lp == 0 else epsilon,
             "model": model,
             "norm": self.lp,
-            "saliency_map": saliency_map,
+            "smap": saliency_map,
         }
         torch_opt_params = {
             "lr": alpha,
