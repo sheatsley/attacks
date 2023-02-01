@@ -41,7 +41,7 @@ class Surface:
         :param norm: lp-space to project gradients into
         :type norm: surface module callable
         :param saliency_map: desired saliency map heuristic
-        :type saliency_map: saliency module object
+        :type saliency_map: surface module object
         :return: a surface
         :rtype: Surface object
         """
@@ -387,12 +387,9 @@ class JacobianSaliency:
         :rtype: torch Tensor object (n, m)
         """
 
-        # get yth row and "gather" ith rows by subtracting yth row
+        # get yth & ith rows and add stability when using unique losses
         yth = g[torch.arange(g.size(0)), y, :]
         ith = g.sum(1).sub_(yth)
-
-        # compute biased projection & add stability when using unique losses
-        self.org_proj = torch.zeros((g.size(0), g.size(2)))
         ith = ith.where(ith.sum(1, keepdim=True) != 0, yth.sign().mul(-1))
 
         # zero out components whose yth and ith signs are equal and compute product
@@ -430,7 +427,7 @@ def l0(g, dist, epsilon, max_obj, top=0.01, **kwargs):
     return g.scatter_(dim=1, index=bottom_k.indices, value=0).sign_()
 
 
-def l2(g, minimum=1e-4, **kwargs):
+def l2(g, minimum=1e-12, **kwargs):
     """
     This function projects gradients into the l2-norm space. Specifically, this
     is defined as normalizing the gradients by thier l2-norm. The minimum
