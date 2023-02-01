@@ -3,7 +3,6 @@ This module defines custom PyTorch-based loss functions.
 Authors: Ryan Sheatsley & Blaine Hoak
 Wed Apr 6 2022
 """
-import aml.traveler as traveler  # PyTorch-based perturbation schemes for crafting adversarial examples
 import torch  # Tensors and Dynamic neural networks in Python with strong GPU acceleration
 
 
