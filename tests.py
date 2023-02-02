@@ -1428,7 +1428,7 @@ class PerformanceTests(BaseTest):
 
         # compute target norm and assert marginal performance difference
         norm_map = (aml.surface.L0, aml.surface.L2, aml.surface.Linf)
-        atk_norm = norm_map.index(attack.surface.norm)
+        atk_norm = norm_map.index(type(attack.surface.norm))
         norm_perfs = (p[atk_norm] for p in perfs)
         aml_perf, fws_perf = next(norm_perfs), tuple(norm_perfs)
         for fw, fw_perf in zip(fws, fws_perf):
