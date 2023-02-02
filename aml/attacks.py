@@ -4,10 +4,10 @@ https://arxiv.org/pdf/2209.04521.pdf.
 Authors: Ryan Sheatsley & Blaine Hoak
 Mon Apr 18 2022
 """
-import aml.loss as loss  # Popular PyTorch-based loss functions
-import aml.optimizer as optimizer  # PyTorch-based custom optimizers for crafting adversarial examples
-import aml.surface as surface  # PyTorch-based models for crafting adversarial examples
-import aml.traveler as traveler  # PyTorch-based perturbation schemes for crafting adversarial examples
+import aml.loss as loss  # Loss functions for crafting adversarial examples in PyTorch
+import aml.optimizer as optimizer  # Optimizers for crafting adversarial examples in PyTorch
+import aml.surface as surface  # Models for crafting adversarial examples
+import aml.traveler as traveler  # Perturbation schemes for adversarial examples
 import itertools  # Functions creating iterators for efficietn looping
 import pandas  # Python Data Analysis Library
 import torch  # Tensors and Dynamic neural networks in Python with strong GPU acceleration
@@ -55,7 +55,7 @@ class Adversary:
         kept across restarts.
 
         :param best_update: update rule for the best adversarial examples
-        :type best_update: Adversary function or None
+        :type best_update: Adversary class method or None
         :param hparam: the hyperparameter to be optimized
         :type hparam: str or None
         :param hparam_bounds: lower and upper bounds for binary search
@@ -63,7 +63,7 @@ class Adversary:
         :param hparam_steps: the number of hyperparameter optimization steps
         :type hparam_steps: int or None
         :param hparam_update: update rule for hyperparameter optimization
-        :type hparam_update: Adversary function or None
+        :type hparam_update: Adversary class method or None
         :param num_restarts: number of restarts to consider
         :type num_restarts: int or None
         :param verbose: whether progress statistics are printed
@@ -275,9 +275,6 @@ class Attack:
     :func:`__init__`: instantiates Attack objects
     :func:`__repr__`: returns the attack name (based on the components)
     :func:`craft`: returns a set of adversarial examples
-    :func:`l0`: clamps inputs to domain and l0 threat model
-    :func:`l2`: clamps inputs to domain and l2 threat model
-    :func:`linf`: clamps inputs to domain and linf threat model
     :func:`progress`: records various statistics on crafting progress
     :func:`update`: updates output adversarial perturbations
     """
@@ -330,8 +327,8 @@ class Attack:
 
         :param loss_func: objective function to differentiate
         :type loss_func: loss module class
-        :param norm: lp-space to project gradients into
-        :type norm: surface module callable
+        :param norm: lp-space to project gradients and enforce threat models
+        :type norm: surface module class
         :param model: neural network
         :type model: dlm LinearClassifier-inherited object
         :param saliency_map: desired saliency map heuristic
@@ -347,14 +344,31 @@ class Attack:
         :return: an attack
         :rtype: Attack object
         """
+        if (
+            optimizer_alg in {optimizer.BackwardSGD, optimizer.SGD}
+            and saliency_map is surface.DeepFoolSaliency
+            and norm is surface.L2
+        ):
+            alpha = 1.0
+        elif (
+            optimizer_alg in {optimizer.BackwardSGD, optimizer.SGD}
+            and saliency_map is surface.DeepFoolSaliency
+            and norm is surface.Linf
+        ):
+            alpha = 1.0
+        elif (
+            optimizer_alg
+            in {optimizer.BackwardSGD, optimizer.MomentumBestStart, optimizer.SGD}
+            and norm is surface.L0
+        ):
+            alpha = 1.0
 
         # set & save attack parameters, and build short attack name
         self.batch_size = batch_size
         self.epochs = epochs
         self.epsilon = epsilon
         self.et = early_termination
-        self.lp = {surface.l0: 0, surface.l2: 2, surface.linf: torch.inf}[norm]
-        self.project = getattr(self, norm.__name__)
+        self.lp = {surface.L0: 0, surface.L2: 2, surface.Linf: torch.inf}[norm]
         self.statistics = statistics
         self.verbosity = max(int(epochs * verbosity), 1 if verbosity else 0)
         self.components = {
@@ -362,7 +376,7 @@ class Attack:
             "optimizer": optimizer_alg.__name__,
             "random start": random_start.__name__,
             "saliency map": saliency_map.__name__,
-            "target norm": "l∞" if norm == surface.linf else norm.__name__,
+            "target norm": "l∞" if norm == surface.Linf else norm.__name__,
         }
         name = (
             self.components["optimizer"][0],
@@ -382,29 +396,13 @@ class Attack:
             ("S", "I", "Id", "J", "0"): "JSMA",
         }
         self.name = name_map.get(name, "-".join(name))
-        """
-        Corrections:
-            (1) for L2, BackwardSGD or SGD opt with DF smap
-            (2) for Linf, MomentumBestStart opt with CW or Id loss with DF smap
-        """
-        if (
-            optimizer_alg in {optimizer.BackwardSGD, optimizer.SGD}
-            and saliency_map is surface.DeepFoolSaliency
-        ):
-            alpha = 1
-        if (
-            optimizer_alg in {optimizer.MomentumBestStart}
-            and loss_func in {loss.CWLoss, loss.IdentityLoss}
-            and saliency_map is surface.DeepFoolSaliency
-        ):
-            # need to skip norm
-            alpha = 1
         self.params = {"α": alpha, "ε": epsilon, "epochs": epochs, "min dist": self.et}
 
         # instantiate traveler, surface, and necessary subcomponents
-        classes = model.params["classes"]
-        saliency_map = saliency_map(classes=classes, p=self.lp)
-        loss_func = loss_func(classes=classes)
+        norm = norm(epsilon=epsilon, maximize=loss_func.max_obj)
+        self.project = norm.project
+        saliency_map = saliency_map(classes=model.params["classes"], p=self.lp)
+        loss_func = loss_func(classes=model.params["classes"])
         custom_opt_params = {
             "atk_loss": loss_func,
             "epochs": epochs,
@@ -425,7 +423,7 @@ class Attack:
         )
         random_start = random_start(norm=self.lp, epsilon=epsilon)
         self.traveler = traveler.Traveler(optimizer_alg, random_start)
-        self.surface = surface.Surface(epsilon, loss_func, model, norm, saliency_map)
+        self.surface = surface.Surface(loss_func, model, norm, saliency_map)
 
         # collect any registered hyperparameters
         self.hparams = self.traveler.hparams | self.surface.hparams
@@ -498,7 +496,6 @@ class Attack:
             self.surface.initialize((cnb, cxb), pb)
             self.traveler.initialize(pb, ob)
             pb.clamp_(cnb, cxb)
-            self.project(pb)
             self.progress(b, 0, xb, yb, pb, ob)
 
             # compute peturbation updates and record progress
@@ -521,54 +518,6 @@ class Attack:
         self.b_results[["accuracy", "l0", "l2", "linf"]] /= y.numel()
         self.results[["accuracy", "l0", "l2", "linf"]] /= y.numel()
         return o.nan_to_num_(nan=None, posinf=0)
-
-    def l0(self, p):
-        """
-        This method "projects" perturbation vectors so that they are compliant
-        with the specified l0 threat model (i.e., epsilon). Specifically, this
-        method manipulates the clip attribute of surface objects (which are
-        subsequently used in surface lp functions) as to constrain
-        perturbations within the threat model.
-
-        :param p: perturbation vectors
-        :type p: torch Tensor object (n, m)
-        :return: l0-complaint adversarial examples
-        :rtype: torch Tensor object (n, m)
-        """
-        mins, maxs = self.surface.clip
-        idx = p.eq(0).logical_and_(p.norm(0, dim=1, keepdim=True).eq_(self.epsilon))
-        mins[idx] = p[idx]
-        maxs[idx] = p[idx]
-        return p
-
-    def l2(self, p):
-        """
-        This method projects perturbation vectors so that they are complaint
-        with the specified l2 threat model (i.e., epsilon). Specifically,
-        perturbation vectors whose l2-norms exceed the threat model are
-        projected back onto the l2-ball.
-
-        :param p: perturbation vectors
-        :type p: torch Tensor object (n, m)
-        :return: l2-complaint adversarial examples
-        :rtype: torch Tensor object (n, m)
-        """
-        return p.renorm_(2, dim=0, maxnorm=self.epsilon)
-
-    def linf(self, p):
-        """
-        This method projects perturbation vectors so that they are complaint
-        with the specified l∞ threat model (i.e., epsilon). Specifically,
-        perturbation vectors whose l∞-norms exceed the threat model are
-        projected back onto the l∞-ball. This is done by clipping perturbation
-        vectors by ±epsilon.
-
-        :param p: perturbation vectors
-        :type p: torch Tensor object (n, m)
-        :return: l∞-complaint adversarial examples
-        :rtype: torch Tensor object (n, m)
-        """
-        return p.clamp_(-self.epsilon, self.epsilon)
 
     def progress(self, batch, epoch, xb, yb, pb, ob):
         """
@@ -676,7 +625,7 @@ def attack_builder(
     epsilon,
     model,
     losses=(loss.CWLoss, loss.CELoss, loss.DLRLoss, loss.IdentityLoss),
-    norms=(surface.l0, surface.l2, surface.linf),
+    norms=(surface.L0, surface.L2, surface.Linf),
     optimizers=(
         optimizer.Adam,
         optimizer.BackwardSGD,
@@ -731,7 +680,7 @@ def attack_builder(
     :param losses: losses to consider
     :type losses: tuple of loss module classes
     :param norms: lp-norms to consider
-    :type norms: tuple of surface module functions
+    :type norms: tuple of Surface object methods
     :param optimizers: optimizers to consider
     :type optimizers: tuple of optimizer module classes
     :param random_starts: random start strategies to consider
@@ -747,7 +696,7 @@ def attack_builder(
     """
 
     # create epsilon mapping
-    ns = (surface.l0, surface.l2, surface.linf)
+    ns = (surface.L0, surface.L2, surface.Linf)
     eps = epsilon if type(epsilon) is tuple else itertools.repeat(epsilon)
     lp = {n: e for n, e in zip(ns, eps)}
 
@@ -833,7 +782,7 @@ def apgdce(
         optimizer_alg=optimizer.MomentumBestStart,
         random_start=traveler.MaxStart,
         loss_func=loss.CELoss,
-        norm=surface.linf,
+        norm=surface.Linf,
         saliency_map=surface.IdentitySaliency,
         statistics=statistics,
         verbosity=verbosity,
@@ -883,7 +832,7 @@ def apgddlr(
         epsilon=epsilon,
         loss_func=loss.DLRLoss,
         model=model,
-        norm=surface.linf,
+        norm=surface.Linf,
         optimizer_alg=optimizer.MomentumBestStart,
         random_start=traveler.MaxStart,
         saliency_map=surface.IdentitySaliency,
@@ -923,7 +872,7 @@ def bim(alpha, epochs, epsilon, model, statistics=False, verbosity=1):
         epsilon=epsilon,
         loss_func=loss.CELoss,
         model=model,
-        norm=surface.linf,
+        norm=surface.Linf,
         optimizer_alg=optimizer.SGD,
         random_start=traveler.IdentityStart,
         saliency_map=surface.IdentitySaliency,
@@ -985,7 +934,7 @@ def cwl2(
         epsilon=epsilon,
         loss_func=loss.CWLoss,
         model=model,
-        norm=surface.l2,
+        norm=surface.L2,
         optimizer_alg=optimizer.Adam,
         random_start=traveler.IdentityStart,
         saliency_map=surface.IdentitySaliency,
@@ -1025,7 +974,7 @@ def df(alpha, epochs, epsilon, model, statistics=True, verbosity=1):
         epsilon=epsilon,
         loss_func=loss.IdentityLoss,
         model=model,
-        norm=surface.l2,
+        norm=surface.L2,
         optimizer_alg=optimizer.SGD,
         random_start=traveler.IdentityStart,
         saliency_map=surface.DeepFoolSaliency,
@@ -1075,7 +1024,7 @@ def fab(alpha, epochs, epsilon, model, num_restarts=2, statistics=False, verbosi
         epsilon=epsilon,
         loss_func=loss.IdentityLoss,
         model=model,
-        norm=surface.l2,
+        norm=surface.L2,
         optimizer_alg=optimizer.BackwardSGD,
         random_start=traveler.ShrinkingStart,
         saliency_map=surface.DeepFoolSaliency,
@@ -1114,7 +1063,7 @@ def jsma(alpha, epochs, epsilon, model, statistics=False, verbosity=1):
         epsilon=epsilon,
         loss_func=loss.IdentityLoss,
         model=model,
-        norm=surface.l0,
+        norm=surface.L0,
         optimizer_alg=optimizer.SGD,
         random_start=traveler.IdentityStart,
         saliency_map=surface.JacobianSaliency,
@@ -1152,7 +1101,7 @@ def pgd(alpha, epochs, epsilon, model, statistics=False, verbosity=1):
         epsilon=epsilon,
         loss_func=loss.CELoss,
         model=model,
-        norm=surface.linf,
+        norm=surface.Linf,
         optimizer_alg=optimizer.SGD,
         random_start=traveler.MaxStart,
         saliency_map=surface.IdentitySaliency,
