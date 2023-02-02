@@ -2,7 +2,7 @@
 This module defines the Surface and Saliency classes referenced in
 https://arxiv.org/pdf/2209.04521.pdf.
 Authors: Ryan Sheatsley & Blaine Hoak
-Thu June 30 2022
+Thu Feb 2 2023
 """
 import torch  # Tensors and Dynamic neural networks in Python with strong GPU acceleration
 

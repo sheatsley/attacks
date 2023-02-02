@@ -1,7 +1,8 @@
 """
-This module defines custom PyTorch-based optimizers.
+This module defines custom PyTorch-based optimizers referenced in
+https://arxiv.org/pdf/2209.04521.pdf.
 Authors: Blaine Hoak & Ryan Sheatsley
-Wed Jun 29 2022
+Thu Feb 2 2023
 """
 import torch  # Tensors and Dynamic neural networks in Python with strong GPU acceleration
 from torch.optim import Adam  # Implements Adam: A Method for Stochasitc Optimization

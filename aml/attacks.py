@@ -2,7 +2,7 @@
 This module defines the attacks proposed in
 https://arxiv.org/pdf/2209.04521.pdf.
 Authors: Ryan Sheatsley & Blaine Hoak
-Mon Apr 18 2022
+Thu Feb 2 2023
 """
 import aml.loss as loss  # Loss functions for crafting adversarial examples in PyTorch
 import aml.optimizer as optimizer  # Optimizers for crafting adversarial examples in PyTorch

@@ -1,7 +1,8 @@
 """
-This module defines custom PyTorch-based loss functions.
+This module defines custom PyTorch-based loss functions referenced in
+https://arxiv.org/pdf/2209.04521.pdf.
 Authors: Ryan Sheatsley & Blaine Hoak
-Wed Apr 6 2022
+Thu Feb 2 2023
 """
 import torch  # Tensors and Dynamic neural networks in Python with strong GPU acceleration
 
