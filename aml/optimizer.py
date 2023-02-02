@@ -131,9 +131,9 @@ class BackwardSGD(torch.optim.Optimizer):
                 p[misclassified] = p[misclassified].mul_(group["beta"])
 
                 # compute alpha for biased projection
-                grad_norm = grad.norm(lp, dim=1, keepdim=True).clamp_(minimum)
-                p_grad_norm = p_grad.norm(lp, dim=1, keepdim=True).clamp_(minimum)
-                norm_sum = p_grad_norm.add_(grad_norm)
+                grad_norm = grad.norm(lp, dim=1, keepdim=True)
+                p_grad_norm = p_grad.norm(lp, dim=1, keepdim=True)
+                norm_sum = p_grad_norm.add_(grad_norm).clamp_(minimum)
                 alpha = grad_norm.div_(norm_sum).clamp_(max=group["alpha_max"])
 
                 # apply biased projection and update step
@@ -159,9 +159,9 @@ class MomentumBestStart(torch.optim.Optimizer):
 
     where k is the current iteration, Δ is the current perturbation vector to
     produce adversarial examples, η is the current learning rate, ∇f is the
-    gradient of the model with respect to Δ, x is the init input, and α is
-    a constant in [0, 1]. Secondly, the learning rate η is potentially halved
-    at every checkpoint w, where checkpoints are determined by multiplying the
+    gradient of the model with respect to Δ, x is the initial input, and α is a
+    constant in [0, 1]. Secondly, the learning rate η is potentially halved at
+    every checkpoint w, where checkpoints are determined by multiplying the
     total number of attack iterations by p_j, defined as:
 
                 p_(j+1) = p_j + max(p_j - p_(j-1) - 0.03, 0.06)
@@ -173,16 +173,15 @@ class MomentumBestStart(torch.optim.Optimizer):
                                     < ρ * (w_j - w_(j-1))
         (2) η_(w_(j-1)) == η_(w_j) and LMax_(w_(j-1)) == LMax_(w_j)
 
-    where w_j is the jth checkpoint, L is the model loss, x is the initial
+    where w_j is the jth checkpoint, L is the attack loss, x is the initial
     input, Δ_i is the perturbation vector at the ith iteration, ρ is a
     constant, η_(w_j) is the learning rate at checkpoint w_j, and LMax_(w_j) is
-    the highest model loss observed at checkpoint w_j. If both condtions are
+    the highest attack loss observed at checkpoint w_j. If both condtions are
     found to be true, Δ is also reset to the vector that attained the highest
     value of L thus far. Conceptually, these optimizations augment PGD via
     momentum, adjust the learning rate to ensure adversarial goals are met
-    continuously, and consume budget only if it aids in adversarial goals. As
-    this optimizer requires computing the loss, the attibute loss_req is set to
-    True.
+    continuously (and consume budget only if it helps). As this optimizer
+    requires computing the loss, the attibute loss_req is set to True.
 
     :func:`__init__`: instantiates MomentumBestStart objects
     :func:`step`: applies one optimization step
@@ -244,7 +243,7 @@ class MomentumBestStart(torch.optim.Optimizer):
             {
                 "alpha": alpha,
                 "atk_loss": atk_loss,
-                "checkpoints": {w for w in wj[:-1]},
+                "checkpoints": {w for w in wj[1:-1]},
                 "epochs": epochs,
                 "epsilon": epsilon,
                 "maximize": maximize,
@@ -261,13 +260,13 @@ class MomentumBestStart(torch.optim.Optimizer):
                 state["epoch"] = 0
                 state["lr"] = torch.full((p.size(0), 1), 2 * group["epsilon"])
                 state["lr_updated"] = torch.zeros(p.size(0), dtype=torch.bool)
-                state["num_loss_updates"] = torch.zeros(p.size(0), dtype=torch.int)
-                state["max_loss"] = torch.full(
+                state["num_l_updates"] = torch.zeros(p.size(0), dtype=torch.int)
+                state["best_l"] = torch.full(
                     (p.size(0),), -torch.inf if maximize else torch.inf
                 )
-                state["max_loss_updated"] = torch.zeros(p.size(0), dtype=torch.bool)
+                state["best_l_updated"] = torch.zeros(p.size(0), dtype=torch.bool)
                 state["momentum_buffer"] = p.clone()
-                state["prev_loss"] = torch.zeros(p.size(0))
+                state["prev_l"] = torch.zeros(p.size(0))
                 state["step"] = 0
         return None
 
@@ -286,26 +285,27 @@ class MomentumBestStart(torch.optim.Optimizer):
         """
         for group in self.param_groups:
             for p in group["params"]:
+                inc = group["maximize"]
                 loss = group["atk_loss"].loss
                 grad = p.grad.data if group["maximize"] else -p.grad.data
                 state = self.state[p]
 
                 # save max loss with perturbations and gradients (saves a pass)
-                max_loss_inc = loss.gt(state["max_loss"])
-                state["max_loss"][max_loss_inc] = loss[max_loss_inc]
-                state["best_p"][max_loss_inc] = p[max_loss_inc].clone()
-                state["best_grad"][max_loss_inc] = grad[max_loss_inc].clone()
+                best_l = loss.gt(state["best_l"]) if inc else loss.lt(state["best_l"])
+                state["best_l"][best_l] = loss[best_l]
+                state["best_p"][best_l] = p[best_l].clone()
+                state["best_grad"][best_l] = grad[best_l].clone()
 
                 # perform checkpoint subroutines (and update associated info)
-                loss_inc = loss.gt(state["prev_loss"])
-                state["num_loss_updates"][loss_inc] += 1
-                state["max_loss_updated"][max_loss_inc] = True
+                loss_inc = loss.gt(state["prev_l"]) if inc else loss.lt(state["prev_l"])
+                state["num_l_updates"][loss_inc] += 1
+                state["best_l_updated"][best_l] = True
                 state["prev_loss"] = loss
                 if state["epoch"] in group["checkpoints"]:
 
                     # loss increased <rho% or lr and max loss stayed the same?
-                    c1 = state["num_loss_updates"].lt(group["rho"] * state["step"])
-                    c2 = ~(state["lr_updated"].logical_or(state["max_loss_updated"]))
+                    c1 = state["num_l_updates"].lt(group["rho"] * state["step"])
+                    c2 = ~(state["lr_updated"].logical_or(state["best_l_updated"]))
                     update = c1.logical_or(c2)
 
                     # if so, half learning rate and reset perturbation to max loss
@@ -317,8 +317,8 @@ class MomentumBestStart(torch.optim.Optimizer):
                     state["step"] = 0
                     state["lr_updated"][update] = True
                     state["lr_updated"][~update] = False
-                    state["num_loss_updates"].fill_(0)
-                    state["max_loss_updated"].fill_(False)
+                    state["num_l_updates"].fill_(0)
+                    state["best_l_updated"].fill_(False)
 
                 # apply update step (simplified to mitigate underflow)
                 momentum = state["momentum_buffer"].mul_(group["alpha"] - 1)
