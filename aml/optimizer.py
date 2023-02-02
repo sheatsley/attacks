@@ -256,7 +256,7 @@ class MomentumBestStart(torch.optim.Optimizer):
             for p in group["params"]:
                 state = self.state[p]
                 state["best_p"] = p.clone()
-                state["best_grad"] = torch.zeros_like(p)
+                state["best_g"] = torch.zeros_like(p)
                 state["epoch"] = 0
                 state["lr"] = torch.full((p.size(0), 1), 2 * group["epsilon"])
                 state["lr_updated"] = torch.zeros(p.size(0), dtype=torch.bool)
@@ -290,28 +290,28 @@ class MomentumBestStart(torch.optim.Optimizer):
                 grad = p.grad.data if group["maximize"] else -p.grad.data
                 state = self.state[p]
 
-                # save max loss with perturbations and gradients (saves a pass)
+                # save best loss with perturbations and gradients (saves a pass)
                 best_l = loss.gt(state["best_l"]) if inc else loss.lt(state["best_l"])
                 state["best_l"][best_l] = loss[best_l]
                 state["best_p"][best_l] = p[best_l].clone()
-                state["best_grad"][best_l] = grad[best_l].clone()
+                state["best_g"][best_l] = grad[best_l].clone()
 
                 # perform checkpoint subroutines (and update associated info)
                 loss_inc = loss.gt(state["prev_l"]) if inc else loss.lt(state["prev_l"])
                 state["num_l_updates"][loss_inc] += 1
                 state["best_l_updated"][best_l] = True
-                state["prev_loss"] = loss
+                state["prev_l"] = loss
                 if state["epoch"] in group["checkpoints"]:
 
-                    # loss increased <rho% or lr and max loss stayed the same?
+                    # loss improved <rho% or lr and best loss stayed the same?
                     c1 = state["num_l_updates"].lt(group["rho"] * state["step"])
                     c2 = ~(state["lr_updated"].logical_or(state["best_l_updated"]))
                     update = c1.logical_or(c2)
 
-                    # if so, half learning rate and reset perturbation to max loss
+                    # if so, half learning rate and reset perturbation to best loss
                     state["lr"][update] /= 2
                     p[update] = state["best_p"][update].clone()
-                    grad[update] = state["best_grad"][update].clone()
+                    grad[update] = state["best_g"][update].clone()
 
                     # update checkpoint subroutine state
                     state["step"] = 0
