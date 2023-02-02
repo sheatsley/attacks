@@ -21,32 +21,28 @@ class Surface:
     :func:`initialize`: prepares Surface objects to operate over inputs
     """
 
-    def __init__(self, epsilon, loss, model, norm, saliency_map):
+    def __init__(self, loss, model, norm, saliency_map):
         """
         This method instantiates Surface objects with a variety of attributes
         necessary for the remaining methods in this class. Conceputally,
         Surfaces are responsible for producing gradients from inputs, and thus,
-        the following attributes are collected: (1) the lp-based threat model,
-        (2) a PyTorch-based loss object from the loss module, (3) a
-        PyTorch-based model object from dlm
-        (https://github.com/sheatsley/models), (5) the lp-norm to project
-        gradients into, and (6) the saliency map to apply.
+        the following attributes are collected: (1) a PyTorch-based loss object
+        from the loss module, (2) a PyTorch-based model object from dlm
+        (https://github.com/sheatsley/models), (3) the lp-norm to project
+        gradients into, and (4) the saliency map to apply.
 
-        :param epsilon: lp threat model (used for l0 attacks)
-        :type epsilon: float
         :param loss: objective function to differentiate
         :type loss: loss module object
         :param model: feedforward differentiable neural network
         :type model: dlm LinearClassifier-inherited object
         :param norm: lp-space to project gradients into
-        :type norm: surface module callable
+        :type norm: surface module object
         :param saliency_map: desired saliency map heuristic
         :type saliency_map: surface module object
         :return: a surface
         :rtype: Surface object
         """
         components = (loss, norm, saliency_map)
-        self.epsilon = epsilon
         self.loss = loss
         self.model = model
         self.norm = norm
@@ -56,7 +52,7 @@ class Surface:
         self.params = {
             "loss": type(loss).__name__,
             "model": type(model).__name__,
-            "lp": norm.__name__,
+            "lp": type(norm).__name__,
             "smap": type(saliency_map).__name__,
         }
         return None
@@ -103,12 +99,10 @@ class Surface:
         loss = loss.detach().view(-1, cj)
         pj.requires_grad = False
 
-        # apply saliency map and lp-norm filter
+        # apply saliency map and lp-norm gradient projection
         smap_args = {"loss": loss, "y": y, "p": p}
         smap_grad = self.saliency_map(grad.view(-1, cj, grad.size(1)), **smap_args)
-        dist = (c.sub(p).abs_() for c in self.clip)
-        lp_args = {"dist": dist, "max_obj": self.loss.max_obj, "epsilon": self.epsilon}
-        final_grad = self.norm(smap_grad, **lp_args)
+        final_grad = self.norm(smap_grad, p=p)
 
         # call closure subroutines and attach grads to the perturbation vector
         [comp.closure(final_grad) for comp in self.closure]
@@ -137,15 +131,15 @@ class Surface:
         Surface objects and perturbation vectors to loss functions.
 
         :param clip: the range of allowable values for the perturbation vector
-        :type clip: tuple of torch Tensor objects (n, m) Tensor objects (n, m)
+        :type clip: tuple of torch Tensor objects (n, m)
         :param p: the perturbation vectors used to craft adversarial examples
         :type p: torch Tensor object (n, m)
         :return: None
         :rtype: NoneType
         """
 
-        # subroutine (1): save minimum and maximum values for l0 attacks
-        self.clip = clip
+        # subroutine (1): initialize L0 objects with minimum and maximum values
+        self.norm.initialize(clip) if type(self.norm) is L0 else None
 
         # subroutine (2): attach the perturbation vector to loss objects
         self.loss.attach(p) if self.loss.p_req else None
@@ -189,25 +183,29 @@ class DeepFoolSaliency:
 
     jac_req = True
 
-    def __init__(self, p, classes, **kwargs):
+    def __init__(self, p, classes, minimum=1e-4, **kwargs):
         """
         This method instantiates a DeepFoolSaliency object. As described above,
         ith class is defined as the minimum logit difference scaled by the
         q-norm of the logit differences. Thus, upon initilization, this class
-        saves q as an attribute as well as the number of classes (so that the
-        yth gradient can be retrieved correctly with small batches).
+        saves q, the number of classes (so that the yth gradient can be
+        retrieved correctly with small batches), and budget and the minimum
+        possible norm value (used for mitigating underflow).
 
         :param p: the lp-norm to apply
         :return: a DeepFool saliency map
         :param classes: number of classes
         :type classes: int
+        :param minimum: minimum gradient value (to mitigate underflow)
+        :type minimum: float
         :rtype: DeepFoolSaliency object
         """
         self.q = 1 if p == torch.inf else p
         self.classes = classes
+        self.minimum = minimum
         return None
 
-    def __call__(self, g, loss, y, p, minimum=1e-4, **kwargs):
+    def __call__(self, g, loss, y, p, **kwargs):
         """
         This method applies the heuristic defined above. Specifically, this
         computes the logit and gradient differences between the true class and
@@ -226,11 +224,9 @@ class DeepFoolSaliency:
         :type loss: PyTortch FloatTensor object (n, c)
         :param y: the labels (or initial predictions) of x
         :type y: torch Tensor object (n,)
-        :param minimum: minimum gradient value (to mitigate underflow)
-        :type minimum: float
         :param kwargs: miscellaneous keyword arguments
         :type kwargs: dict
-        :return: absolute gradient differences as defined by DeepFool
+        :return: gradient differences as defined by DeepFool
         :rtype: torch Tensor object (n, m)
         """
 
@@ -244,12 +240,12 @@ class DeepFoolSaliency:
         other_logits = loss[~y_hot].view(loss.size(0), -1)
 
         # compute ith class
-        grad_diffs = yth_grad.sub_(other_grad)
-        logit_diffs = yth_logit.sub_(other_logits)
+        grad_diffs = yth_grad.sub(other_grad)
+        logit_diffs = yth_logit.sub(other_logits)
         normed_ith_logit_diff, i = (
             logit_diffs.abs()
-            .div(grad_diffs.norm(self.q, dim=2).clamp_(minimum))
-            .add_(minimum)
+            .div(grad_diffs.norm(self.q, dim=2).clamp_(self.minimum))
+            .add_(self.minimum)
             .topk(1, dim=1, largest=False)
         )
 
@@ -263,11 +259,11 @@ class DeepFoolSaliency:
         pith_logit_diff = ith_grad_diff.mul(p).sum(1, keepdim=True).add_(ith_logit_diff)
         self.org_proj = (
             pith_logit_diff.abs_()
-            .div_(ith_grad_diff.pow(self.q).sum(1, keepdim=True))
-            .add_(minimum)
+            .div_(ith_grad_diff.pow(self.q).sum(1, keepdim=True).clamp_(self.minimum))
+            .add_(self.minimum)
             .mul(ith_grad_diff)
         )
-        return ith_grad_diff.abs_()
+        return ith_grad_diff
 
     def closure(self, g):
         """
@@ -283,7 +279,7 @@ class DeepFoolSaliency:
         :return: finalized gradients for optimizers to step into
         :rtype: torch Tensor (n, m)
         """
-        return g.mul_(self.normed_ith_logit_diff).mul_(self.ith_grad_diff_sign)
+        return g.mul_(self.normed_ith_logit_diff)
 
 
 class IdentitySaliency:
@@ -397,62 +393,214 @@ class JacobianSaliency:
         return smap
 
 
-def l0(g, dist, epsilon, max_obj, top=0.01, **kwargs):
+class L0:
     """
-    This function projects gradients into the l0-norm space. Specifically,
-    features are scored by the product of their gradients and the distance
-    remaining to either the minimum or maximum clipping bounds (depending on
-    the sign of the gradient). Afterwards, the minimum of the lp threat model
-    and the top% of components (measured by magnitude), are set to their signs,
-    while all other component gradients are set to zero. Keyword arguments are
-    accepted to provide a homogeneous interface across norm projections.
+    This class implements methods for projecting gradients into the l0 space
+    and enforcing that perturbations are compliant with l0-based threat models.
+    For projecting gradients, features are are selected based on a score
+    computed from the product of the distance remaining to the bounds of the
+    domain and the gradients. For enforcing threat models, once perturbation
+    vectors are at the maximum budget, the distance for unperturbed features is
+    set to zero (and thus, their scores become zero).
 
-    :param g: the gradients of the perturbation vector
-    :type g: torch Tensor object (n, m)
-    :param dist: distance remaining for the perturbation vector
-    :type dist: tuple of torch Tensor objects (n, m)
-    :param epsilon: lp threat model (used for l0 attacks)
-    :type epsilon: float
-    :param max_obj: whether the used loss function is to be maximized
-    :type max_obj: bool
-    :param top: percentage of features to perturb
-    :type top: float
-    :return: gradients projected into the l0-norm space
-    :rtype: torch Tensor object (n, m)
+    :func:`__init__`: instantiates L0 objects.
+    :func:`__call__`: projects gradients into l0 space
+    :func:`initialize`: initializes clipping distance & perturbation amount
+    :func:`project`: enforces l0 threat models
     """
-    fix = g.size(1) - max(min(int(g.size(1) * top), epsilon), 1)
-    min_clip = g.sign().mul_(-1 if max_obj else 1).eq(1)
-    g.mul_(torch.where(min_clip, *dist))
-    bottom_k = g.abs().topk(fix, dim=1, largest=False)
-    return g.scatter_(dim=1, index=bottom_k.indices, value=0).sign_()
+
+    def __init__(self, epsilon, maximize, top=0.01, **kwargs):
+        """
+        This method instantiates an L0 object. It accepts as arguments the l0
+        budget, whether the loss is to be maximized, and the amount of features
+        to perturb at each iteration. Keyword arguments are accepted to provide
+        a homogeneous interface across norm projection objects.
+
+        :param epsilon: the maximum amount of perturable features
+        :type epsilon: int
+        :param clip: the initial perturbation range
+        :type clip: tuple of torch Tensor objects (n, m)
+        :param maximize: whether the loss function is to be maximized
+        :type maximize: bool
+        :param top: percentage of features to perturb per iteration
+        :type top: float
+        :return: l0 projection methods
+        :rtype: L0 object
+        """
+        self.epsilon = epsilon
+        self.direction = -1 if maximize else 1
+        self.top = top
+        return None
+
+    def __call__(self, g, p, **kwargs):
+        """
+        This method projects gradients into the l0-norm space. Specifically,
+        features are scored based on the product of their gradients and the
+        distance remaining to either the minimum or maximum clipping bounds
+        (depending on the sign of the gradient). The top% of components
+        (measured by magnitude) are set to their signs, while all other
+        component gradients are set to zero.
+
+        :param g: the gradients of the perturbation vector
+        :type g: torch Tensor object (n, m)
+        :param p: the current perturbation vector
+        :type p: torch Tensor object (n, m)
+        :return: gradients projected into l0 space.
+        :rtype: torch Tensor object (n, m)
+        """
+        min_clip = g.sign().mul_(self.direction).eq(1)
+        distance = self.clip.sub(p).abs_()
+        g.mul_(torch.where(min_clip, *distance.unbind()))
+        bottom_k = g.abs().topk(self.bottom, dim=1, largest=False)
+        return g.scatter_(dim=1, index=bottom_k.indices, value=0).sign_()
+
+    def initialize(self, clip):
+        """
+        This method initializes L0 objects by attaching the distance from
+        initial inputs to clipping bounds and computes the amount of
+        perturbable features per iteration.
+
+        :param clip: the initial allowable perturbation range of the domain
+        :type clip: tuple of torch Tensor objects (n, m)
+        :rtype: NoneType
+        """
+        self.clip = torch.stack(clip)
+        self.bottom = int(clip[0].size(1) * (1 - self.top))
+        return None
+
+    def project(self, p):
+        """
+        This method projects perturbations so that they are compliant with the
+        parameterized l0 threat model. Specifically, this method keeps the
+        top-epsilon feature values (sorted by magnitude) and sets the remainder
+        to zero. As an additional optimization, this method also sets the
+        distance clipping distance to the current value of the perturbation
+        vector as to constrain subsequent perturbations so that they are
+        complaint with the threat model.
+
+        :param p: perturbation vectors
+        :type p: torch Tensor object (n, m)
+        :return: l0-complaint adversarial examples
+        :rtype: torch Tensor object (n, m)
+        """
+        bottom_k = p.abs().topk(p.size(1) - self.epsilon, dim=1, largest=False)
+        p.scatter_(dim=1, index=bottom_k.indices, value=0)
+        idx = p.eq(0).logical_and_(p.norm(0, dim=1, keepdim=True).eq_(self.epsilon))
+        self.clip[idx.expand(2, -1, -1)] = p[idx].repeat(2)
+        return p
 
 
-def l2(g, minimum=1e-12, **kwargs):
+class L2:
     """
-    This function projects gradients into the l2-norm space. Specifically, this
-    is defined as normalizing the gradients by thier l2-norm. The minimum
-    optional argument can be used to mitigate underflow. Keyword arguments are
-    accepted to provide a homogeneous interface across norm projections.
+    This class implements methods for projecting gradients into the l2 space
+    and enforcing that perturbations are compliant with l2-based threat models.
+    For gradient projection, gradients are normalized by their l2 norms. For
+    enforcing threat models, perturbation vectors are renormed such that they
+    are no greater than the parameterized l2 budget.
 
-    :param g: the gradients of the perturbation vector
-    :type g: torch Tensor object (n, m)
-    :param minimum: minimum gradient value (to mitigate underflow)
-    :type minimum: torch Tensor object (1,)
-    :return: gradients projected into the l2-norm space
-    :rtype: torch Tensor object (n, m)
+    :func:`__init__`: instantiates L2 objects.
+    :func:`__call__`: projects gradients into l2 space
+    :func:`project`: enforces l2 threat models
     """
-    return g.div_(g.norm(2, dim=1, keepdim=True).clamp_(minimum))
+
+    def __init__(self, epsilon, minimum=1e-12, **kwargs):
+        """
+        This method instantiates an L2 object. It accepts as arguments the l2
+        budget and the minimum possible norm value (used for mitigating
+        underflow). Keyword arguments are accepted to provide a homogeneous
+        interface across norm projection classes.
+
+        :param epsilon: the maximum l2 distance for perturbations
+        :type epsilon: float
+        :param minimum: minimum norm value (to mitigate underflow)
+        :type minimum: float
+        :return: l2 projection methods
+        :rtype: L2 object
+        """
+        self.epsilon = epsilon
+        self.minimum = minimum
+        return None
+
+    def __call__(self, g, **kwargs):
+        """
+        This method  projects gradients into the l2-norm space. Specifically,
+        this is defined as normalizing the gradients by thier l2-norm. Keyword
+        arguments are accepted to provide a homogeneous interface across norm
+        projection classes.
+
+        :param g: the gradients of the perturbation vector
+        :type g: torch Tensor object (n, m)
+        :return: gradients projected into l2 space.
+        :rtype: torch Tensor object (n, m)
+        """
+        return g.div_(g.norm(2, dim=1, keepdim=True).clamp_(self.minimum))
+
+    def project(self, p):
+        """
+        This method projects perturbation vectors so that they are complaint
+        with the specified l2 threat model (i.e., epsilon). Specifically,
+        perturbation vectors whose l2-norms exceed the threat model are
+        projected back onto the l2-ball.
+
+        :param p: perturbation vectors
+        :type p: torch Tensor object (n, m)
+        :return: l2-complaint adversarial examples
+        :rtype: torch Tensor object (n, m)
+        """
+        return p.renorm_(2, dim=0, maxnorm=self.epsilon)
 
 
-def linf(g, **kwargs):
+class Linf:
     """
-    This function projects gradients into the l∞-norm space. Specifically, this
-    is defined as taking the sign of the gradients. Keyword arguments are
-    accepted to provide a homogeneous interface across norm projections.
+    This class implements methods for projecting gradients into the l∞ space
+    and enforcing that perturbations are compliant with l∞-based threat models.
+    For gradient projection, gradients are set to their signs. For enforcing
+    threat models, perturbation vectors are clamped to ±ε.
 
-    :param g: the gradients of the perturbation vector
-    :type g: torch Tensor object (n, m)
-    :return: gradients projected into the l∞-norm space
-    :rtype: torch Tensor object (n, m)
+    :func:`__init__`: instantiates L∞ objects.
+    :func:`__call__`: projects gradients into l∞ space
+    :func:`project`: enforces l∞ threat models
     """
-    return g.sign_()
+
+    def __init__(self, epsilon, **kwargs):
+        """
+        This method instantiates an Linf object. It accepts as arguments the l∞
+        budget. Keyword arguments are accepted to provide a homogeneous
+        interface across norm projection classes.
+
+        :param epsilon: the maximum l∞ distance for perturbations
+        :type epsilon: float
+        :return: l∞ projection methods
+        :rtype: Linf object
+        """
+        self.epsilon = epsilon
+        return None
+
+    def __call__(self, g, **kwargs):
+        """
+        This function projects gradients into the l∞-norm space. Specifically,
+        this is defined as taking the sign of the gradients. Keyword arguments
+        are accepted to provide a homogeneous interface across norm projection
+        classes.
+
+        :param g: the gradients of the perturbation vector
+        :type g: torch Tensor object (n, m)
+        :return: gradients projected into the l∞-norm space
+        :rtype: torch Tensor object (n, m)
+        """
+        return g.sign_()
+
+    def project(self, p):
+        """
+        This method projects perturbation vectors so that they are complaint
+        with the specified l∞ threat model (i.e., epsilon). Specifically,
+        perturbation vectors whose l∞-norms exceed the threat model are
+        projected back onto the l∞-ball. This is done by clipping perturbation
+        vectors by ±ε.
+
+        :param p: perturbation vectors
+        :type p: torch Tensor object (n, m)
+        :return: l∞-complaint adversarial examples
+        :rtype: torch Tensor object (n, m)
+        """
+        return p.clamp_(-self.epsilon, self.epsilon)
