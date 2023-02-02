@@ -1,7 +1,7 @@
 """
-Build script for the Adversarial Machine Learning repo
-Author: Ryan Sheatsley
-Date: Mon Nov 21 2022
+Build script for Adversarial Machine Learning
+Author: Ryan Sheatsley & Blaine Hoak
+Feb 2 2023
 """
 import setuptools  # Easily download, build, install, upgrade, and uninstall Python packages
 
@@ -31,6 +31,6 @@ setuptools.setup(
     name="aml",
     packages=setuptools.find_packages(),
     python_requires=">=3.10",
-    url="https://github.com/sheatsley/adversarial_machine_learning",
-    version="0.9.1",
+    url="https://github.com/sheatsley/attacks",
+    version="1.0.0",
 )
