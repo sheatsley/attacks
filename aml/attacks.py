@@ -344,24 +344,6 @@ class Attack:
         :return: an attack
         :rtype: Attack object
         """
-        if (
-            optimizer_alg in {optimizer.BackwardSGD, optimizer.SGD}
-            and saliency_map is surface.DeepFoolSaliency
-            and norm is surface.L2
-        ):
-            alpha = 1.0
-        elif (
-            optimizer_alg in {optimizer.BackwardSGD, optimizer.SGD}
-            and saliency_map is surface.DeepFoolSaliency
-            and norm is surface.Linf
-        ):
-            alpha = 1.0
-        elif (
-            optimizer_alg
-            in {optimizer.BackwardSGD, optimizer.MomentumBestStart, optimizer.SGD}
-            and norm is surface.L0
-        ):
-            alpha = 1.0
 
         # set & save attack parameters, and build short attack name
         self.batch_size = batch_size
