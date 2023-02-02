@@ -183,6 +183,7 @@ class Adversary:
         b = torch.full_like(x, torch.inf)
         b[self.model(x).argmax(1).ne(y)] = 0
         for r in range(self.num_restarts):
+            self.params["attack"].restart = f"Restart {r} " if r > 0 else ""
             r > 0 and self.verbose and print(
                 f"On restart iteration {r} of {self.num_restarts - 1}...",
                 f"({r / (self.num_restarts - 1):.1%})",
@@ -200,6 +201,7 @@ class Adversary:
                     f"(+{update.sum().div(update.numel()):.2%})",
                     f"(New {new:.2%}, Improved {improved:.2%})",
                 )
+
         return b.nan_to_num_(nan=None, posinf=0)
 
     def max_loss(self, x, p, b, y):
@@ -351,6 +353,7 @@ class Attack:
         self.epsilon = epsilon
         self.et = early_termination
         self.lp = {surface.L0: 0, surface.L2: 2, surface.Linf: torch.inf}[norm]
+        self.restart = ""
         self.statistics = statistics
         self.verbosity = max(int(epochs * verbosity), 1 if verbosity else 0)
         self.components = {
@@ -473,11 +476,12 @@ class Attack:
         verbose and print(f"Crafting {x.size(0)} adversarial examples with {self}...")
         xi, yi, pi, oi = (t.split(batch_size) for t in (x, y, p, o))
         for b, (xb, yb, pb, ob) in enumerate(zip(xi, yi, pi, oi)):
-            verbose and print(f"On batch {b + 1} of {bmax} {(b + 1) / bmax:.1%}...")
+            verbose and print(f"{self.name} {self.restart} Batch {b + 1} of {bmax}...")
             cnb, cxb = mins.sub(xb), maxs.sub(xb)
             self.surface.initialize((cnb, cxb), pb)
             self.traveler.initialize(pb, ob)
             pb.clamp_(cnb, cxb)
+            self.update(xb, yb, pb, ob)
             self.progress(b, 0, xb, yb, pb, ob)
 
             # compute peturbation updates and record progress
@@ -489,9 +493,11 @@ class Attack:
                 self.update(xb, yb, pb, ob)
                 prog = self.progress(b, e, xb, yb, pb, ob) if self.statistics else ""
                 print(
+                    f"{self.restart}"
                     f"Epoch {e:{len(str(self.epochs))}} / {self.epochs} {prog:<15}"
                 ) if verbose and not e % self.verbosity else print(
-                    f"{self.name}: Epoch {e}... ({e / self.epochs:.1%})", end="\r"
+                    f"{self.name}: {self.restart} Epoch {e}... ({e / self.epochs:.1%})",
+                    end="\r",
                 )
 
         # compute final statistics, set failed perturbations to zero and return
