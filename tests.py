@@ -21,7 +21,6 @@ import unittest  # Unit testing framework
 import torch  # Tensors and Dynamic neural networks in Python with strong GPU acceleration
 
 # TODO
-# determine tweaks needed to make some attacks work (alpha for l2 df, binary search on c for linf cw df)
 # add all other attack variants (pgd l2, cw-linf, df-linf, fab-linf?)
 
 
@@ -1077,16 +1076,17 @@ class FunctionalTests(BaseTest):
         :return: None
         :rtype: NoneType
         """
+        natk = len(str(len(attacks)))
         for i, attack in enumerate(attacks, start=1):
             with self.subTest(Attack=f"{i}. {attack.name}"):
                 p = attack.craft(self.x, self.y)
-                n = (p.norm(d, 1).median().item() for d in (0, 2, torch.inf))
-                norm_results = (
+                n = (p.norm(d, 1).mean().item() for d in (0, 2, torch.inf))
+                n_res = (
                     f"l{p}: {n:.3}/{float(b):.3} ({n/b:.2%})"
                     for n, b, p in zip(n, (self.l0, self.l2, self.linf), (0, 2, "∞"))
                 )
                 acc = self.model.accuracy(self.x + p, self.y).item()
-                print(f"{attack.name} complete! Model Acc: {acc:.2%},", *norm_results)
+                print(f"{i:>{natk}}. {attack.name} complete! Acc: {acc:.2%},", *n_res)
                 self.assertLess(acc, min_acc)
         return None
 
@@ -1396,7 +1396,7 @@ class PerformanceTests(BaseTest):
         lp = (0, 2, torch.inf)
         proj = {0: self.l0_proj, 2: self.l2_proj, torch.inf: self.linf_proj}[attack.lp]
         ps = tuple(proj(p).clamp(self.p_min, self.p_max) for p in (aml_p, *fws_p))
-        norms = tuple([p.norm(d, 1).median().item() for d in lp] for p in ps)
+        norms = tuple([p.norm(d, 1).mean().item() for d in lp] for p in ps)
 
         # compute model accuracy decrease
         advs = (self.x + p for p in ps)
@@ -1427,7 +1427,7 @@ class PerformanceTests(BaseTest):
             print(f"{f:>{lf}} {attack.name} Model Acc: {a:.2%} ({d:.2%}), Results: {n}")
 
         # compute target norm and assert marginal performance difference
-        norm_map = (aml.surface.l0, aml.surface.l2, aml.surface.linf)
+        norm_map = (aml.surface.L0, aml.surface.L2, aml.surface.Linf)
         atk_norm = norm_map.index(attack.surface.norm)
         norm_perfs = (p[atk_norm] for p in perfs)
         aml_perf, fws_perf = next(norm_perfs), tuple(norm_perfs)
@@ -1607,12 +1607,11 @@ class SpecialTests(BaseTest):
                 epsilon=(self.l0, self.l2, self.linf),
                 model=self.atk_params["model"],
                 verbosity=0,
-                norms=(aml.surface.l0,),
             )
         )
         return FunctionalTests.functional_test(self, attacks, min_acc)
 
-    def test_attack_performance(self, name="B-I-CE-J-2"):
+    def test_attack_performance(self, name="M-I-Id-D-0"):
         """
         This method serves to help debug individual attacks. Given the attack
         name, it will instantiate an attack object with the associated
