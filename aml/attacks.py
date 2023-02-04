@@ -476,7 +476,7 @@ class Attack:
         # set verbosity and configure batch & output results dataframes
         verbose = self.verbosity and self.verbosity != self.epochs
         rows = [e for i in range(bmax) for e in range(self.epochs + 1)]
-        metrics = "accuracy", "model_loss", "attack_loss", "l0", "l2", "linf"
+        metrics = "epoch", "accuracy", "model_loss", "attack_loss", "l0", "l2", "linf"
         self.b_results = pandas.DataFrame(0, index=rows, columns=metrics)
         self.results = pandas.DataFrame(0, index=rows, columns=metrics)
 
@@ -553,7 +553,7 @@ class Attack:
         aloss = self.surface.loss(logits, yb).sum().item()
         acc = logits.argmax(1).eq_(yb).sum().item()
         nb = [pb.norm(n, 1).sum().item() for n in norms]
-        self.b_results.iloc[idx] += (acc, mloss, aloss, *nb)
+        self.b_results.iloc[idx] += (epoch, acc, mloss, aloss, *nb)
 
         # compute output buffer stats and update results
         ologits = self.surface.model(xb + ob.nan_to_num(posinf=0))
@@ -561,7 +561,7 @@ class Attack:
         oaloss = self.surface.loss(logits, yb).sum().item()
         oacc = ologits.argmax(1).eq_(yb).sum().item()
         on = [ob.nan_to_num(posinf=0).norm(n, 1).sum().item() for n in norms]
-        self.results.iloc[idx] += (oacc, omloss, oaloss, *on)
+        self.results.iloc[idx] += (epoch, oacc, omloss, oaloss, *on)
 
         # build str representation and return
         return (
