@@ -8,9 +8,17 @@ import aml.loss as loss  # Loss functions for crafting adversarial examples in P
 import aml.optimizer as optimizer  # Optimizers for crafting adversarial examples in PyTorch
 import aml.surface as surface  # Models for crafting adversarial examples
 import aml.traveler as traveler  # Perturbation schemes for adversarial examples
-import itertools  # Functions creating iterators for efficietn looping
+import itertools  # Functions creating iterators for efficient looping
 import pandas  # Python Data Analysis Library
 import torch  # Tensors and Dynamic neural networks in Python with strong GPU acceleration
+
+# TODO
+# change setuptools version to head
+# not sure if batching is necessary, given that models automatically batch?
+# think about classes for smap and loss when the model hasnt been trained yet
+# need to consider a reinit method.. CW will not reinitilize c to default value when using batches...
+# ^ currentl sidestepped with ugly "c_init"
+# ^ yup, even more important, can't enable statistics for adversaries
 
 
 class Adversary:
@@ -742,7 +750,7 @@ def apgdce(
     :type early_termination: bool
     :param epochs: number of optimization steps to perform
     :type epochs: int
-    :param epsilon: lp-norm ball threat model
+    :param epsilon: l∞ threat model
     :type epsilon: float
     :param model: neural network
     :type model: dlm LinearClassifier-inherited object
@@ -793,7 +801,7 @@ def apgddlr(
     :type early_termination: bool
     :param epochs: number of optimization steps to perform
     :type epochs: int
-    :param epsilon: lp-norm ball threat model
+    :param epsilon: l∞ threat model
     :type epsilon: float
     :param model: neural network
     :type model: dlm LinearClassifier-inherited object
@@ -842,7 +850,7 @@ def bim(alpha, epochs, epsilon, model, statistics=False, verbosity=1):
     :type early_termination: bool
     :param epochs: number of optimization steps to perform
     :type epochs: int
-    :param epsilon: lp-norm ball threat model
+    :param epsilon: l∞ threat model
     :type epsilon: float
     :param model: neural network
     :type model: dlm LinearClassifier-inherited object
@@ -893,7 +901,7 @@ def cwl2(
     :type early_termination: bool
     :param epochs: number of optimization steps to perform
     :type epochs: int
-    :param epsilon: lp-norm ball threat model
+    :param epsilon: l2 threat model
     :type epsilon: float
     :param model: neural network
     :type model: dlm LinearClassifier-inherited object
@@ -944,7 +952,7 @@ def df(alpha, epochs, epsilon, model, statistics=True, verbosity=1):
     :type early_termination: bool
     :param epochs: number of optimization steps to perform
     :type epochs: int
-    :param epsilon: lp-norm ball threat model
+    :param epsilon: l2 threat model
     :type epsilon: float
     :param model: neural network
     :type model: dlm LinearClassifier-inherited object
@@ -985,7 +993,7 @@ def fab(alpha, epochs, epsilon, model, num_restarts=2, statistics=False, verbosi
     :type early_termination: bool
     :param epochs: number of optimization steps to perform
     :type epochs: int
-    :param epsilon: lp-norm ball threat model
+    :param epsilon: l2 threat model
     :type epsilon: float
     :param model: neural network
     :type model: dlm LinearClassifier-inherited object
@@ -1033,7 +1041,7 @@ def jsma(alpha, epochs, epsilon, model, statistics=False, verbosity=1):
     :type alpha: float
     :param epochs: number of optimization steps to perform
     :type epochs: int
-    :param epsilon: lp-norm ball threat model
+    :param epsilon: l0 threat model
     :type epsilon: float
     :param model: neural network
     :type model: dlm LinearClassifier-inherited object
@@ -1071,7 +1079,7 @@ def pgd(alpha, epochs, epsilon, model, statistics=False, verbosity=1):
     :type alpha: float
     :param epochs: number of optimization steps to perform
     :type epochs: int
-    :param epsilon: lp-norm ball threat model
+    :param epsilon: l∞ threat model
     :type epsilon: float
     :param model: neural network
     :type model: dlm LinearClassifier-inherited object
