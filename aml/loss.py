@@ -118,6 +118,7 @@ class CWLoss(torch.nn.Module):
         self.classes = classes
         self.c = torch.tensor((c,))
         self.k = k
+        self.c_init = c
         self.hparam = ("c", self.c)
         return None
 
@@ -137,8 +138,8 @@ class CWLoss(torch.nn.Module):
         :rtype: NoneType
         """
         self.p = p
-        if self.c.size(0) < p.size(0):
-            self.c.resize_(p.size(0)).fill_(self.c[0])
+        if self.c.size(0) != p.size(0):
+            self.c.resize_(p.size(0)).fill_(self.c_init)
         return None
 
     def forward(self, logits, y, yt=None):
