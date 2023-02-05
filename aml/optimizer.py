@@ -53,7 +53,7 @@ class BackwardSGD(torch.optim.Optimizer):
     def __init__(
         self,
         params,
-        atk_loss,
+        attack_loss,
         lr,
         maximize,
         norm,
@@ -74,8 +74,8 @@ class BackwardSGD(torch.optim.Optimizer):
 
         :param alpha_max: maximum value of alpha
         :type alpha_max: float
-        :param atk_loss: used to return the current model accuracy
-        :type atk_loss: Loss object
+        :param attack_loss: used to return the current model accuracy
+        :type attack_loss: Loss object
         :param beta: backward step strength
         :type beta: float
         :param lr: learning rate
@@ -95,7 +95,7 @@ class BackwardSGD(torch.optim.Optimizer):
             params,
             {
                 "alpha_max": alpha_max,
-                "atk_loss": atk_loss,
+                "attack_loss": attack_loss,
                 "beta": beta,
                 "lr": lr,
                 "maximize": maximize,
@@ -122,7 +122,7 @@ class BackwardSGD(torch.optim.Optimizer):
         for group in self.param_groups:
             for p in group["params"]:
                 lp = group["norm"]
-                loss = group["atk_loss"]
+                loss = group["attack_loss"]
                 grad = p.grad.data
                 p_grad = getattr(group["smap"], "org_proj", torch.zeros_like(grad))
                 grad, p_grad = (grad, p_grad) if group["maximize"] else (-grad, -p_grad)
@@ -191,7 +191,7 @@ class MomentumBestStart(torch.optim.Optimizer):
     def __init__(
         self,
         params,
-        atk_loss,
+        attack_loss,
         epochs,
         epsilon,
         maximize,
@@ -212,8 +212,8 @@ class MomentumBestStart(torch.optim.Optimizer):
         to optimize, a dummy tensor is supplied and expected to be overriden at
         a later time (i.e., within Traveler objects initialize method).
 
-        :param atk_loss: used to return the current loss of the attack
-        :type atk_loss: Loss object
+        :param attack_loss: used to return the current loss of the attack
+        :type attack_loss: Loss object
         :param alpha: momentum factor
         :type alpha: float
         :param epochs: total number of optimization iterations
@@ -243,7 +243,7 @@ class MomentumBestStart(torch.optim.Optimizer):
             params,
             {
                 "alpha": alpha,
-                "atk_loss": atk_loss,
+                "attack_loss": attack_loss,
                 "checkpoints": {w for w in wj[1:-1]},
                 "epochs": epochs,
                 "epsilon": epsilon,
@@ -287,7 +287,7 @@ class MomentumBestStart(torch.optim.Optimizer):
         for group in self.param_groups:
             for p in group["params"]:
                 inc = group["maximize"]
-                loss = group["atk_loss"].loss
+                loss = group["attack_loss"].loss
                 grad = p.grad.data if group["maximize"] else -p.grad.data
                 state = self.state[p]
 
