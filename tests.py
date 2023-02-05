@@ -191,15 +191,13 @@ class BaseTest(unittest.TestCase):
             "statistics": verbose,
             "verbosity": 0.1 if verbose else 1,
         }
-
-        # alpha for df and fab
         cls.attacks = {
             "apgdce": aml.attacks.apgdce(**cls.atk_params | {"epsilon": cls.linf}),
             "apgddlr": aml.attacks.apgddlr(**cls.atk_params | {"epsilon": cls.linf}),
             "bim": aml.attacks.bim(**cls.atk_params | {"epsilon": cls.linf}),
             "cwl2": aml.attacks.cwl2(**cls.atk_params | {"epsilon": cls.l2}),
-            "df": aml.attacks.df(**cls.atk_params | {"alpha": 1, "epsilon": cls.l2}),
-            "fab": aml.attacks.fab(**cls.atk_params | {"alpha": 1, "epsilon": cls.l2}),
+            "df": aml.attacks.df(**cls.atk_params | {"epsilon": cls.l2}),
+            "fab": aml.attacks.fab(**cls.atk_params | {"epsilon": cls.l2}),
             "jsma": aml.attacks.jsma(**cls.atk_params | {"epsilon": cls.l0}),
             "pgd": aml.attacks.pgd(**cls.atk_params | {"epsilon": cls.linf}),
         }
@@ -223,7 +221,7 @@ class BaseTest(unittest.TestCase):
             f"Dataset: {dataset}, Test Set: {has_test}",
             f"Craftset shape: ({cls.x.size(0)}, {cls.x.size(1)})",
             f"Model Type: {cls.model.__class__.__name__}",
-            f"Train Acc: {cls.model.stats['train_acc'][-1]:.1%}",
+            f"Train Acc: {cls.model.stats.train_acc.iloc[-1]:.1%}",
             f"Craftset Acc: {cls.clean_acc:.1%}",
             f"Attack Clipping Values: {clip_info}",
             f"Attack Strength α: {cls.atk_params['alpha']}",
