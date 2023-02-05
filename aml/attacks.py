@@ -14,11 +14,8 @@ import torch  # Tensors and Dynamic neural networks in Python with strong GPU ac
 
 # TODO
 # change setuptools version to head
-# not sure if batching is necessary, given that models automatically batch?
-# think about classes for smap and loss when the model hasnt been trained yet
-# need to consider a reinit method.. CW will not reinitilize c to default value when using batches...
-# ^ currentl sidestepped with ugly "c_init"
-# ^ yup, even more important, can't enable statistics for adversaries
+# cleanup framework comparison experiment (support multiple datasets)
+# confirm *all* l0 norm attacks basically need alpha set to 1 except adam? (regardless of smap?)
 
 
 class Adversary:
@@ -34,11 +31,13 @@ class Adversary:
     :func:`__init__`: instantiates Adversary objects
     :func:`__getattr__`: grab Attack object attributes
     :func:`__repr__`: returns the threat model
+    :func:`__setattr__`: sets attributes of Attack objects
     :func:`binary_search`: optimizes hyperparamters via binary search
     :func:`craft`: returns a set of adversarial examples
     :func:`max_loss`: restart rule used in PGD attack
     :func:`min_norm`: restart rule used in FAB attack
     :func:`misclassified`: hyperparameter rule used in CW-L2 attack
+    :func:`reset`: reset attack state (akin to reinstantiation)
     """
 
     def __init__(
@@ -91,29 +90,27 @@ class Adversary:
         num_restarts = 0 if num_restarts is None else num_restarts
 
         # set attributes
-        self.craft_p = (
+        self.__dict__["atk"] = attack
+        self.__dict__["craft_p"] = (
             (lambda x, y, b: (attack.craft(x, y, b),))
             if hparam is None
             else self.binary_search
         )
-        self.best_update = best_update
-        self.hparam = hparam
-        self.hparam_bounds = hparam_bounds
-        self.hparam_steps = hparam_steps
-        self.hparam_update = hparam_update
-        self.loss = attack.surface.loss
-        self.model = attack.surface.model
-        self.name = attack.name
-        self.num_restarts = num_restarts + 1
-        self.verbose = verbose
-        self.params = {
+        self.__dict__["best_update"] = best_update
+        self.__dict__["hparam"] = hparam
+        self.__dict__["hparam_bounds"] = hparam_bounds
+        self.__dict__["hparam_steps"] = hparam_steps
+        self.__dict__["hparam_update"] = hparam_update
+        self.__dict__["num_restarts"] = num_restarts + 1
+        self.__dict__["verbose"] = verbose
+        self.__dict__["params"] = {
             "best_update": best_update.__name__,
             "hparam": hparam,
             "hparam_bounds": hparam_bounds,
             "hparam_update": hparam_update.__name__,
             "hparam_steps": hparam_steps,
             "num_restarts": num_restarts,
-            "attack": attack,
+            "attack": str(attack),
         }
         return None
 
@@ -128,7 +125,7 @@ class Adversary:
         :return: the desired attribute (if it exists)
         :rtype: misc
         """
-        return self.__getattribute__("params")["attack"].__getattribute__(name)
+        return self.__getattribute__("atk").__getattribute__(name)
 
     def __repr__(self):
         """
@@ -139,6 +136,24 @@ class Adversary:
         :rtype: str
         """
         return f"Adversary({', '.join(f'{p}={v}' for p, v in self.params.items())})"
+
+    def __setattr__(self, name, value):
+        """
+        This method overrides setting Adversary attributes so that they are
+        changed in attack objects instead. As Adversary objects ostenisbly
+        serve as intelligent looping objects for Attack objects, any attributes
+        that may be set (or changed) at runtime should be passed to Attack
+        objects instead (as Adversary objects have no parameters that could be
+        meaningfully adjusted at runtime).
+
+        :param name: name of attribute to update
+        :type name: str
+        :param value: value to update attribute
+        :type value: misc
+        :return: None or value
+        :rtype: NoneType or type(value)
+        """
+        setattr(self.atk, name, value)
 
     def binary_search(self, x, y, b):
         """
@@ -156,19 +171,19 @@ class Adversary:
         """
         lb, ub = torch.tensor(self.hparam_bounds).repeat(y.numel(), 1).unbind(1)
         for h in range(1, self.hparam_steps + 1):
-            p = self.params["attack"].craft(x, y, b)
+            p = self.atk.craft(x, y, b)
             self.verbose and print(
                 f"On hyperparameter iteration {h} of {self.hparam_steps}...",
                 f"({h / self.hparam_steps:.1%})",
             )
             success = self.hparam_update(x, p, y)
-            hparam = self.params["attack"].hparams[self.hparam]
+            hparam = self.atk.hparams[self.hparam]
             ub[success] = ub[success].minimum(hparam[success])
             lb[~success] = lb[~success].maximum(hparam[~success])
             hparam.copy_(ub.add(lb).div(2))
             self.verbose and print(
                 f"Hyperparameter {self.hparam} updated.",
-                f"{success.sum().div(success.numel()):.2%} success",
+                f"{success.mean(dtype=torch.float):.2%} success",
             )
             yield p
 
@@ -191,7 +206,7 @@ class Adversary:
         b = torch.full_like(x, torch.inf)
         b[self.model(x).argmax(1).ne(y)] = 0
         for r in range(self.num_restarts):
-            self.params["attack"].restart = f"Restart {r} " if r > 0 else ""
+            self.atk.restart = f"Restart {r} " if r > 0 else ""
             r > 0 and self.verbose and print(
                 f"On restart iteration {r} of {self.num_restarts - 1}...",
                 f"({r / (self.num_restarts - 1):.1%})",
@@ -202,21 +217,20 @@ class Adversary:
                 update = self.best_update(x, p, b, y)
                 non_adv = b.isinf().any(1)
                 b[update] = p[update]
-                new = update.logical_and(non_adv).sum().div(update.numel())
-                improved = update.logical_and(~non_adv).sum().div(update.numel())
+                new = update.logical_and(non_adv).mean(dtype=torch.float)
+                improved = update.logical_and(~non_adv).mean(dtype=torch.float)
                 self.verbose and print(
                     f"Found {update.sum()} better adversarial examples!",
-                    f"(+{update.sum().div(update.numel()):.2%})",
+                    f"(+{update.mean(dtype=torch.float):.2%})",
                     f"(New {new:.2%}, Improved {improved:.2%})",
                 )
-
         return b.nan_to_num_(nan=None, posinf=0)
 
     def max_loss(self, x, p, b, y):
         """
         This method serves as a restart rule as used in
         https://arxiv.org/pdf/1706.06083.pdf. Specifically, it returns the set
-        of perturbations whose loss improved.
+        of perturbations whose has loss improved.
 
         :param x: inputs to produce adversarial examples from
         :type x: torch Tensor object (n, m)
@@ -229,9 +243,9 @@ class Adversary:
         :return: the perturbations whose loss is maximal
         :rtype: torch Tensor object (n,)
         """
-        ploss = self.loss(self.model(x + p), y)
-        bloss = self.loss(self.model(x + b.nan_to_num(posinf=0)), y)
-        return ploss.gt(bloss) if self.loss.max_obj else ploss.lt(bloss)
+        ploss = self.atk.surface.loss(self.atk.model(x + p), y)
+        bloss = self.atk.surface.loss(self.atk.model(x + b.nan_to_num(posinf=0)), y)
+        return ploss.gt(bloss) if self.atk.surface.loss.max_obj else ploss.lt(bloss)
 
     def min_norm(self, x, p, b, y):
         """
@@ -286,6 +300,7 @@ class Attack:
     :func:`__repr__`: returns the attack name (based on the components)
     :func:`craft`: returns a set of adversarial examples
     :func:`progress`: records various statistics on crafting progress
+    :func:`reset`: reset attack state (akin to reinstantiation)
     :func:`update`: updates output adversarial perturbations
     """
 
@@ -301,7 +316,7 @@ class Attack:
         optimizer_alg,
         random_start,
         saliency_map,
-        batch_size=-1,
+        alpha_override=False,
         statistics=False,
         verbosity=0.25,
     ):
@@ -311,8 +326,8 @@ class Attack:
         following parameters define high-level bookkeeping parameters across
         attacks:
 
-        :param batch_size: crafting batch size (-1 for 1 batch)
-        :type batch_size: int
+        :param alpha_override: override manual alpha for certain components
+        :type alpha_override: bool
         :param early_termination: whether misclassified inputs are perturbed
         :type early_termination: bool
         :param epochs: number of optimization steps to perform
@@ -355,8 +370,17 @@ class Attack:
         :rtype: Attack object
         """
 
+        # set alpha to 1 with DF smap with non-adaptive-LR optimizer
+        alpha = (
+            1
+            if not alpha_override
+            and saliency_map is surface.DeepFoolSaliency
+            and optimizer_alg in {optimizer.BackwardSGD, optimizer.SGD}
+            else alpha
+        )
+
         # set & save attack parameters, and build short attack name
-        self.batch_size = batch_size
+        self.alpha = alpha
         self.epochs = epochs
         self.epsilon = epsilon
         self.et = early_termination
@@ -389,37 +413,15 @@ class Attack:
             ("S", "I", "Id", "J", "0"): "JSMA",
         }
         self.name = name_map.get(name, "-".join(name))
-        self.params = {"α": alpha, "ε": epsilon, "epochs": epochs, "min dist": self.et}
 
-        # instantiate traveler, surface, and necessary subcomponents
-        norm = norm(epsilon=epsilon, maximize=loss_func.max_obj)
-        self.project = norm.project
-        saliency_map = saliency_map(classes=model.params["classes"], p=self.lp)
-        loss_func = loss_func(classes=model.params["classes"])
-        custom_opt_params = {
-            "atk_loss": loss_func,
-            "epochs": epochs,
-            "epsilon": alpha if self.lp == 0 else epsilon,
-            "model": model,
-            "norm": self.lp,
-            "smap": saliency_map,
-        }
-        torch_opt_params = {
-            "lr": alpha,
-            "maximize": loss_func.max_obj,
-            "params": (torch.zeros(1),),
-        }
-        optimizer_alg = optimizer_alg(
-            **(custom_opt_params | torch_opt_params)
-            if optimizer_alg.__module__ == optimizer.__name__
-            else torch_opt_params
-        )
-        random_start = random_start(norm=self.lp, epsilon=epsilon)
-        self.traveler = traveler.Traveler(optimizer_alg, random_start)
-        self.surface = surface.Surface(loss_func, model, norm, saliency_map)
-
-        # collect any registered hyperparameters
-        self.hparams = self.traveler.hparams | self.surface.hparams
+        # save components and initialize traveler & surface
+        self.loss_class = loss_func
+        self.model = model
+        self.norm_class = norm
+        self.optimizer_class = optimizer_alg
+        self.random_class = random_start
+        self.saliency_class = saliency_map
+        self.reset()
         return None
 
     def __repr__(self):
@@ -443,14 +445,14 @@ class Attack:
         """
         return f"{self.name}({', '.join(f'{p}={v}' for p, v in self.params.items())})"
 
-    def craft(self, x, y, o=None):
+    def craft(self, x, y, o=None, reset=False):
         """
         This method crafts adversarial examples, as defined by the attack
         parameters and the instantiated Traveler and Surface objects.
-        Specifically, it creates a copy of x, batches inputs, optionally
-        initializes the output buffer to a set of optimal perturbations (useful
-        for attacks that perform shrinking start), performs surface & traveler
-        initilizations, and finally iterates an epoch number of times.
+        Specifically, it creates a copy of x, optionally initializes the output
+        buffer to a set of optimal perturbations (useful for attacks that
+        perform shrinking start), performs surface & traveler initilizations,
+        and finally iterates an epoch number of times.
 
         :param x: inputs to produce adversarial examples from
         :type x: torch Tensor object (n, m)
@@ -458,64 +460,54 @@ class Attack:
         :type y: torch Tensor object (n,)
         :param o: initialize output buffer to saved adversarial examples
         :type o: torch Tensor object (n, m)
+        :param reset: whether to reset the internal attack state
+        :type reset: bool
         :return: set of perturbation vectors
         :rtype: torch Tensor object (n, m)
         """
 
-        # initialize perturbations & ranges and compute batch sizes
+        # init perturbations, set misclassified outputs to 0, & compute ranges
         x = x.detach().clone()
         p = torch.zeros_like(x)
-        mins, maxs = (x.min(0).values.clamp(max=0), x.max(0).values.clamp(min=1))
-        batch_size = x.size(0) if self.batch_size == -1 else self.batch_size
-        bmax = -(-x.size(0) // batch_size)
-
-        # if needed, init output buffer & set misclassified perturbations to 0
         correct = self.surface.model(x).argmax(1).eq(y).unsqueeze_(1)
         o = torch.full_like(p, torch.inf).where(correct, p) if o is None else o.clone()
+        mins, maxs = (x.min(0).values.clamp(max=0), x.max(0).values.clamp(min=1))
 
         # set verbosity and configure batch & output results dataframes
         verbose = self.verbosity and self.verbosity != self.epochs
-        rows = [e for i in range(bmax) for e in range(self.epochs + 1)]
         metrics = "epoch", "accuracy", "model_loss", "attack_loss", "l0", "l2", "linf"
-        self.b_results = pandas.DataFrame(0, index=rows, columns=metrics)
-        self.results = pandas.DataFrame(0, index=rows, columns=metrics)
+        self.b_res = pandas.DataFrame(0, index=range(self.epochs + 1), columns=metrics)
+        self.res = pandas.DataFrame(0, index=range(self.epochs + 1), columns=metrics)
 
-        # configure batches, attach objects, & apply perturbation inits
+        # attach objects and  apply perturbation initializations
         verbose and print(f"Crafting {x.size(0)} adversarial examples with {self}...")
-        xi, yi, pi, oi = (t.split(batch_size) for t in (x, y, p, o))
-        for b, (xb, yb, pb, ob) in enumerate(zip(xi, yi, pi, oi)):
-            verbose and print(f"{self.name} {self.restart} Batch {b + 1} of {bmax}...")
-            cnb, cxb = mins.sub(xb), maxs.sub(xb)
-            self.surface.initialize((cnb, cxb), pb)
-            self.traveler.initialize(pb, ob)
-            pb.clamp_(cnb, cxb)
-            self.update(xb, yb, pb, ob)
-            self.progress(b, 0, xb, yb, pb, ob)
+        cnb, cxb = mins.sub(x), maxs.sub(x)
+        self.surface.initialize((cnb, cxb), p)
+        self.traveler.initialize(p, o)
+        p.clamp_(cnb, cxb)
+        self.update(x, y, p, o)
+        self.progress(0, x, y, p, o)
 
-            # compute peturbation updates and record progress
-            for e in range(1, self.epochs + 1):
-                self.surface(xb, yb, pb)
-                self.traveler()
-                pb.clamp_(cnb, cxb)
-                None if self.et else self.project(pb)
-                self.update(xb, yb, pb, ob)
-                prog = self.progress(b, e, xb, yb, pb, ob) if self.statistics else ""
-                print(
-                    f"{self.restart}"
-                    f"Epoch {e:{len(str(self.epochs))}} / {self.epochs} {prog:<15}"
-                ) if verbose and not e % self.verbosity else print(
-                    f"{self.name}: {self.restart} Epoch {e}... ({e / self.epochs:.1%})",
-                    end="\r",
-                )
+        # compute peturbation updates and record progress
+        for e in range(1, self.epochs + 1):
+            self.surface(x, y, p)
+            self.traveler()
+            p.clamp_(cnb, cxb)
+            not self.et and self.project(p)
+            self.update(x, y, p, o)
+            prog = self.progress(e, x, y, p, o) if self.statistics else ""
+            print(
+                f"{self.restart} "
+                f"Epoch {e:{len(str(self.epochs))}} / {self.epochs} {prog:<15}"
+            ) if verbose and not e % self.verbosity else print(
+                f"{self.name}: {self.restart} Epoch {e}... ({e / self.epochs:.1%})",
+                end="\r",
+            )
 
-        # compute final statistics, set failed perturbations to zero and return
-        self.b_results = self.b_results.groupby(self.b_results.index).sum()
-        self.results = self.results.groupby(self.results.index).sum()
-        self.b_results[["accuracy", "l0", "l2", "linf"]] /= y.numel()
-        self.results[["accuracy", "l0", "l2", "linf"]] /= y.numel()
+        # set failed perturbations to zero and return
         return o.nan_to_num_(nan=None, posinf=0)
 
-    def progress(self, batch, epoch, xb, yb, pb, ob):
+    def progress(self, e, x, y, p, o):
         """
         This method measures various statistics on the adversarial crafting
         process & a formatted string concisely representing the state of the
@@ -526,91 +518,129 @@ class Attack:
         the number of forward passes necessary to compute interesting
         statistics, this method can have a high performance impact.
 
-        :param batch: current batch number
-        :type batch: int
-        :param epoch: current epoch within the batch
+        :param epoch: current epoch
         :type epoch: int
-        :param xb: current batch of inputs
-        :type xb: torch Tensor object (n, m)
-        :param yb: current batch of labels
-        :type yb: torch Tensor object (n,)
-        :param pb: current batch of perturbations
-        :type pb: torch Tensor object (n, m)
-        :param ob: final batch of perturbations (when using early termination)
-        :type ob: torch Tensor object (n, m)
+        :param x: inputs to produce adversarial examples from
+        :type x: torch Tensor object (n, m)
+        :param y: the labels (or initial predictions) of x
+        :type y: torch Tensor object (n,)
+        :param p: current batch of perturbations
+        :type p: torch Tensor object (n, m)
+        :param o: current output perturbations
+        :type o: torch Tensor object (n, m)
         :return: print-ready statistics
         :rtype: str
         """
 
-        # compute current index and project onto lp-threat model
-        idx = batch * (self.epochs + 1) + epoch
+        # project batch onto lp-threat model, compute stats, & update results
         norms = (0, 2, torch.inf)
-        pb = self.project(pb.clone())
+        p = self.project(p.clone())
+        logits = self.surface.model(x + p)
+        mloss = self.surface.model.loss(logits, y).item()
+        aloss = self.surface.loss(logits, y).sum().item()
+        pacc = logits.argmax(1).eq_(y).mean(dtype=torch.float).item()
+        pn = [p.norm(n, 1).mean().item() for n in norms]
+        self.b_res.iloc[e] = e, pacc, mloss, aloss, *pn
 
-        # compute batch buffer stats and update results
-        logits = self.surface.model(xb + pb)
-        mloss = self.surface.model.loss(logits, yb).item()
-        aloss = self.surface.loss(logits, yb).sum().item()
-        acc = logits.argmax(1).eq_(yb).sum().item()
-        nb = [pb.norm(n, 1).sum().item() for n in norms]
-        self.b_results.iloc[idx] += (epoch, acc, mloss, aloss, *nb)
-
-        # compute output buffer stats and update results
-        ologits = self.surface.model(xb + ob.nan_to_num(posinf=0))
-        omloss = self.surface.model.loss(ologits, yb).item()
-        oaloss = self.surface.loss(logits, yb).sum().item()
-        oacc = ologits.argmax(1).eq_(yb).sum().item()
-        on = [ob.nan_to_num(posinf=0).norm(n, 1).sum().item() for n in norms]
-        self.results.iloc[idx] += (epoch, oacc, omloss, oaloss, *on)
+        # compute output perturbation stats and update results
+        ologits = self.surface.model(x + o.nan_to_num(posinf=0))
+        omloss = self.surface.model.loss(ologits, y).item()
+        oaloss = self.surface.loss(logits, y).sum().item()
+        oacc = ologits.argmax(1).eq_(y).mean(dtype=torch.float).item()
+        on = [o.nan_to_num(posinf=0).norm(n, 1).mean().item() for n in norms]
+        self.res.iloc[e] = e, oacc, omloss, oaloss, *on
 
         # build str representation and return
         return (
-            f"Output Acc: {oacc / yb.numel():.1%} Batch Acc: {acc / yb.numel():.1%} "
-            f"({(acc - self.b_results.accuracy.iloc[idx - 1]) / yb.numel():+.1%}) "
+            f"Output Acc: {oacc:.1%} Batch Acc: {pacc:.1%} "
+            f"({(pacc - self.b_res.accuracy.iloc[-2]):+.1%}) "
             f"Model Loss: {mloss:.2f} "
-            f"({(mloss - self.b_results.model_loss.iloc[idx - 1]):+6.2f}) "
+            f"({mloss - self.b_res.model_loss.iloc[-2]:+6.2f}) "
             f"{self.name} Loss: {aloss:.2f} "
-            f"({(aloss - self.b_results.attack_loss.iloc[idx - 1]):+6.2f}) "
-            f"l0: {nb[0] / yb.numel():.2f} "
-            f"({(nb[0] -  self.b_results.l0.iloc[idx - 1]) / yb.numel():+.2f}) "
-            f"l2: {nb[1] / yb.numel():.2f} "
-            f"({(nb[1] - self.b_results.l2.iloc[idx - 1]) / yb.numel():+.2f}) "
-            f"l∞: {nb[2] / yb.numel():.2f} "
-            f"({(nb[2] - self.b_results.linf.iloc[idx - 1]) / yb.numel():+.2f})"
+            f"({aloss - self.b_res.attack_loss.iloc[-2]:+6.2f}) "
+            f"l0: {pn[0]:.2f} ({pn[0] - self.b_res.l0.iloc[-2]:+.2f}) "
+            f"l2: {pn[1]:.2f} ({pn[1] - self.b_res.l2.iloc[-2]:+.2f}) "
+            f"l∞: {pn[2]:.2f} ({pn[2] - self.b_res.linf.iloc[-2]:+.2f})"
         )
 
-    def update(self, xb, yb, pb, ob):
+    def reset(self):
+        """
+        This method resets the state of all objects inside attacks.
+        Conceptually, this is akin to instantiating a new attack object.
+        Specifically, this initializes: (1) attack loss, (2) lp-norm filter,
+        (3) random start strategy, (4) saliency map, (5) optimizer, (6)
+        traveler, (7) surface, (8) projection method (attached to lp-norm
+        filter), (9) any registered hyperparameters, and (10) attack parameters
+        referenced by __repr__.
+
+        :return: None
+        :rtype: NoneType
+        """
+        # instantiate traveler, surface, and necessary subcomponents
+        attack_loss = self.loss_class(classes=self.model.classes)
+        norm = self.norm_class(epsilon=self.epsilon, maximize=self.loss_class.max_obj)
+        random_start = self.random_class(norm=self.lp, epsilon=self.epsilon)
+        saliency_map = self.saliency_class(classes=self.model.classes, p=self.lp)
+        aml_opt = {
+            "attack_loss": attack_loss,
+            "epochs": self.epochs,
+            "epsilon": self.alpha if self.lp == 0 else self.epsilon,
+            "model": self.model,
+            "norm": self.lp,
+            "smap": saliency_map,
+        }
+        optimizer_params = {
+            "lr": self.alpha,
+            "maximize": attack_loss.max_obj,
+            "params": (torch.zeros(1),),
+        } | (aml_opt if self.optimizer_class.__module__ == optimizer.__name__ else {})
+        optimizer_alg = self.optimizer_class(**optimizer_params)
+        self.traveler = traveler.Traveler(optimizer_alg, random_start)
+        self.surface = surface.Surface(attack_loss, self.model, norm, saliency_map)
+
+        # set projection method, collect hyperparameters, and set parameters
+        self.project = norm.project
+        self.hparams = self.traveler.hparams | self.surface.hparams
+        self.params = {
+            "α": self.alpha,
+            "ε": self.epsilon,
+            "epochs": self.epochs,
+            "early termination": self.et,
+        }
+        return None
+
+    def update(self, x, y, p, o):
         """
         This method updates the final perturbations returned by attacks.
         Specifically, the update is determined as: (1) for minimum-norm
         adversaries, perturbations that are both (a) misclassified, and (b) a
         smaller lp-norm than the current best perturbations are saved, while
         (2) for maximum-loss adversaries, perturbations that have greater model
-        loss than the current best perturbations are saved.
 
-        :param xb: current batch of inputs
-        :type xb: torch Tensor object (n, m)
-        :param yb: current batch of labels
-        :type yb: torch Tensor object (n,)
-        :param pb: current batch of perturbations
-        :type pb: torch Tensor object (n, m)
-        :param ob: final batch of perturbations (when using early termination)
-        :type ob: torch Tensor object (n, m)
+        :param x: inputs to produce adversarial examples from
+        :type x: torch Tensor object (n, m)
+        :param y: the labels (or initial predictions) of x
+        :type y: torch Tensor object (n,)
+        :param p: current batch of perturbations
+        :type p: torch Tensor object (n, m)
+        :param o: current output perturbations
+        :type o: torch Tensor object (n, m)
+        loss than the current best perturbations are saved.
         :return: None
         :rtype: NoneType
         """
-        pb = self.project(pb.clone())
-        logits = self.surface.model(xb + pb)
+        p = self.project(p.clone())
+        logits = self.surface.model(x + p)
         if self.et:
-            correct = logits.argmax(1).eq(yb)
-            smaller = pb.norm(self.lp, dim=1).lt(ob.norm(self.lp, dim=1))
+            correct = logits.argmax(1).eq(y)
+            smaller = p.norm(self.lp, dim=1).lt(o.norm(self.lp, dim=1))
             update = (~correct).logical_and_(smaller)
         else:
-            ploss = self.surface.loss(logits, yb)
-            ologits = self.surface.model(xb + ob.nan_to_num(posinf=0))
-            oloss = self.surface.loss(ologits, yb)
+            ploss = self.surface.loss(logits, y)
+            ologits = self.surface.model(x + o.nan_to_num(posinf=0))
+            oloss = self.surface.loss(ologits, y)
             update = oloss.lt(ploss) if self.surface.loss.max_obj else oloss.gt(ploss)
-        ob[update] = pb[update]
+        o[update] = p[update]
         return None
 
 
