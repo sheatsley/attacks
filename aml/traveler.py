@@ -77,7 +77,7 @@ class Traveler:
         """
         return f"Traveler({self.params})"
 
-    def initialize(self, p, b):
+    def initialize(self, p, o):
         """
         This method performs any preprocessing and initialization steps prior
         to crafting adversarial examples. Specifically, (1) some attacks
@@ -87,14 +87,14 @@ class Traveler:
 
         :param p: the perturbation vectors used to craft adversarial examples
         :type p: torch Tensor object (n, m)
-        :param b: the best perturbation vectors seen thus far
-        :type b: torch Tensor object (n, m)
+        :param o: the best perturbation vectors seen thus far
+        :type o: torch Tensor object (n, m)
         :return: None
         :rtype: NoneType
         """
 
         # subroutine (1): random start
-        self.random_start(p, b=b)
+        self.random_start(p, o=o)
 
         # subroutine (2): reinstantiate the optimizer with the perturbation vector
         self.optimizer.__init__([p], **self.optimizer.defaults)
@@ -274,7 +274,7 @@ class ShrinkingStart(MaxStart):
         super().__init__(norm, epsilon)
         return None
 
-    def __call__(self, p, b, **kwargs):
+    def __call__(self, p, o, **kwargs):
         """
         This method shrinks epsilon based on the smallest norm seen thus far
         and the lp-threat model, divided by two. Subsequently, this calls the
@@ -291,7 +291,7 @@ class ShrinkingStart(MaxStart):
         """
 
         # set the "smallest" norm to zero if we have yet to craft
-        b = b if b.nan_to_num(posinf=0).nonzero().any() else b.nan_to_num(posinf=0)
-        b_norm = b.norm(self.norm, dim=1, keepdim=True)
-        epsilon = b_norm.where(b_norm < self.epsilon, self.epsilon).div(2)
+        o = o if o.nan_to_num(posinf=0).nonzero().any() else o.nan_to_num(posinf=0)
+        on = o.norm(self.norm, dim=1, keepdim=True)
+        epsilon = on.where(on < self.epsilon, self.epsilon).div(2)
         return self.lp(p, epsilon.int() if self.norm == 0 else epsilon)
