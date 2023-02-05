@@ -342,7 +342,7 @@ class BaseTest(unittest.TestCase):
             self.atk_params["alpha"],
             self.atk_params["epochs"],
             self.attacks["apgdce"].params["num_restarts"] + 1,
-            self.attacks["apgdce"].traveler.optimizer.param_groups[0]["rho"],
+            self.attacks["apgdce"].atk.traveler.optimizer.param_groups[0]["rho"],
         )
         art_adv = ta_adv = None
         if "art" in self.available:
@@ -416,7 +416,7 @@ class BaseTest(unittest.TestCase):
             self.atk_params["alpha"],
             self.atk_params["epochs"],
             self.attacks["apgddlr"].params["num_restarts"] + 1,
-            self.attacks["apgddlr"].traveler.optimizer.param_groups[0]["rho"],
+            self.attacks["apgddlr"].atk.traveler.optimizer.param_groups[0]["rho"],
         )
         art_adv = ta_adv = None
         if "art" in self.available and self.art_classifier.nb_classes > 2:
@@ -798,7 +798,7 @@ class BaseTest(unittest.TestCase):
             self.atk_params["epochs"],
             self.l2,
             self.attacks["fab"].traveler.optimizer.param_groups[0]["alpha_max"],
-            self.attacks["fab"].params["attack"].params["α"],
+            self.attacks["fab"].atk.params["α"],
             self.attacks["fab"].traveler.optimizer.param_groups[0]["beta"],
             self.atk_params["model"].params["classes"],
         )
