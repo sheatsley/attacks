@@ -92,7 +92,7 @@ class Adversary:
         # set attributes
         self.__dict__["atk"] = attack
         self.__dict__["craft_p"] = (
-            (lambda x, y, b: (attack.craft(x, y, b),))
+            (lambda x, y, b, reset: (attack.craft(x, y, b, reset),))
             if hparam is None
             else self.binary_search
         )
@@ -155,7 +155,7 @@ class Adversary:
         """
         setattr(self.atk, name, value)
 
-    def binary_search(self, x, y, b):
+    def binary_search(self, x, y, b, reset):
         """
         This method performs binary search on a hyperparameter, such as c used
         in Carlini-Wagner loss (https://arxiv.org/pdf/1608.04644.pdf). By
@@ -166,12 +166,16 @@ class Adversary:
         :type x: torch Tensor object (n, m)
         :param y: the labels (or initial predictions) of x
         :type y: torch Tensor object (n,)
+        :param b: best set of perturbation vectors
+        :type b: torch Tensor object (n, m )
+        :param reset: whether to reset the internal attack state
+        :type reset: bool
         :return: adversarial perturbations
         :rtype: generator of torch Tensor objects (n, m)
         """
         lb, ub = torch.tensor(self.hparam_bounds).repeat(y.numel(), 1).unbind(1)
         for h in range(1, self.hparam_steps + 1):
-            p = self.atk.craft(x, y, b)
+            p = self.atk.craft(x, y, b, reset)
             self.verbose and print(
                 f"On hyperparameter iteration {h} of {self.hparam_steps}...",
                 f"({h / self.hparam_steps:.1%})",
@@ -187,7 +191,7 @@ class Adversary:
             )
             yield p
 
-    def craft(self, x, y):
+    def craft(self, x, y, reset=False):
         """
         This method represents the core of the Adversary class. Specifically,
         this class produces the most effective adversarial examples,
@@ -197,6 +201,8 @@ class Adversary:
         :type x: torch Tensor object (n, m)
         :param y: the labels (or initial predictions) of x
         :type y: torch Tensor object (n,)
+        :param reset: whether to reset the internal attack state
+        :type reset: bool
         :return: adversarial perturbations
         :rtype: torch Tensor object (n, m)
         """
@@ -213,7 +219,7 @@ class Adversary:
             )
 
             # store the best adversarial perturbations seen thus far
-            for p in self.craft_p(x, y, b):
+            for p in self.craft_p(x, y, b, reset):
                 update = self.best_update(x, p, b, y)
                 non_adv = b.isinf().any(1)
                 b[update] = p[update]
