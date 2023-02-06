@@ -10,7 +10,7 @@ on a series of techniques used in six popular attacks:
 1. [APGD-CE](https://arxiv.org/pdf/2003.01690.pdf) (Auto-PGD with CE loss)
 2. [APGD-DLR](https://arxiv.org/pdf/2003.01690.pdf) (Auto-PGD with DLR loss)
 3. [BIM](https://arxiv.org/pdf/1611.01236.pdf) (Basic Iterative Method)
-4. [CW-L2](https://arxiv.org/pdf/1608.04644.pdf) (Carlini-Wagner with l₂ norm)
+4. [CW-L2](https://arxiv.org/pdf/1608.04644.pdf) (Carlini-Wagner with l2 norm)
 5. [DF](https://arxiv.org/pdf/1511.04599.pdf) (DeepFool)
 6. [FAB](https://arxiv.org/pdf/1907.02044.pdf) (Fast Adaptive Boundary)
 7. [JSMA](https://arxiv.org/pdf/1511.07528.pdf) (Jacobian Saliency Map Approach)
@@ -83,10 +83,251 @@ mean_budget = perturbations.norm(torch.inf, 1).mean()
 This repo is based on [The Space of Adversarial
 Strategies](https://arxiv.org/abs/2209.04521). Many of the classes defined
 within the various modules are verbatim implementations of concepts introduced
-in that paper (with some additions; I use this repo for ostensibly anything
-related to adversarial machine learning).
+in that paper (with some additions as well). Concisely, the follow components
+are described below (and in more detail with the following sections) described
+from most abstract to least abstract:
 
-## Hyperparameters
+* Adversaries (`attack.py`): control hyperparameter optimization and record
+optimal adversarial examples across multiple runs (useful only if attacks have
+non-deterministic components). Contains an _attack_.
+* Attacks (`attack.py`): core attack loop that enforces threat models, domain
+constraints, and keeps track of the best adversarial examples seen throughout
+the crafting process. Contains _travelers_ and _surfaces_.
+* Travelers (`traveler.py`): defines techniques that control how data is
+manipulated. Contains _optimizers_ and _random start strategies_.
+* Surfaces (`surface.py`): defines techniques that produce and manipulate
+gradients. Contains _losses_, _saliency maps_, and _norms_.
+* Optimizers (`optimizer.py`): defines techniques that consume gradient-like
+information and update perturbations. Contains _SGD_, _Adam_, _Backward SGD_
+(from [FAB](https://arxiv.org/pdf/1907.02044.pdf)), and _Momentum Best Start_
+(from [APGD-\*](https://arxiv.org/pdf/2003.01690.pdf)).
+* Random Starts (`traveler.py`): defines techniques to randomly initialize
+perturbations. Contains _Identity_ (no random start), _Max_
+(from[PGD](https://arxiv.org/pdf/1706.06083.pdf)), and _Shrinking_ (from
+[FAB](https://arxiv.org/pdf/1907.02044.pdf)).
+* Losses (`loss.py`): defines measures of error. Contains _Cross-entropy_,
+_Carlini-Wagner_ (from [CW-L2](https://arxiv.org/pdf/1608.04644.pdf)),
+_Difference of Logits Ratio_ (from
+[APGD-DLR](https://arxiv.org/pdf/2003.01690.pdf)), and _Identity_ (minimizes
+the model logit associated with the label).
+* Saliency Maps (`surface.py`): defines heuristics applied to gradients.
+Contains _DeepFool_ (from [DF](https://arxiv.org/pdf/1511.04599.pdf)),
+_Jacobian_ (from [JSMA](https://arxiv.org/pdf/1511.07528.pdf)), and _Identity_
+(no saliency map).
+* Norms (`surface.py`): manipulates gradients as to operate under the lp-threat
+model. Contains _l0_, _l2_, and _l∞_.
+
+
+### Adversary
+
+The `Adversary` class (`attacks.py`) serves a wrapper for `Attack` objects.
+Specifically, some attacks contain non-deterministic components (such random
+initialization, as shown with [PGD](https://arxiv.org/pdf/1706.06083.pdf)), and
+thus, the `Adversary` layer records the "best" adversarial examples seen across
+multiple runs of an attack (for some definition of "best"). As a second
+function, some attacks embed hyperparameter optimization as part of the
+adversarial crafting process (such as
+[CW-L2](https://arxiv.org/pdf/1608.04644.pdf)). `Adversary` objects are also in
+charge of updating hyperparameters across attack runs, based on the success of
+resultant adversarial examples.
+
+### Attack
+
+The `Attack` class (`attacks.py`) serves a binder between `Traveler` and
+`Surface` objects. Specifically, `Attack` objects perform the standard steps of
+any white-box evasion attack in adversarial machine learning: it (1) loops over
+a batch of inputs for some number of steps, (2) ensures the resultant
+perturbations are both compliant with the parameterized lp budget and feature
+ranges for the domain, (3) records various statistics throughout the crafting
+process, and (4) keeps track of the "best" adversarial examples seen thus far
+(for some definition of "best"). Here, "best" is a function of whether or not
+`early_termination` is enabled. For attacks whose goal is to _minimize norm_
+(e.g., [JSMA](https://arxiv.org/pdf/1511.07528.pdf)) then an adversarial
+example is considered better if it is both misclassified and has smaller norm
+than the smallest norm seen. For attacks whose goal is to _maximize (model)
+loss_ (e.g., [APGD-CE](https://arxiv.org/pdf/2003.01690.pdf)), then an
+adversarial example is considered better if the _attack_ loss has improved
+(i.e., the Cross-Entropy loss is higher or the [Difference of Logits
+Ratio](https://arxiv.org/pdf/2003.01690.pdf) loss is lower).
+
+### Traveler
+
+The `Traveler` class (`traveler.py`) is one of the two core constructs of any
+white-box evasion attack. Specifically, _Travelers_ define techniques that
+_manipulate the input_. Fundamentally, optimizers are defined here, in that
+they make some informed decision based on gradients (and sometimes additional
+information as well). Moreover, random start strategies are also defined here,
+in that they initialize the perturbation based on the total budget or the
+smallest norm seen thus far.
+
+### Surface
+
+The `Surface` class (`surface.py`) is one of the two core constructs of any
+white-box evasion attacks. Specifically, _Surfaces_ defines techniques that
+_inform how the input should be manipulated_. Here, loss functions, saliency
+maps, and lp norms all manipulate gradients for _Travelers_ to consume.
+
+### Optimizers
+
+Optimizer classes (`optimizer.py`) are part of `Traveler` objects that define
+the set of techniques that produce perturbation. They consume gradient
+information and apply a perturbation as to maximize (or minimize) the desired
+object function. Four optimizers are currently support: `SGD`, `Adam`,
+`BackwardSGD`, and `MomentumBestStart`. `SGD` and `Adam` are common optimizers
+used in machine learning and are simply imported into the `optimizer` module
+namespace from PyTorch. `BackwardSGD` comes from
+[FAB](https://arxiv.org/pdf/1907.02044.pdf); specifically, it (1) performs a
+backward step for misclassified inputs (as to minimize perturbation norm), and
+(2) performs a biased projection towards the original input (also to minimize
+perturbation norm) with a standard update step in direction of the gradients.
+`MomentumBestStart` comes from [APGD-\*](https://arxiv.org/pdf/2003.01690.pdf);
+specifically, it measures the progress of perturbations at a series of
+checkpoints. If progress has stalled (measured by a stagnating increase (or
+decrease) in attack loss), then the perturbation is reset to the best seen
+perturbation and the learning rate is halved. Conceptually, `MomentumBestStart`
+starts with aggressive perturbations and iteratively refines it search when a
+finer search is warranted.
+
+### Random Start Strategies
+
+Random start strategies (`traveler.py`) are part of `Traveler` objects that
+define the set of techniques used to initialize perturbations. They either
+initialize perturbations by randomly sampling within the budget or based on the
+norm of the best perturbations seen thus far. Three random start strategies are
+supported: `MaxStart`, `Identity`, and `ShrinkingStart`. `IdentityStart` serves
+as a "no random start" option---the input is returned as-is. `MaxStart` comes
+from [PGD](https://arxiv.org/pdf/1706.06083.pdf); specifically, it initializes
+perturbations randomly based on the perturbation budget. `ShrinkingStart` comes
+from [FAB](https://arxiv.org/pdf/1907.02044.pdf); specifically, it initializes
+perturbations based on minimum of the best perturbation seen thus far (where
+"best" is defined as the smallest perturbation vector that was still
+misclassified) and the perturbation budget. When paired with `Adversary`
+restart capabilities, `ShrinkingStart` initially performs like `MaxStart`, and
+gradually produces smaller initializations for a finer search.
+
+### Losses
+
+Loss functions (`loss.py`) are part of `Surface` objects that define measures
+of error. When differentiated, they inform how perturbations should be
+manipulated such that adversarial goals are met. Four losses are supported:
+`CELoss`, `CWLoss`, `DLRLoss`, and `IdentityLoss`. `CELoss` is perhaps the most
+popular loss function used in attacks, given its popular in training deep
+learning models, and is a simple wrapper for `torch.nn.CrossEntropyLoss`.
+`CWLoss` comes from [CW-L2](https://arxiv.org/pdf/1608.04644.pdf);
+specifically, it measures the difference of the logits associated with the
+label and the next closest class and the current l2-norm of the perturbation.
+`DLRLoss` comes from [APGD-DLR](https://arxiv.org/pdf/2003.01690.pdf);
+specifically, it also measures the difference of logits associated with the
+label and the next closest class, normalized by the difference of the largest
+and third-largest logic (principally used to prevent vanishing gradients).
+`IdentityLoss` serves as the "lack" of a loss function in that it just returns
+the model logit associated with the label.
+
+### Saliency Maps
+
+Saliency maps (`surface.py`) are part of `Surface` objects that apply
+heuristics to gradients to help meet adversarial goals. Three saliency maps are
+supported: `DeepFoolSaliency`, `IdentitySaliency`, and `JacobianSaliency`.
+`DeepFoolSaliency` comes from [DF](https://arxiv.org/pdf/1511.04599.pdf);
+specifically, it approximates the projection of the input onto the decision
+manifold. `IdentitySaliency` serves as a "no saliency map" option in that the
+gradients are returned as-is. `JacobianSaliency` comes from
+[JSMA](https://arxiv.org/pdf/1511.07528.pdf); specifically, it scores features
+based on how perturbing them will simultaneously move inputs away from the
+current target and towards other classes.
+
+### Norms
+
+Norms (`surface.py`) are part of `Surface` objects that projects gradients into
+the lp-norm space of the attack. Three norms are supported: `L0`, `L2`, and
+`Linf`. `L0` comes from [JSMA](https://arxiv.org/pdf/1511.07528.pdf);
+specifically, this computes the gradient component with largest magnitude and
+sets all other components to zero. `L2` comes from
+[CW-L2](https://arxiv.org/pdf/1608.04644.pdf),
+[DF](https://arxiv.org/pdf/1511.04599.pdf), and
+[FAB](https://arxiv.org/pdf/1907.02044.pdf); specifically, this normalizes the
+gradients by their l2-norm. `Linf` comes from
+[APGD-CE](https://arxiv.org/pdf/2003.01690.pdf),
+[APGD-DLR](https://arxiv.org/pdf/2003.01690.pdf),
+[BIM](https://arxiv.org/pdf/1611.01236.pdf) and
+[PGD](https://arxiv.org/pdf/1706.06083.pdf); specifically, this returns the
+sign of the gradients.
+
+Norm objects also serve a dual purpose in that they are also called by `Attack`
+objects to ensure perturbations are compliant with the parameterized lp budget.
+`L0` objects project onto the l0-norm by computing the top-ε (by magnitude)
+perturbation components (where ε defines number of perturable features) and
+setting all other components zero. `L2` objects project onto the l2-norm by
+renorming peturbations such that their l2-norm is no greater than the budget.
+`Linf` objects project onto the l∞-norm by ensuring the value of perturbation
+component is between -ε and ε (where ε defines the maximum allowable change
+across all features).
+
+## Parameters
+
+While this repo uses sane defaults for the many parameters used in attacks, the
+core initialization parameters are listed here for reference, categorized by
+class.
+
+### Adversary
+
+* `best_update`: update rule to determine if an adversarial example is "better"
+* `hparam`: hyperparameter to optimize with binary search
+* `hparam_bounds`: initial bounds when using binary search for hyperparameters
+* `hparam_steps`: the number of binary search steps
+* `hparam_update`: update rule to determine if a hyperparameter should be
+increased (or decreased)
+
+### Attack
+
+* `alpha`: perturbation strength per iteration
+* `early_termination`: whether to stop perturbing adversarial examples as soon
+as they are misclassified
+* `epochs`: number of steps to compute perturbations
+* `epsilon`: lp budget
+* `loss_func`: loss function to use
+* `norm`: lp-norm to use
+* `model`: reference to a [deep learning model](https://github.com/sheatsley/models)
+* `optimizer_alg`: optimizer to use
+* `saliency_map`: saliency map to use
+
+### Traveler
+
+* `optimizer`: optimizer to use
+* `random_start`: random start strategy to use
+
+### Surface
+
+* `loss`: loss function to use
+* `model`: reference to a [deep learning model](https://github.com/sheatsley/models)
+* `norm`: lp-norm to use
+* `saliency_map`: saliency map to use
+
+### Loss
+
+#### CELoss
+
+* No parameters are necessary for this class
+
+#### CWLoss
+
+* `classes`: number of classes
+* `c`: initial value weighing the influence of misclassification over norm
+* `k`: desired logit difference
+
+#### DLRLoss
+
+* `classes`: number of classes
+
+#### IdentityLoss
+
+* No parameters are necessary for this class
+
+
+### Misc
+
+Below are a list of some subtle parameters you may be interested in
+manipulating for a deeper exploration.
 
 ## Citation
 
