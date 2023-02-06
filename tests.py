@@ -46,7 +46,7 @@ class BaseTest(unittest.TestCase):
         APGD-CE (Auto-PGD with CE loss) (https://arxiv.org/pdf/2003.01690.pdf)
         APGD-DLR (Auto-PGD with DLR loss) (https://arxiv.org/pdf/2003.01690.pdf)
         BIM (Basic Iterative Method) (https://arxiv.org/pdf/1611.01236.pdf)
-        CW-L2 (Carlini-Wagner with l₂ norm) (https://arxiv.org/pdf/1608.04644.pdf)
+        CW-L2 (Carlini-Wagner with l2 norm) (https://arxiv.org/pdf/1608.04644.pdf)
         DF (DeepFool) (https://arxiv.org/pdf/1511.04599.pdf)
         FAB (Fast Adaptive Boundary) (https://arxiv.org/pdf/1907.02044.pdf)
         JSMA (Jacobian Saliency Map Approach) (https://arxiv.org/pdf/1511.07528.pdf)
