@@ -192,7 +192,7 @@ class DLRLoss(torch.nn.Module):
     the descending order of the model logits (that is, the denominator
     represents the difference between the largest and 3rd largest model logit).
     Like other losses, we store the last computed accuracy & loss, and expose
-    attributes so that optimizers maximize this function and that a refernece
+    attributes so that optimizers maximize this function and that a reference
     to the perturbation vector is not needed.
 
     :func:`__init__`: instantiates a DLRLoss  object
