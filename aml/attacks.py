@@ -16,6 +16,7 @@ import torch  # Tensors and Dynamic neural networks in Python with strong GPU ac
 # change setuptools version to head
 # cleanup framework comparison experiment (support multiple datasets)
 # confirm *all* l0 norm attacks basically need alpha set to 1 except adam? (regardless of smap?)
+# rename module to attack
 
 
 class Adversary:
