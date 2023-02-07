@@ -17,6 +17,9 @@ import torch  # Tensors and Dynamic neural networks in Python with strong GPU ac
 # cleanup framework comparison experiment (support multiple datasets)
 # confirm *all* l0 norm attacks basically need alpha set to 1 except adam? (regardless of smap?)
 # rename module to attack
+# cw should show binary search step stage (not updating reset in craft like apgdce does)
+# dont call first progress if we arent tracking progress...
+# cleanup reset so that we use keyword args in the adversary.. that should just work...
 
 
 class Adversary:
@@ -209,6 +212,7 @@ class Adversary:
         """
 
         # instantiate bookkeeping and iterate over restarts & hyperparameters
+        reset and self.reset()
         x = x.clone()
         b = torch.full_like(x, torch.inf)
         b[self.model(x).argmax(1).ne(y)] = 0
