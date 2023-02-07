@@ -172,7 +172,7 @@ maps, and lp norms all manipulate gradients for _Travelers_ to consume.
 Optimizer classes (`optimizer.py`) are part of `Traveler` objects that define
 the set of techniques that produce perturbation. They consume gradient
 information and apply a perturbation as to maximize (or minimize) the desired
-object function. Four optimizers are currently support: `SGD`, `Adam`,
+objective function. Four optimizers are currently support: `SGD`, `Adam`,
 `BackwardSGD`, and `MomentumBestStart`. `SGD` and `Adam` are common optimizers
 used in machine learning and are simply imported into the `optimizer` module
 namespace from PyTorch. `BackwardSGD` comes from
@@ -195,7 +195,7 @@ define the set of techniques used to initialize perturbations. They either
 initialize perturbations by randomly sampling within the budget or based on the
 norm of the best perturbations seen thus far. Three random start strategies are
 supported: `MaxStart`, `Identity`, and `ShrinkingStart`. `IdentityStart` serves
-as a "no random start" option---the input is returned as-is. `MaxStart` comes
+as a "no random start" option—the input is returned as-is. `MaxStart` comes
 from [PGD](https://arxiv.org/pdf/1706.06083.pdf); specifically, it initializes
 perturbations randomly based on the perturbation budget. `ShrinkingStart` comes
 from [FAB](https://arxiv.org/pdf/1907.02044.pdf); specifically, it initializes
@@ -211,7 +211,7 @@ Loss functions (`loss.py`) are part of `Surface` objects that define measures
 of error. When differentiated, they inform how perturbations should be
 manipulated such that adversarial goals are met. Four losses are supported:
 `CELoss`, `CWLoss`, `DLRLoss`, and `IdentityLoss`. `CELoss` is perhaps the most
-popular loss function used in attacks, given its popular in training deep
+popular loss function used in attacks, given its popularity in training deep
 learning models, and is a simple wrapper for `torch.nn.CrossEntropyLoss`.
 `CWLoss` comes from [CW-L2](https://arxiv.org/pdf/1608.04644.pdf);
 specifically, it measures the difference of the logits associated with the
@@ -303,6 +303,20 @@ as they are misclassified
 * `norm`: lp-norm to use
 * `saliency_map`: saliency map to use
 
+
+### Optimizer
+
+#### BackwardSGD
+
+* `params`: perturbations
+* `attack_loss`: attack loss (caches model accuracy on forward passes)
+* `lr`: perturbation strength per iteration
+* `maximize`: whether the attack loss is to be maximized (or minimized)
+* `norm`: lp-norm used
+* `smap`: saliency map used (caches biased projection when using DeepFool)
+* `alpha_max`: maximum strength of biased projection
+* `beta`: backward step strength for misclassified inputs
+
 ### Loss
 
 #### CELoss
@@ -322,6 +336,8 @@ as they are misclassified
 #### IdentityLoss
 
 * No parameters are necessary for this class
+
+####
 
 
 ### Misc
