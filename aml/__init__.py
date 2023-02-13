@@ -24,5 +24,5 @@ from aml.attacks import pgd  # PGD (https://arxiv.org/pdf/1706.06083.pdf)
 
 # compute version
 __version__ = subprocess.check_output(
-    ("git", "rev-parse", "--short", "HEAD"), text=True
+    ("git", "-C", *__path__, "rev-parse", "--short", "HEAD"), text=True
 ).strip()
