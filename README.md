@@ -1,6 +1,6 @@
 # Adversarial Machine Learning
 
-_Adversarial Machine Learning_ (`aml`) is a repo for measuring  the robustness
+_Adversarial Machine Learning_ (`aml`) is a repo for measuring the robustness
 of deep learning models against white-box evasion attacks. Designed for
 academics, it is principally designed for use in fundamental research to
 understand _adversarial examples_, [inputs designed to cause models to make a
@@ -29,6 +29,20 @@ the datasets found in [this repo](https://github.com/sheatsley/datasets)). All
 of the information you need to start using this repo is contained within this
 one ReadMe, ordered by complexity (No need to parse through some highly
 over-engineered ReadTheDocs documentation).
+
+#### But wait, didn't [The Space of Adversarial Strategies](https://arxiv.org/abs/2209.04521) have 576 attacks?
+
+Yes, our original paper did investigate 576 attacks. This repo has removed
+support for [change of variables](https://arxiv.org/pdf/1608.04644.pdf) and
+added support for (what we call) [shrinking
+start](https://arxiv.org/pdf/1907.02044.pdf) random start strategy.
+Empirically, we did not find _change of variables_ to offer any improvements
+(with PyTorch) and its proper integration into the abstractions provided here
+is rather complicated. _Shrinking start_ support was added with the new
+`Adversary` abstraction to support attacks with: (1) non-deterministic
+components that perform multiple starts (e.g.,
+[FAB](https://arxiv.org/pdf/1907.02044.pdf)), and (2) perform hyperparameters
+optimization (e.g., [CW-L2](https://arxiv.org/pdf/1608.04644.pdf)).
 
 ## Table of Contents
 
@@ -80,6 +94,54 @@ mean_budget = perturbations.norm(torch.inf, 1).mean()
 ```
 
 ## Advanced Usage
+
+Below are descriptions of some of the more subtle controls within this repo and
+complex use cases.
+
+* Early termination: when an instantiating an `Attack`, the `early_termination`
+flag determines whether attacks attempt to _minimize model accuracy_ or
+_maximize (model) loss_ (Also described as [maximum-confidence vs.
+minimum-distance](https://arxiv.org/pdf/1809.02861.pdf)). Specifically, attacks
+that "terminate early" return the set of misclassified inputs with the smallest
+norm (For example, perturbations for inputs that are initially misclassified
+are 0). Attacks in this regime include
+[CW-L2](https://arxiv.org/pdf/1608.04644.pdf),
+[DF](https://arxiv.org/pdf/1511.04599.pdf),
+[FAB](https://arxiv.org/pdf/1907.02044.pdf), and
+[JSMA](https://arxiv.org/pdf/1511.07528.pdf). Alternatively, attacks that do
+not "terminate early," return the set of inputs that maximize model loss. To be
+precise, such attacks actually return the set of inputs that _improve attack
+loss_, as this empirically appears to perform (marginally) better than
+measuring model loss. Attacks in this regime include
+[APGD-\*](https://arxiv.org/pdf/2003.01690.pdf),
+[BIM](https://arxiv.org/pdf/1611.01236.pdf), and
+[PGD](https://arxiv.org/pdf/1706.06083.pdf). In the `attacks` module, the
+`update` method of the `Attack` class details the impact of
+`early_termination`. As one use case, it is generally accepted that
+[investigating transferability should be done with attacks configured to
+maximize model loss](https://arxiv.org/pdf/1809.02861.pdf) (i.e.,
+`early_termination` set to `False`).
+
+* Projection: `early_termination` also influences when perturbations are
+projected as to comply with lp-based budgets. With `early_termination`, attacks
+are free to exceed the threat model and the resultant adversarial examples at
+any particular iteration are then projected and compared to the best
+adversarial examples seen thus far (which is _necessary_ for attacks that use
+losses such as [CW Loss](https://arxiv.org/pdf/1608.04644.pdf), as attacks that
+use this loss ostensibly always exceed the threat model and, once
+misclassified, naturally become budget-compliant). However, attacks that do not
+use `early_termination` are always budget-complaint; empirically, without
+enforcing budget-compliance, unbounded adversarial examples that maximize model
+loss are often _worse_ (than bounded adversarial examples) with naïve
+projection on the last iteration.
+
+* Random start: there are may different ways that random starts are
+implemented. For most implementations found online, l∞ attacks that use random
+start initialize perturbations by sampling uniformly between ±ε, while
+perturbations from l2 attacks are sampled from a standard normal distribution
+and subsequently normalized to ε. This repo also supports random start for l0
+attacks in that an l0-number of features are randomly selected per sample,
+which then sample uniformly between ±1.
 
 ## Repo Overview
 
@@ -251,7 +313,7 @@ sets all other components to zero. `L2` comes from
 gradients by their l2-norm. `Linf` comes from
 [APGD-CE](https://arxiv.org/pdf/2003.01690.pdf),
 [APGD-DLR](https://arxiv.org/pdf/2003.01690.pdf),
-[BIM](https://arxiv.org/pdf/1611.01236.pdf) and
+[BIM](https://arxiv.org/pdf/1611.01236.pdf), and
 [PGD](https://arxiv.org/pdf/1706.06083.pdf); specifically, this returns the
 sign of the gradients.
 
@@ -427,8 +489,10 @@ normed gradient differences). Thus, when paired with an optimizer that lacks an
 adaptive learning rate (i.e., `BackwardSGD` and `SGD`), `alpha` in `Attack`
 objects should be set to `1.0`. This is done by default when instantiating
 `Attack` objects and can be overridden by setting `alpha_override` to `False`.
-Finally, attacks that use the `L0` norm with `MomentumBestStart` also require
-`alpha` to bet set to `1`.
+Finally, even though `MomentumBestStart` has a dynamic learning rate, `L0`
+attacks that use this optimizer with the `DeepFoolSaliency` saliency map also
+require `alpha` to bet set to `1` (Alternatively, the attacks can be made
+succesful with an extreme number of iterations, which I recommend against).
 
 * When using attacks with non-deterministic components (e.g., random start
 strategies) or hyperparameters (e.g., `CWLoss`), leveraging the `Adversary`
