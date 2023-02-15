@@ -249,8 +249,9 @@ specifically, it measures the progress of perturbations at a series of
 checkpoints. If progress has stalled (measured by a stagnating increase (or
 decrease) in attack loss), then the perturbation is reset to the best seen
 perturbation and the learning rate is halved. Conceptually, `MomentumBestStart`
-starts with aggressive perturbations and iteratively refines it search when a
-finer search is warranted.
+starts with aggressive perturbations (the learning rate is initialized to ε for
+l2 and l∞ attacks and 1.0 for l0 attacks) and iteratively refines it search
+when a finer search is warranted.
 
 ### Random Start Strategies
 
@@ -489,10 +490,6 @@ normed gradient differences). Thus, when paired with an optimizer that lacks an
 adaptive learning rate (i.e., `BackwardSGD` and `SGD`), `alpha` in `Attack`
 objects should be set to `1.0`. This is done by default when instantiating
 `Attack` objects and can be overridden by setting `alpha_override` to `False`.
-Finally, even though `MomentumBestStart` has a dynamic learning rate, `L0`
-attacks that use this optimizer with the `DeepFoolSaliency` saliency map also
-require `alpha` to bet set to `1` (Alternatively, the attacks can be made
-succesful with an extreme number of iterations, which I recommend against).
 
 * When using attacks with non-deterministic components (e.g., random start
 strategies) or hyperparameters (e.g., `CWLoss`), leveraging the `Adversary`
