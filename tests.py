@@ -20,11 +20,6 @@ import pickle  # Python object serialization
 import unittest  # Unit testing framework
 import torch  # Tensors and Dynamic neural networks in Python with strong GPU acceleration
 
-# TODO
-# add all other attack variants (pgd l2, cw-linf, df-linf, fab-linf?)
-# never need item when using formatted strings...?
-# add advanced details in README (like the influence of early_termination on projection, the difference between min-norm and max-loss etc)
-
 
 class BaseTest(unittest.TestCase):
     """
@@ -1669,7 +1664,7 @@ class SpecialTests(BaseTest):
         )
         return FunctionalTests.functional_test(self, attacks, min_acc)
 
-    def test_attack_performance(self, name="CW-L2"):
+    def test_attack_performance(self, name="B-S-Id-D-∞"):
         """
         This method serves to help debug individual attacks. Given the attack
         name, it will instantiate an attack object with the associated
