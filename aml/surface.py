@@ -249,19 +249,17 @@ class DeepFoolSaliency:
             .topk(1, dim=1, largest=False)
         )
 
-        # save ith grad signs & normed logit diffs & return absolute ith gradient diffs
+        # save normed logit diffs and return ith gradient diffs (to be normed)
         ith_grad_diff = grad_diffs[torch.arange(grad_diffs.size(0)), i.flatten()]
         ith_logit_diff = logit_diffs.gather(1, i)
         self.normed_ith_logit_diff = normed_ith_logit_diff
-        self.ith_grad_diff_sign = ith_grad_diff.sign()
 
         # compute projection wrt original input to support BackwardsSGD
         pith_logit_diff = ith_grad_diff.mul(p).sum(1, keepdim=True).add_(ith_logit_diff)
         self.org_proj = (
             pith_logit_diff.abs_()
-            .div_(ith_grad_diff.pow(self.q).sum(1, keepdim=True).clamp_(self.minimum))
+            .div_(ith_grad_diff.norm(self.q, dim=1, keepdim=True).clamp_(self.minimum))
             .add_(self.minimum)
-            .mul(ith_grad_diff)
         )
         return ith_grad_diff
 
@@ -279,6 +277,7 @@ class DeepFoolSaliency:
         :return: finalized gradients for optimizers to step into
         :rtype: torch Tensor (n, m)
         """
+        self.org_proj = self.org_proj.mul(g)
         return g.mul_(self.normed_ith_logit_diff)
 
 
