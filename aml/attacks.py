@@ -13,13 +13,7 @@ import pandas  # Python Data Analysis Library
 import torch  # Tensors and Dynamic neural networks in Python with strong GPU acceleration
 
 # TODO
-# change setuptools version to head
 # cleanup framework comparison experiment (support multiple datasets)
-# confirm *all* l0 norm attacks basically need alpha set to 1 except adam? (regardless of smap?)
-# rename module to attack
-# cw should show binary search step stage (not updating reset in craft like apgdce does)
-# dont call first progress if we arent tracking progress...
-# cleanup reset so that we use keyword args in the adversary.. that should just work...
 
 
 class Adversary:
@@ -180,6 +174,7 @@ class Adversary:
         lb, ub = torch.tensor(self.hparam_bounds).repeat(y.numel(), 1).unbind(1)
         for h in range(1, self.hparam_steps + 1):
             p = self.atk.craft(x, y, b, reset)
+            self.atk.hparam = f"BS Step {h} "
             self.verbose and print(
                 f"On hyperparameter iteration {h} of {self.hparam_steps}...",
                 f"({h / self.hparam_steps:.1%})",
@@ -212,7 +207,6 @@ class Adversary:
         """
 
         # instantiate bookkeeping and iterate over restarts & hyperparameters
-        reset and self.reset()
         x = x.clone()
         b = torch.full_like(x, torch.inf)
         b[self.model(x).argmax(1).ne(y)] = 0
@@ -327,7 +321,7 @@ class Attack:
         optimizer_alg,
         random_start,
         saliency_map,
-        alpha_override=False,
+        alpha_override=True,
         statistics=False,
         verbosity=0.25,
     ):
@@ -381,12 +375,17 @@ class Attack:
         :rtype: Attack object
         """
 
-        # set alpha to 1 with DF smap with non-adaptive-LR optimizer
+        # set alpha to 1 with DF smap with non-adaptive-LR optimizer (mostly)
         alpha = (
-            1
-            if not alpha_override
+            1.0
+            if alpha_override
             and saliency_map is surface.DeepFoolSaliency
-            and optimizer_alg in {optimizer.BackwardSGD, optimizer.SGD}
+            and optimizer_alg
+            in (
+                {optimizer.BackwardSGD, optimizer.MomentumBestStart, optimizer.SGD}
+                if norm is surface.L0
+                else {optimizer.BackwardSGD, optimizer.SGD}
+            )
             else alpha
         )
 
@@ -395,6 +394,7 @@ class Attack:
         self.epochs = epochs
         self.epsilon = epsilon
         self.et = early_termination
+        self.hparam = ""
         self.lp = {surface.L0: 0, surface.L2: 2, surface.Linf: torch.inf}[norm]
         self.restart = ""
         self.statistics = statistics
@@ -478,6 +478,7 @@ class Attack:
         """
 
         # init perturbations, set misclassified outputs to 0, & compute ranges
+        reset and self.reset()
         x = x.detach().clone()
         p = torch.zeros_like(x)
         correct = self.surface.model(x).argmax(1).eq(y).unsqueeze_(1)
@@ -497,7 +498,7 @@ class Attack:
         self.traveler.initialize(p, o)
         p.clamp_(cnb, cxb)
         self.update(x, y, p, o)
-        self.progress(0, x, y, p, o)
+        self.statistics and self.progress(0, x, y, p, o)
 
         # compute peturbation updates and record progress
         for e in range(1, self.epochs + 1):
@@ -508,10 +509,11 @@ class Attack:
             self.update(x, y, p, o)
             prog = self.progress(e, x, y, p, o) if self.statistics else ""
             print(
-                f"{self.restart} "
+                f"{self.restart}{self.hparam}"
                 f"Epoch {e:{len(str(self.epochs))}} / {self.epochs} {prog:<15}"
             ) if verbose and not e % self.verbosity else print(
-                f"{self.name}: {self.restart} Epoch {e}... ({e / self.epochs:.1%})",
+                f"{self.name}: {self.restart}{self.hparam}"
+                f"Epoch {e}... ({e / self.epochs:.1%})",
                 end="\r",
             )
 
@@ -587,6 +589,7 @@ class Attack:
         :return: None
         :rtype: NoneType
         """
+
         # instantiate traveler, surface, and necessary subcomponents
         attack_loss = self.loss_class(classes=self.model.classes)
         norm = self.norm_class(epsilon=self.epsilon, maximize=self.loss_class.max_obj)
@@ -679,6 +682,7 @@ def attack_builder(
         surface.IdentitySaliency,
         surface.JacobianSaliency,
     ),
+    alpha_override=True,
     statistics=False,
     verbosity=1,
 ):
@@ -704,6 +708,8 @@ def attack_builder(
     instantiating a subset of the total combination space. Moreover, we also
     expose the following experimental parameters below to compare attacks.
 
+    :param alpha_override: override manual alpha for certain components
+    :type alpha_override: bool
     :param alpha: learning rate of the optimizer
     :type alpha: float
     :param early_termination: whether misclassified inputs are perturbed
@@ -760,6 +766,7 @@ def attack_builder(
         optimizers,
     ):
         yield Attack(
+            alpha_override=alpha_override,
             alpha=alpha,
             early_termination=early_termination,
             epochs=epochs,
