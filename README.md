@@ -37,18 +37,19 @@ support for [change of variables](https://arxiv.org/pdf/1608.04644.pdf) and
 added support for (what we call) [shrinking
 start](https://arxiv.org/pdf/1907.02044.pdf) random start strategy.
 Empirically, we did not find _change of variables_ to offer any improvements
-(with PyTorch) and its proper integration into the abstractions provided here
-is rather complicated. _Shrinking start_ support was added with the new
-`Adversary` abstraction to support attacks with: (1) non-deterministic
-components that perform multiple starts (e.g.,
-[FAB](https://arxiv.org/pdf/1907.02044.pdf)), and (2) perform hyperparameters
-optimization (e.g., [CW-L2](https://arxiv.org/pdf/1608.04644.pdf)).
+(with PyTorch) and its integration into the abstractions provided here was
+rather complicated (without it, the repo is _substantially_ simpler).
+_Shrinking start_ support was added with the new `Adversary` abstraction to
+support attacks with: (1) non-deterministic components that perform multiple
+starts (e.g., [FAB](https://arxiv.org/pdf/1907.02044.pdf)), and (2)
+hyperparameters optimization (e.g.,
+[CW-L2](https://arxiv.org/pdf/1608.04644.pdf)).
 
 ## Table of Contents
 
 * [Quick start](#quick-start)
 * [Advanced Usage](#advanced-usage)
-* [Repo Overview](#library-overview)
+* [Repo Overview](#repo-overview)
 * [Misc](#misc)
 * [Citation](#citation)
 
