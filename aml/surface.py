@@ -416,7 +416,7 @@ class L0:
         to perturb at each iteration. Keyword arguments are accepted to provide
         a homogeneous interface across norm projection objects.
 
-        :param epsilon: the maximum amount of perturable features
+        :param epsilon: the maximum amount of perturbable features
         :type epsilon: int
         :param clip: the initial perturbation range
         :type clip: tuple of torch Tensor objects (n, m)
