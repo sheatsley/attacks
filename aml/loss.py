@@ -202,7 +202,7 @@ class DLRLoss(torch.nn.Module):
     p_req = False
     max_obj = True
 
-    def __init__(self, classes, **kwargs):
+    def __init__(self, classes, minimum=1e-8, **kwargs):
         """
         This method instantiates an IdentityLoss object. It accepts the number
         of classes (so that logit differences can be computed accurately).
@@ -211,15 +211,18 @@ class DLRLoss(torch.nn.Module):
 
         :param classses: number of classes
         :type classes: int
+        :param minimum: minimum gradient value (to mitigate underflow)
+        :type minimum: float
         :return: Identity loss
         :rtype: IdentityLoss object
         """
         super().__init__()
         self.classes = classes
+        self.minimum = minimum
         self.d = lambda x: x[:, 0].sub(x[:, 2]) if classes > 2 else torch.tensor(1.0)
         return None
 
-    def forward(self, logits, y, yt=None, minimum=1e-8):
+    def forward(self, logits, y, yt=None):
         """
         This method computes the loss described above. Specifically, it
         computes the division of: (1) the logit difference between the yth
@@ -233,8 +236,6 @@ class DLRLoss(torch.nn.Module):
         :type y: torch Tensor object (n,)
         :param yt: the true labels if attempting to compute a jacobian
         :type yt: torch Tensor object (n,)
-        :param minimum: minimum gradient value (to mitigate underflow)
-        :type minimum: float
         :return: the current loss
         :rtype: torch Tensor object (n,)
         """
@@ -248,7 +249,7 @@ class DLRLoss(torch.nn.Module):
         # compute ordered logit differences
         log_desc = logits.sort(dim=1, descending=True).values
         pi_diff = self.d(log_desc)
-        loss = -(log_diff.div(pi_diff.clamp_(minimum)))
+        loss = -(log_diff.div(pi_diff.clamp_(self.minimum)))
         if loss.requires_grad:
             self.loss, self.acc = record(loss, logits, y, y if yt is None else yt)
         return loss
