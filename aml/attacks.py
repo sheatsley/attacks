@@ -380,12 +380,7 @@ class Attack:
             1.0
             if alpha_override
             and saliency_map is surface.DeepFoolSaliency
-            and optimizer_alg
-            in (
-                {optimizer.BackwardSGD, optimizer.MomentumBestStart, optimizer.SGD}
-                if norm is surface.L0
-                else {optimizer.BackwardSGD, optimizer.SGD}
-            )
+            and optimizer_alg in {optimizer.BackwardSGD, optimizer.SGD}
             else alpha
         )
 
@@ -598,7 +593,7 @@ class Attack:
         aml_opt = {
             "attack_loss": attack_loss,
             "epochs": self.epochs,
-            "epsilon": self.alpha if self.lp == 0 else self.epsilon,
+            "epsilon": 1.0 if self.lp == 0 else self.epsilon,
             "model": self.model,
             "norm": self.lp,
             "smap": saliency_map,
