@@ -22,6 +22,8 @@ import torch  # Tensors and Dynamic neural networks in Python with strong GPU ac
 
 # TODO
 # add all other attack variants (pgd l2, cw-linf, df-linf, fab-linf?)
+# never need item when using formatted strings...?
+# add advanced details in README (like the influence of early_termination on projection, the difference between min-norm and max-loss etc)
 
 
 class BaseTest(unittest.TestCase):
@@ -157,7 +159,7 @@ class BaseTest(unittest.TestCase):
             path = pathlib.Path(f"/tmp/aml_trained_{dataset}_model.pkl")
             with path.open("rb") as f:
                 state = pickle.load(f)
-            temp_to_apply = getattr(template, cls.model.__class__.__name__)
+            temp_to_apply = getattr(template, type(cls.model).__name__)
             assert state["template"] == temp_to_apply, "Hyperparameters have changed"
             assert state["seed"] == seed, f"Seed changed: {state['seed']} != {seed}"
             cls.model = state["model"]
@@ -167,7 +169,7 @@ class BaseTest(unittest.TestCase):
             cls.model.fit(*(x, y) if has_test else (cls.x, cls.y), shape=shape)
             state = {
                 "model": cls.model,
-                "template": getattr(template, cls.model.__class__.__name__),
+                "template": getattr(template, type(cls.model).__name__),
                 "seed": seed,
             }
             with path.open("wb") as f:
@@ -208,19 +210,21 @@ class BaseTest(unittest.TestCase):
         frameworks = ", ".join(cls.available)
         cls.art_classifier = (
             cls.build_art_classifier()
-            if cls in (IdentityTests, PerformanceTests) and "art" in cls.available
+            if cls in (IdentityTests, PerformanceTests, SpecialTests)
+            and "art" in cls.available
             else None
         )
         cls.fb_classifier = (
             cls.build_fb_classifier()
-            if cls in (IdentityTests, PerformanceTests) and "foolbox" in cls.available
+            if cls in (IdentityTests, PerformanceTests, SpecialTests)
+            and "foolbox" in cls.available
             else None
         )
         print(
             "Module Setup complete. Testing Parameters:",
             f"Dataset: {dataset}, Test Set: {has_test}",
             f"Craftset shape: ({cls.x.size(0)}, {cls.x.size(1)})",
-            f"Model Type: {cls.model.__class__.__name__}",
+            f"Model Type: {type(cls.model).__name__}",
             f"Train Acc: {cls.model.stats.train_acc.iloc[-1]:.1%}",
             f"Craftset Acc: {cls.clean_acc:.1%}",
             f"Attack Clipping Values: {clip_info}",
@@ -235,11 +239,11 @@ class BaseTest(unittest.TestCase):
     @classmethod
     def build_art_classifier(cls):
         """
-        This method instantiates an art (pytorch) classifier (as required by art
-        evasion attacks).
+        This method instantiates an ART (PyTorch) classifier (as required by
+        ART evasion attacks).
 
-        :return: an art (pytorch) classifier
-        :rtype: art PyTorchClassifier object
+        :return: an ART (PyTorch) classifier
+        :rtype: art.estimators.classification PyTorchClassifier object
         """
         from art.estimators.classification import PyTorchClassifier
 
@@ -255,11 +259,11 @@ class BaseTest(unittest.TestCase):
     @classmethod
     def build_fb_classifier(cls):
         """
-        This method instantiates an art (pytorch) classifier (as required by foolbox
-        evasion attacks).
+        This method instantiates a Foolbox (PyTorch) classifier (as required by
+        Foolbox evasion attacks).
 
-        :return: an art (pytorch) classifier
-        :rtype: art PyTorchClassifier object
+        :return: a Foolbox (PyTorch) classifier
+        :rtype: Foolbox PyTorchModel object
         """
         from foolbox import PyTorchModel
 
@@ -326,19 +330,21 @@ class BaseTest(unittest.TestCase):
         torch.manual_seed(cls.seed)
         np.random.seed(cls.seed)
 
-    def apgdce(self):
+    def apgdce(self, norm="inf"):
         """
         This method crafts adversarial examples with APGD-CE (Auto-PGD with CE
         loss) (https://arxiv.org/pdf/2003.01690.pdf). The supported frameworks
         for APGD-CE include ART and Torchattacks. Notably, the Torchattacks
         implementation assumes an image (batches, channels, width, height).
 
+        :param norm: norm to use (only modified for special tests)
+        :type norm: str or int
         :return: APGD-CE adversarial examples
-        :rtype: tuple of torch Tensor objects (n, m)
+        :rtype: tuple of tuples: torch Tensor object (n, m) and str
         """
         (model, eps, eps_step, max_iter, nb_random_init, rho) = (
             self.atk_params["model"],
-            self.linf,
+            {2: self.l2, "inf": self.linf}[norm],
             self.atk_params["alpha"],
             self.atk_params["epochs"],
             self.attacks["apgdce"].params["num_restarts"] + 1,
@@ -354,7 +360,7 @@ class BaseTest(unittest.TestCase):
                 torch.from_numpy(
                     AutoProjectedGradientDescent(
                         estimator=self.art_classifier,
-                        norm="inf",
+                        norm=norm,
                         eps=eps,
                         eps_step=eps_step,
                         max_iter=max_iter,
@@ -379,7 +385,7 @@ class BaseTest(unittest.TestCase):
             ta_adv = (
                 APGD(
                     model=model,
-                    norm="Linf",
+                    norm={2: "L2", "inf": "Linf"}[norm],
                     eps=eps,
                     steps=max_iter,
                     n_restarts=nb_random_init,
@@ -394,11 +400,9 @@ class BaseTest(unittest.TestCase):
                 "Torchattacks",
             )
         self.reset_seeds()
-        return self.attacks["apgdce"], tuple(
-            fw for fw in (art_adv, ta_adv) if fw is not None
-        )
+        return tuple(fw for fw in (art_adv, ta_adv) if fw is not None)
 
-    def apgddlr(self):
+    def apgddlr(self, norm="inf"):
         """
         This method crafts adversarial examples with APGD-DLR (Auto-PGD with
         DLR loss) (https://arxiv.org/pdf/2003.01690.pdf). The supported
@@ -407,12 +411,14 @@ class BaseTest(unittest.TestCase):
         Moreover, the Torchattacks implementation assumes an image (batches,
         channels, width, height).
 
+        :param norm: norm to use (only modified for special tests)
+        :type norm: str or int
         :return: APGD-DLR adversarial examples
-        :rtype: tuple of torch Tensor objects (n, m)
+        :rtype: tuple of tuples: torch Tensor object (n, m) and str
         """
         (model, eps, eps_step, max_iter, nb_random_init, rho) = (
             self.atk_params["model"],
-            self.linf,
+            {2: self.l2, "inf": self.linf}[norm],
             self.atk_params["alpha"],
             self.atk_params["epochs"],
             self.attacks["apgddlr"].params["num_restarts"] + 1,
@@ -428,7 +434,7 @@ class BaseTest(unittest.TestCase):
                 torch.from_numpy(
                     AutoProjectedGradientDescent(
                         estimator=self.art_classifier,
-                        norm="inf",
+                        norm=norm,
                         eps=eps,
                         eps_step=eps_step,
                         max_iter=max_iter,
@@ -454,7 +460,7 @@ class BaseTest(unittest.TestCase):
             ta_adv = (
                 APGD(
                     model=model,
-                    norm="Linf",
+                    norm={2: "L2", "inf": "Linf"}[norm],
                     eps=eps,
                     steps=max_iter,
                     n_restarts=nb_random_init,
@@ -469,11 +475,9 @@ class BaseTest(unittest.TestCase):
                 "Torchattacks",
             )
         self.reset_seeds()
-        return self.attacks["apgddlr"], tuple(
-            fw for fw in (art_adv, ta_adv) if fw is not None
-        )
+        return tuple(fw for fw in (art_adv, ta_adv) if fw is not None)
 
-    def bim(self):
+    def bim(self, norm="inf"):
         """
         This method crafts adversarial examples with BIM (Basic Iterative
         Method) (https://arxiv.org/pdf/1611.01236.pdf). The supported
@@ -482,22 +486,31 @@ class BaseTest(unittest.TestCase):
         implementation of BIM, so we call PGD, but with random initialization
         disabled.
 
+        :param norm: norm to use (only modified for special tests)
+        :type norm: str or int
         :return: BIM adversarial examples
-        :rtype: tuple of torch Tensor objects (n, m)
+        :rtype: tuple of tuples: torch Tensor object (n, m) and str
         """
         (model, eps, nb_iter, eps_iter) = (
             self.atk_params["model"],
-            self.linf,
+            {2: self.l2, "inf": self.linf}[norm],
             self.atk_params["epochs"],
             self.atk_params["alpha"],
         )
         at_adv = art_adv = ch_adv = fb_adv = ta_adv = None
         if "advertorch" in self.available:
-            from advertorch.attacks import LinfBasicIterativeAttack
+            if norm == "inf":
+                from advertorch.attacks import (
+                    LinfBasicIterativeAttack as BasicIterativeAttack,
+                )
+            elif norm == 2:
+                from advertorch.attacks import (
+                    L2BasicIterativeAttack as BasicIterativeAttack,
+                )
 
             print("Producing BIM adversarial examples with AdverTorch...")
             at_adv = (
-                LinfBasicIterativeAttack(
+                BasicIterativeAttack(
                     predict=model,
                     loss_fn=torch.nn.CrossEntropyLoss(reduction="sum"),
                     eps=eps,
@@ -509,7 +522,7 @@ class BaseTest(unittest.TestCase):
                 ).perturb(x=self.x.clone(), y=self.y.clone()),
                 "AdverTorch",
             )
-        if "art" in self.available:
+        if "art" in self.available and norm == "inf":
             from art.attacks.evasion import BasicIterativeMethod
 
             print("Producing BIM adversarial examples with ART...")
@@ -540,7 +553,7 @@ class BaseTest(unittest.TestCase):
                     eps=eps,
                     eps_iter=eps_iter,
                     nb_iter=nb_iter,
-                    norm=float("inf"),
+                    norm={2: 2, "inf": float("inf")}[norm],
                     clip_min=self.clip_min.max(),
                     clip_max=self.clip_max.min(),
                     y=self.y,
@@ -552,10 +565,17 @@ class BaseTest(unittest.TestCase):
                 "CleverHans",
             )
         if "foolbox" in self.available:
-            from foolbox.attacks import LinfBasicIterativeAttack
+            if norm == "inf":
+                from foolbox.attacks import (
+                    LinfBasicIterativeAttack as BasicIterativeAttack,
+                )
+            elif norm == 2:
+                from foolbox.attacks import (
+                    L2BasicIterativeAttack as BasicIterativeAttack,
+                )
 
             print("Producing BIM adversarial examples with Foolbox...")
-            _, fb_adv, _ = LinfBasicIterativeAttack(
+            _, fb_adv, _ = BasicIterativeAttack(
                 rel_stepsize=None,
                 abs_stepsize=eps_iter,
                 steps=nb_iter,
@@ -567,7 +587,7 @@ class BaseTest(unittest.TestCase):
                 epsilons=eps,
             )
             fb_adv = (fb_adv, "Foolbox")
-        if "torchattacks" in self.available:
+        if "torchattacks" in self.available and norm == "inf":
             from torchattacks import BIM
 
             print("Producing BIM adversarial examples with Torchattacks...")
@@ -580,25 +600,32 @@ class BaseTest(unittest.TestCase):
                 )(inputs=self.x.clone(), labels=self.y),
                 "Torchattacks",
             )
-        return self.attacks["bim"], tuple(
+        return tuple(
             fw for fw in (at_adv, art_adv, ch_adv, fb_adv, ta_adv) if fw is not None
         )
 
-    def cwl2(self):
+    def cwl2(self, norm=2):
         """
         This method crafts adversariale examples with CW-L2 (Carlini-Wagner
-        with l₂ norm) (https://arxiv.org/pdf/1608.04644.pdf). The supported
+        with l2 norm) (https://arxiv.org/pdf/1608.04644.pdf). The supported
         frameworks for CW-L2 include AdverTorch, ART, CleverHans, Foolbox, and
         Torchattacks. Notably, Torchattacks does not explicitly support binary
         searching on c (it expects searching manually). Notably, while our
         implementation shows competitive performance with low iterations, other
         implementations (sans ART) require a substantial number of additional
         iterations, so the minimum number of steps is set to be at least 300.
+        Moreover, the ART CW-L0 implementation assumes an image (batches,
+        channels, width, height). Finally, while ART does offer a CW-L∞, it
+        does not appear to be complete (in that it does not support binary
+        search on c at all), so it is omitted for comparison.
 
+        :param norm: norm to use (only modified for special tests)
+        :type norm: str or int
         :return: CW-L2 adversarial examples
-        :rtype: tuple of torch Tensor objects (n, m)
+        :rtype: tuple of tuples: torch Tensor object (n, m) and str
         """
         (
+            variant,
             model,
             classes,
             confidence,
@@ -607,6 +634,7 @@ class BaseTest(unittest.TestCase):
             max_iterations,
             initial_const,
         ) = (
+            norm,
             self.atk_params["model"],
             self.atk_params["model"].params["classes"],
             self.attacks["cwl2"].surface.loss.k,
@@ -616,10 +644,10 @@ class BaseTest(unittest.TestCase):
             self.attacks["cwl2"].surface.loss.c.item(),
         )
         at_adv = art_adv = ch_adv = fb_adv = ta_adv = None
-        if "advertorch" in self.available:
+        if "advertorch" in self.available and norm == 2:
             from advertorch.attacks import CarliniWagnerL2Attack
 
-            print("Producing CW-L2 adversarial examples with AdverTorch...")
+            print(f"Producing CW-L{variant} adversarial examples with AdverTorch...")
             at_adv = (
                 CarliniWagnerL2Attack(
                     predict=model,
@@ -636,13 +664,20 @@ class BaseTest(unittest.TestCase):
                 ).perturb(x=self.x.clone(), y=self.y.clone()),
                 "AdverTorch",
             )
-        if "art" in self.available:
-            from art.attacks.evasion import CarliniL2Method
+        if (
+            "art" in self.available
+            and norm == 2
+            or "shape" in self.atk_params["model"].params
+        ):
+            if norm == 0:
+                from art.attacks.evasion import CarliniL0Method as CarliniWagner
+            elif norm == 2:
+                from art.attacks.evasion import CarliniL2Method as CarliniWagner
 
-            print("Producing CW-L2 adversarial examples with ART...")
+            print(f"Producing CW-L{variant} adversarial examples with ART...")
             art_adv = (
                 torch.from_numpy(
-                    CarliniL2Method(
+                    CarliniWagner(
                         classifier=self.art_classifier,
                         confidence=confidence,
                         targeted=False,
@@ -658,10 +693,10 @@ class BaseTest(unittest.TestCase):
                 ),
                 "ART",
             )
-        if "cleverhans" in self.available:
+        if "cleverhans" in self.available and norm == 2:
             from cleverhans.torch.attacks.carlini_wagner_l2 import carlini_wagner_l2
 
-            print("Producing CW-L2 adversarial examples with CleverHans...")
+            print(f"Producing CW-L{variant} adversarial examples with CleverHans...")
             ch_adv = (
                 carlini_wagner_l2(
                     model_fn=model,
@@ -678,10 +713,10 @@ class BaseTest(unittest.TestCase):
                 ).detach(),
                 "CleverHans",
             )
-        if "foolbox" in self.available:
+        if "foolbox" in self.available and norm == 2:
             from foolbox.attacks import L2CarliniWagnerAttack
 
-            print("Producing CW-L2 adversarial examples with Foolbox...")
+            print(f"Producing CW-L{variant} adversarial examples with Foolbox...")
             _, fb_adv, _ = L2CarliniWagnerAttack(
                 binary_search_steps=binary_search_steps,
                 steps=max_iterations,
@@ -696,10 +731,10 @@ class BaseTest(unittest.TestCase):
                 epsilons=self.l2,
             )
             fb_adv = (fb_adv, "Foolbox")
-        if "torchattacks" in self.available:
+        if "torchattacks" in self.available and norm == 2:
             from torchattacks import CW
 
-            print("Producing CW-L2 adversarial examples with Torchattacks...")
+            print(f"Producing CW-L{variant} adversarial examples with Torchattacks...")
             ta_adv = CW(
                 model=model,
                 c=initial_const,
@@ -710,11 +745,11 @@ class BaseTest(unittest.TestCase):
 
             # torchattack's implementation can return nans
             ta_adv = (torch.where(ta_adv.isnan(), self.x, ta_adv), "Torchattacks")
-        return self.attacks["cwl2"], tuple(
+        return tuple(
             fw for fw in (at_adv, art_adv, ch_adv, fb_adv, ta_adv) if fw is not None
         )
 
-    def df(self):
+    def df(self, norm=2):
         """
         This method crafts adversarial examples with DF (DeepFool)
         (https://arxiv.org/pdf/1611.01236.pdf). The supported frameworks for DF
@@ -723,18 +758,20 @@ class BaseTest(unittest.TestCase):
         set to aml DF's learning rate alpha minus one (not to be confused with
         the epsilon parameter used in aml, which governs the norm-ball size).
 
+        :param norm: norm to use (only modified for special tests)
+        :type norm: str or int
         :return: DeepFool adversarial examples
-        :rtype: tuple of torch Tensor objects (n, m)
+        :rtype: tuple of tuples: torch Tensor object (n, m) and str
         """
         model, max_iter, epsilon, nb_grads, epsilons = (
             self.atk_params["model"],
             self.atk_params["epochs"],
             self.attacks["df"].params["α"] - 1,
             self.atk_params["model"].params["classes"],
-            self.l2,
+            {2: self.l2, "inf": self.linf}[norm],
         )
         art_adv = fb_adv = ta_adv = None
-        if "art" in self.available:
+        if "art" in self.available and norm == 2:
             from art.attacks.evasion import DeepFool
 
             print("Producing DF adversarial examples with ART...")
@@ -752,10 +789,13 @@ class BaseTest(unittest.TestCase):
                 "ART",
             )
         if "foolbox" in self.available:
-            from foolbox.attacks import L2DeepFoolAttack
+            if norm == 2:
+                from foolbox.attacks import L2DeepFoolAttack as DeepFoolAttack
+            elif norm == "inf":
+                from foolbox.attacks import LinfDeepFoolAttack as DeepFoolAttack
 
             print("Producing DF adversarial examples with Foolbox...")
-            _, fb_adv, _ = L2DeepFoolAttack(
+            _, fb_adv, _ = DeepFoolAttack(
                 steps=max_iter,
                 candidates=nb_grads,
                 overshoot=epsilon,
@@ -767,7 +807,7 @@ class BaseTest(unittest.TestCase):
                 epsilons=epsilons,
             )
             fb_adv = (fb_adv, "Foolbox")
-        if "torchattacks" in self.available:
+        if "torchattacks" in self.available and norm == 2:
             from torchattacks import DeepFool
 
             print("Producing DF adversarial examples with Torchattacks...")
@@ -779,24 +819,24 @@ class BaseTest(unittest.TestCase):
 
             # torchattack's implementation can return nans
             ta_adv = (torch.where(ta_adv.isnan(), self.x, ta_adv), "Torchattacks")
-        return self.attacks["df"], tuple(
-            fw for fw in (art_adv, fb_adv, ta_adv) if fw is not None
-        )
+        return tuple(fw for fw in (art_adv, fb_adv, ta_adv) if fw is not None)
 
-    def fab(self):
+    def fab(self, norm=2):
         """
         This method crafts adversarial examples with FAB (Fast Adaptive
         Boundary) (https://arxiv.org/pdf/1907.02044.pdf). The supported
         frameworks for FAB include AdverTorch and Torchattacks.
 
+        :param norm: norm to use (only modified for special tests)
+        :type norm: str or int
         :return: FAB adversarial examples
-        :rtype: tuple of torch Tensor objects (n, m)
+        :rtype: tuple of tuples: torch Tensor object (n, m) and str
         """
         (model, n_restarts, n_iter, eps, alpha, eta, beta, n_classes) = (
             self.atk_params["model"],
             self.attacks["fab"].params["num_restarts"] + 1,
             self.atk_params["epochs"],
-            self.l2,
+            {2: self.l2, "inf": self.linf}[norm],
             self.attacks["fab"].traveler.optimizer.param_groups[0]["alpha_max"],
             self.attacks["fab"].atk.params["α"],
             self.attacks["fab"].traveler.optimizer.param_groups[0]["beta"],
@@ -804,13 +844,14 @@ class BaseTest(unittest.TestCase):
         )
         at_adv = ta_adv = None
         if "advertorch" in self.available:
-            from advertorch.attacks import L2FABAttack
+            from advertorch.attacks import FABAttack
 
             print("Producing FAB adversarial examples with AdverTorch...")
             self.reset_seeds()
             at_adv = (
-                L2FABAttack(
+                FABAttack(
                     predict=model,
+                    norm={2: "L2", "inf": "Linf"}[norm],
                     n_restarts=n_restarts,
                     n_iter=n_iter,
                     eps=eps,
@@ -829,7 +870,7 @@ class BaseTest(unittest.TestCase):
             ta_adv = (
                 FAB(
                     model=model,
-                    norm="L2",
+                    norm={2: "L2", "inf": "Linf"}[norm],
                     eps=eps,
                     steps=self.atk_params["epochs"],
                     n_restarts=n_restarts,
@@ -844,9 +885,7 @@ class BaseTest(unittest.TestCase):
                 "Torchattacks",
             )
         self.reset_seeds()
-        return self.attacks["fab"], tuple(
-            fw for fw in (at_adv, ta_adv) if fw is not None
-        )
+        return tuple(fw for fw in (at_adv, ta_adv) if fw is not None)
 
     def jsma(self):
         """
@@ -855,14 +894,14 @@ class BaseTest(unittest.TestCase):
         frameworks for the JSMA include AdverTorch and ART. Notably, the JSMA
         implementation in AdverTorch and ART both assume the l0-norm is passed
         in as a percentage (which is why we pass in linf) and we set theta to
-        be 1 since features can only be perturbed once. Moreover, the
-        AdverTorch implementation: (1) does not suport an untargetted scheme
+        be 1 since features can only be perturbed once. moreover, the
+        advertorch implementation: (1) does not suport an untargetted scheme
         (so we supply random targets), and (2) computes every pixel pair at
         once, often leading to memory crashes (e.g., it'll terminate on a 16GB
         system with MNIST).
 
         :return: JSMA adversarial examples
-        :rtype: tuple of torch Tensor objects (n, m)
+        :rtype: tuple of tuples: torch Tensor object (n, m) and str
         """
         (model, num_classes, gamma, theta) = (
             self.atk_params["model"],
@@ -904,34 +943,35 @@ class BaseTest(unittest.TestCase):
                 ),
                 "ART",
             )
-        return self.attacks["jsma"], tuple(
-            fw for fw in (at_adv, art_adv) if fw is not None
-        )
+        return tuple(fw for fw in (at_adv, art_adv) if fw is not None)
 
-    def pgd(self):
+    def pgd(self, norm="inf"):
         """
         This method crafts adversarial examples with PGD (Projected Gradient
         Descent)) (https://arxiv.org/pdf/1706.06083.pdf). The supported
         frameworks for PGD include AdverTorch, ART, CleverHans, and
-        Torchattacks.
+        Torchattacks. Notably, the Torchattacks PGD l2 implementation assumes
+        an image (batches, channels, width, height).
 
+        :param norm: norm to use (only modified for special tests)
+        :type norm: str or int
         :return: PGD adversarial examples
-        :rtype: tuple of torch Tensor objects (n, m)
+        :rtype: tuple of tuples: aml Attack object & torch Tensor object (n, m)
         """
         (model, eps, nb_iter, eps_iter) = (
             self.atk_params["model"],
-            self.linf,
+            {2: self.l2, "inf": self.linf}[norm],
             self.atk_params["epochs"],
             self.atk_params["alpha"],
         )
         at_adv = art_adv = ch_adv = fb_adv = ta_adv = None
         if "advertorch" in self.available:
-            from advertorch.attacks import LinfPGDAttack
+            from advertorch.attacks import PGDAttack
 
             print("Producing PGD adversarial examples with AdverTorch...")
             self.reset_seeds()
             at_adv = (
-                LinfPGDAttack(
+                PGDAttack(
                     predict=model,
                     loss_fn=torch.nn.CrossEntropyLoss(reduction="sum"),
                     eps=eps,
@@ -940,6 +980,7 @@ class BaseTest(unittest.TestCase):
                     rand_init=True,
                     clip_min=self.clip_min,
                     clip_max=self.clip_max,
+                    ord={2: 2, "inf": float("inf")}[norm],
                     targeted=False,
                 ).perturb(x=self.x.clone(), y=self.y.clone()),
                 "AdverTorch",
@@ -953,7 +994,7 @@ class BaseTest(unittest.TestCase):
                 torch.from_numpy(
                     ProjectedGradientDescent(
                         estimator=self.art_classifier,
-                        norm="inf",
+                        norm=norm,
                         eps=eps,
                         eps_step=eps_iter,
                         decay=None,
@@ -982,7 +1023,7 @@ class BaseTest(unittest.TestCase):
                     eps=eps,
                     eps_iter=eps_iter,
                     nb_iter=nb_iter,
-                    norm=float("inf"),
+                    norm={2: 2, "inf": float("inf")}[norm],
                     clip_min=self.clip_min.max(),
                     clip_max=self.clip_max.min(),
                     y=self.y,
@@ -994,11 +1035,18 @@ class BaseTest(unittest.TestCase):
                 "CleverHans",
             )
         if "foolbox" in self.available:
-            from foolbox.attacks import LinfProjectedGradientDescentAttack
+            if norm == 2:
+                from foolbox.attacks import (
+                    L2ProjectedGradientDescentAttack as ProjectedGradientDescentAttack,
+                )
+            elif norm == "inf":
+                from foolbox.attacks import (
+                    LinfProjectedGradientDescentAttack as ProjectedGradientDescentAttack,
+                )
 
             print("Producing PGD adversarial examples with Foolbox...")
             self.reset_seeds()
-            _, fb_adv, _ = LinfProjectedGradientDescentAttack(
+            _, fb_adv, _ = ProjectedGradientDescentAttack(
                 rel_stepsize=None,
                 abs_stepsize=eps_iter,
                 steps=nb_iter,
@@ -1010,8 +1058,13 @@ class BaseTest(unittest.TestCase):
                 epsilons=eps,
             )
             fb_adv = (fb_adv, "Foolbox")
-        if "torchattacks" in self.available:
-            from torchattacks import PGD
+        if "torchattacks" in self.available and (
+            norm == "inf" or "shape" in self.atk_params["model"].params
+        ):
+            if norm == 2:
+                from torchattacks import PGDL2 as PGD
+            elif norm == "inf":
+                from torchattacks import PGD
 
             print("Producing PGD adversarial examples with Torchattacks...")
             self.reset_seeds()
@@ -1026,7 +1079,7 @@ class BaseTest(unittest.TestCase):
                 "Torchattacks",
             )
         self.reset_seeds()
-        return self.attacks["pgd"], tuple(
+        return tuple(
             fw for fw in (at_adv, art_adv, ch_adv, fb_adv, ta_adv) if fw is not None
         )
 
@@ -1069,8 +1122,8 @@ class FunctionalTests(BaseTest):
         appropriately with the number of epochs and norm-ball size defined in
         the BaseTest setUpClass method).
 
-        :param adversary: adversary to test
-        :type adversary: aml Adversary or Attack object
+        :param attacks: attacks to test
+        :type attacks: list of aml Attack objects
         :return: None
         :rtype: NoneType
         """
@@ -1321,7 +1374,7 @@ class PerformanceTests(BaseTest):
     performance of adversarial examples produced by known attacks within aml to
     those implemented in other adversarial machine learning frameworks. Attacks
     in aml are determined to be performant if the produced adversarial examples
-    are within no worse than 1% of the performance of adversarial examples
+    are within no worse than 0.1% of the performance of adversarial examples
     produced by other frameworks. Performance is defined as one minus the
     l2-norm of normalized decrease in model accuracy and normalized lp-norm (In
     other words, the closer the ratio of model accuracy over lp-norm to the
@@ -1338,7 +1391,7 @@ class PerformanceTests(BaseTest):
         APGD-CE (Auto-PGD with CE loss) (https://arxiv.org/pdf/2003.01690.pdf)
         APGD-DLR (Auto-PGD with DLR loss) (https://arxiv.org/pdf/2003.01690.pdf)
         BIM (Basic Iterative Method) (https://arxiv.org/pdf/1611.01236.pdf)
-        CW-L2 (Carlini-Wagner with l₂ norm) (https://arxiv.org/pdf/1608.04644.pdf)
+        CW-L2 (Carlini-Wagner with l2 norm) (https://arxiv.org/pdf/1608.04644.pdf)
         DF (DeepFool) (https://arxiv.org/pdf/1511.04599.pdf)
         FAB (Fast Adaptive Boundary) (https://arxiv.org/pdf/1907.02044.pdf)
         JSMA (Jacobian Saliency Map Approach) (https://arxiv.org/pdf/1511.07528.pdf)
@@ -1355,7 +1408,7 @@ class PerformanceTests(BaseTest):
     :func:`test_pgd`: performance test for PGD
     """
 
-    def performance_test(self, attack, fws, max_perf_degrad=0.01):
+    def performance_test(self, attack, fws, max_perf_degrad=0.001):
         """
         This method performs a performance test for a given attack. This sets
         the maximum allowable performance degration between adversarial
@@ -1375,8 +1428,8 @@ class PerformanceTests(BaseTest):
         degradation, the tests still pass (failure can only occurs if aml
         attacks are worse).
 
-        :param adversary: attack to test
-        :type adversary: aml Adversary object
+        :param attack: attack to test
+        :type attack: aml Attack object
         :param fws: adversarial examples produced by other frameworks
         :type fws: tuple of tuples of torch Tensor object (n, m) and str
         :param max_perf_degrad: the maximum allowable difference in performance
@@ -1442,7 +1495,7 @@ class PerformanceTests(BaseTest):
         :return: None
         :rtype: NoneType
         """
-        return self.performance_test(*self.apgdce())
+        return self.performance_test(self.attacks["apgdce"], self.apgdce())
 
     def test_apgddlr(self):
         """
@@ -1453,7 +1506,7 @@ class PerformanceTests(BaseTest):
         :return: None
         :rtype: NoneType
         """
-        return self.performance_test(*self.apgddlr())
+        return self.performance_test(self.attacks["apgddlr"], self.apgddlr())
 
     def test_bim(self):
         """
@@ -1463,7 +1516,7 @@ class PerformanceTests(BaseTest):
         :return: None
         :rtype: NoneType
         """
-        return self.performance_test(*self.bim())
+        return self.performance_test(self.attacks["bim"], self.bim())
 
     def test_cwl2(self):
         """
@@ -1472,7 +1525,7 @@ class PerformanceTests(BaseTest):
         :return: None
         :rtype: NoneType
         """
-        return self.performance_test(*self.cwl2())
+        return self.performance_test(self.attacks["cwl2"], self.cwl2())
 
     def test_df(self):
         """
@@ -1482,7 +1535,7 @@ class PerformanceTests(BaseTest):
         :return: None
         :rtype: NoneType
         """
-        return self.performance_test(*self.df())
+        return self.performance_test(self.attacks["df"], self.df())
 
     def test_fab(self):
         """
@@ -1492,7 +1545,7 @@ class PerformanceTests(BaseTest):
         :return: None
         :rtype: NoneType
         """
-        return self.performance_test(*self.fab())
+        return self.performance_test(self.attacks["fab"], self.fab())
 
     def test_jsma(self):
         """
@@ -1504,10 +1557,9 @@ class PerformanceTests(BaseTest):
         :return: None
         :rtype: NoneType
         """
-        attack, fws = self.jsma()
         return self.performance_test(
             aml.attacks.jsma(**self.atk_params | {"alpha": 1, "epsilon": self.l0}),
-            fws,
+            self.jsma(),
         )
 
     def test_pgd(self):
@@ -1518,7 +1570,7 @@ class PerformanceTests(BaseTest):
         :return: None
         :rtype: NoneType
         """
-        return self.performance_test(*self.pgd())
+        return self.performance_test(self.attacks["pgd"], self.pgd())
 
 
 class SpecialTests(BaseTest):
@@ -1533,6 +1585,13 @@ class SpecialTests(BaseTest):
     :func:`test_all_performance`: functional test for all possible attacks
     :func:`test_attack_performance`: functional test for one attack
     :func:`test_known_coverage`: moderate component coverage test
+    :func:`test_variant_apgdcel2`: performance test for APGD-CE l2
+    :func:`test_variant_apgddlrl2`: performance test for APGD-DLR l2
+    :func:`test_variant_biml2`: performance test for BIM l2
+    :func:`test_variant_cwl0`: performance test for CW-L0
+    :func:`test_variant_dflinf`: performance test for DF l∞
+    :func:`test_variant_fablinf`: performance test for FAB l∞
+    :func:`test_variant_pgdl2`: performance test for PGD l2
     """
 
     def test_all_coverage(self, samples=10, epochs=3):
@@ -1604,12 +1663,13 @@ class SpecialTests(BaseTest):
                 epochs=self.atk_params["epochs"],
                 epsilon=(self.l0, self.l2, self.linf),
                 model=self.atk_params["model"],
+                norms=(aml.surface.L0,),
                 verbosity=0,
             )
         )
         return FunctionalTests.functional_test(self, attacks, min_acc)
 
-    def test_attack_performance(self, name="M-I-Id-D-0"):
+    def test_attack_performance(self, name="CW-L2"):
         """
         This method serves to help debug individual attacks. Given the attack
         name, it will instantiate an attack object with the associated
@@ -1661,3 +1721,203 @@ class SpecialTests(BaseTest):
                 print(f"Testing {attack.name:<10}... {i}/{len(attacks)}", end="\r")
                 attack.craft(self.x[:samples], self.y[:samples])
         return None
+
+    def test_variant_apgdcel2(self):
+        """
+        This method performs a performance test for APGD-CE with l2 norm. The
+        supported frameworks include AdverTorch and Torchattacks. Notably, the
+        ART implementation performs early termination even though APGD-CE was
+        designed to be a maximum-loss attack (and not a minimum-norm attack).
+        Thus, to make tests pass, the aml implementation has early_termination
+        set to True (As models become more accurate, the importance of this
+        subtly decreases).
+
+        :return: None
+        :rtype: NoneType
+        """
+        return PerformanceTests.performance_test(
+            self,
+            aml.attacks.Adversary(
+                best_update=aml.attacks.Adversary.max_loss,
+                hparam=None,
+                hparam_bounds=None,
+                hparam_update=None,
+                hparam_steps=None,
+                epsilon=self.l2,
+                num_restarts=self.attacks["apgdce"].params["num_restarts"],
+                early_termination=True,
+                optimizer_alg=aml.optimizer.MomentumBestStart,
+                random_start=aml.traveler.MaxStart,
+                loss_func=aml.loss.CELoss,
+                norm=aml.surface.L2,
+                saliency_map=aml.surface.IdentitySaliency,
+                **self.atk_params,
+            ),
+            self.apgdce(norm=2),
+        )
+
+    def test_variant_apgddlrl2(self):
+        """
+        This method performs a performance test for APGD-DLR with l2 norm. The
+        supported frameworks include AdverTorch and Torchattacks. Notably, the
+        ART implementation performs early termination even though APGD-DLR was
+        designed to be a maximum-loss attack (and not a minimum-norm attack).
+        Thus, to make tests pass, the aml implementation has early_termination
+        set to True (As models become more accurate, the importance of this
+        subtly decreases).
+
+        :return: None
+        :rtype: NoneType
+        """
+        return PerformanceTests.performance_test(
+            self,
+            aml.attacks.Adversary(
+                best_update=aml.attacks.Adversary.max_loss,
+                hparam=None,
+                hparam_bounds=None,
+                hparam_update=None,
+                hparam_steps=None,
+                epsilon=self.l2,
+                num_restarts=self.attacks["apgdce"].params["num_restarts"],
+                early_termination=True,
+                optimizer_alg=aml.optimizer.MomentumBestStart,
+                random_start=aml.traveler.MaxStart,
+                loss_func=aml.loss.CELoss,
+                norm=aml.surface.L2,
+                saliency_map=aml.surface.IdentitySaliency,
+                **self.atk_params,
+            ),
+            self.apgdce(norm=2),
+        )
+
+    def test_variant_biml2(self):
+        """
+        This method performs a performance test for BIM with l2 norm. The
+        supported frameworks include AdverTorch and CleverHans.
+
+        :return: None
+        :rtype: NoneType
+        """
+        return PerformanceTests.performance_test(
+            self,
+            aml.attacks.Attack(
+                early_termination=False,
+                epsilon=self.l2,
+                loss_func=aml.loss.CELoss,
+                norm=aml.surface.L2,
+                optimizer_alg=aml.optimizer.SGD,
+                random_start=aml.traveler.IdentityStart,
+                saliency_map=aml.surface.IdentitySaliency,
+                **self.atk_params,
+            ),
+            self.bim(norm=2),
+        )
+
+    def test_variant_cwl0(self):
+        """
+        This method performs a performance test for CW-L0. The supported
+        frameworks include ART.
+
+        :return: None
+        :rtype: NoneType
+        """
+        return PerformanceTests.performance_test(
+            self,
+            aml.attacks.Adversary(
+                best_update=aml.attacks.Adversary.min_norm,
+                hparam="c",
+                hparam_bounds=self.attacks["cwl2"].hparam_bounds,
+                hparam_steps=self.attacks["cwl2"].hparam_steps,
+                hparam_update=aml.attacks.Adversary.misclassified,
+                num_restarts=0,
+                early_termination=True,
+                epsilon=self.l0,
+                loss_func=aml.loss.CWLoss,
+                norm=aml.surface.L0,
+                optimizer_alg=aml.optimizer.Adam,
+                random_start=aml.traveler.IdentityStart,
+                saliency_map=aml.surface.IdentitySaliency,
+                **self.atk_params,
+            ),
+            self.cwl2(norm=0),
+        )
+
+    def test_variant_dflinf(self):
+        """
+        This method performs a performance test for DF with l∞ norm. The
+        supported frameworks include Foolbox.
+
+        :return: None
+        :rtype: NoneType
+        """
+        return PerformanceTests.performance_test(
+            self,
+            aml.attacks.Attack(
+                early_termination=True,
+                epsilon=self.linf,
+                loss_func=aml.loss.IdentityLoss,
+                norm=aml.surface.Linf,
+                optimizer_alg=aml.optimizer.SGD,
+                random_start=aml.traveler.IdentityStart,
+                saliency_map=aml.surface.DeepFoolSaliency,
+                **self.atk_params,
+            ),
+            self.df(norm="inf"),
+        )
+
+    def test_variant_fablinf(self):
+        """
+        This method performs a performance test for FAB with l∞ norm. The
+        supported frameworks include AdverTorch and Torchattacks.
+
+        :return: None
+        :rtype: NoneType
+        """
+        return PerformanceTests.performance_test(
+            self,
+            aml.attacks.Adversary(
+                best_update=aml.attacks.Adversary.min_norm,
+                hparam=None,
+                hparam_bounds=None,
+                hparam_update=None,
+                hparam_steps=None,
+                num_restarts=self.attacks["fab"].params["num_restarts"],
+                early_termination=True,
+                epsilon=self.linf,
+                loss_func=aml.loss.IdentityLoss,
+                norm=aml.surface.Linf,
+                optimizer_alg=aml.optimizer.BackwardSGD,
+                random_start=aml.traveler.ShrinkingStart,
+                saliency_map=aml.surface.DeepFoolSaliency,
+                **self.atk_params,
+            ),
+            self.fab(norm="inf"),
+        )
+
+    def test_variant_pgdl2(self):
+        """
+        This method performs a performance test for PGD with l2 norm. The
+        supported frameworks include AdverTorch, ART, CleverHans, Foolbox, and
+        Torchattacks. Notably, the Foolbox implementation performs early
+        termination even though PGD was designed to be a maximum-loss attack
+        (and not a minimum-norm attack). Thus, to make tests pass, the aml
+        implementation has early_termination set to True (As models become more
+        accurate, the importance of this subtly decreases).
+
+        :return: None
+        :rtype: NoneType
+        """
+        return PerformanceTests.performance_test(
+            self,
+            aml.attacks.Attack(
+                early_termination=True,
+                epsilon=self.l2,
+                loss_func=aml.loss.CELoss,
+                norm=aml.surface.L2,
+                optimizer_alg=aml.optimizer.SGD,
+                random_start=aml.traveler.MaxStart,
+                saliency_map=aml.surface.IdentitySaliency,
+                **self.atk_params,
+            ),
+            self.pgd(norm=2),
+        )
