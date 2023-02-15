@@ -155,7 +155,7 @@ class MaxStart:
     :func:`linf`: applies a random-start for l∞-based threat models.
     """
 
-    def __init__(self, norm, epsilon):
+    def __init__(self, norm, epsilon, minimum=1e-12):
         """
         This method instantiates a MaxStart object. It accepts lp-norm threat
         model as an argument to determine which max start strategy to apply.
@@ -164,11 +164,14 @@ class MaxStart:
         :type norm: 0, 2, or inf
         :param epsilon: maximum allowable distortion
         :type epsilon: float
+        :param minimum: minimum gradient value (to mitigate underflow in l2)
+        :type minimum: float
         :return: a max random start strategy
         :rtype: MaxStart object
         """
         self.norm = norm
         self.epsilon = torch.tensor(epsilon)
+        self.minimum = minimum
         self.lp = {0: self.l0, 2: self.l2, torch.inf: self.linf}[norm]
         return None
 
@@ -207,7 +210,7 @@ class MaxStart:
         keep = torch.arange(1, p.size(1) + 1).repeat(p.size(0), 1).add_(epsilon)
         return p.scatter_(1, shuffle, p.where(keep > p.size(1), torch.tensor(0)))
 
-    def l2(self, p, epsilon, minimum=1e-12):
+    def l2(self, p, epsilon):
         """
         This function randomly perturbs inputs, based on the l2-norm budget.
         Specifically, feature values are sampled from a normal distribution and
@@ -218,13 +221,11 @@ class MaxStart:
         :param epsilon: maximum allowable distortion (per input)
         :type epsilon: torch Tensor object (n,)
         :return: randomly perturbed vectors
-        :param minimum: minimum gradient value (to mitigate underflow)
-        :type minimum: float
         :rtype: torch Tensor object (n, m)
         """
         return (
             p.normal_()
-            .div_(p.norm(2, dim=1, keepdim=True).clamp_(minimum))
+            .div_(p.norm(2, dim=1, keepdim=True).clamp_(self.minimum))
             .mul_(epsilon)
         )
 
