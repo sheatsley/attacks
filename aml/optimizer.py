@@ -60,6 +60,7 @@ class BackwardSGD(torch.optim.Optimizer):
         smap,
         alpha_max=0.1,
         beta=0.9,
+        minimum=1e-8,
         **kwargs,
     ):
         """
@@ -99,13 +100,14 @@ class BackwardSGD(torch.optim.Optimizer):
                 "beta": beta,
                 "lr": lr,
                 "maximize": maximize,
+                "minimum": minimum,
                 "norm": norm,
                 "smap": smap,
             },
         )
 
     @torch.no_grad()
-    def step(self, minimum=1e-8):
+    def step(self):
         """
         This method applies one optimization step as described above.
         Specifically, this optimizer: (1) performs a backward step for
@@ -114,8 +116,6 @@ class BackwardSGD(torch.optim.Optimizer):
         biased projection between the current gradient of the loss with static
         learning rate η and the original input (if provided), set by α.
 
-        :param minimum: minimum gradient value (to mitigate underflow)
-        :type minimum: float
         :return: None
         :rtype: NoneType
         """
@@ -123,6 +123,7 @@ class BackwardSGD(torch.optim.Optimizer):
             for p in group["params"]:
                 lp = group["norm"]
                 loss = group["attack_loss"]
+                minimum = group["minimum"]
                 grad = p.grad.data
                 p_grad = getattr(group["smap"], "org_proj", torch.zeros_like(grad))
                 grad, p_grad = (grad, p_grad) if group["maximize"] else (-grad, -p_grad)
