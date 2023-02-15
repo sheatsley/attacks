@@ -24,11 +24,11 @@ academics understand _why_ attacks perform the way that they do, but also to
 [serve as abstractions for effortlessly building a vast space of new
 attacks](https://arxiv.org/abs/2209.04521). At this time, the techniques based
 on the eight attacks above enable construction of 432 total attacks (all of
-which often decrease model accuracy to less than 1% with ~100 iterations across
-the datasets found in [this repo](https://github.com/sheatsley/datasets)). All
-of the information you need to start using this repo is contained within this
-one ReadMe, ordered by complexity (No need to parse through some highly
-over-engineered ReadTheDocs documentation).
+which often decrease model accuracy to less than 1% with ~100 iterations at a
+budget of 15% across the datasets found in [this
+repo](https://github.com/sheatsley/datasets)). All of the information you need
+to start using this repo is contained within this one ReadMe, ordered by
+complexity (No need to parse through any ReadTheDocs documentation).
 
 #### But wait, didn't [The Space of Adversarial Strategies](https://arxiv.org/abs/2209.04521) have 576 attacks?
 
@@ -142,7 +142,7 @@ start initialize perturbations by sampling uniformly between ±ε, while
 perturbations from l2 attacks are sampled from a standard normal distribution
 and subsequently normalized to ε. This repo also supports random start for l0
 attacks in that an l0-number of features are randomly selected per sample,
-which then sample uniformly between ±1.
+whose values are then sampled uniformly between ±1.
 
 ## Repo Overview
 
@@ -299,8 +299,8 @@ specifically, it approximates the projection of the input onto the decision
 manifold. `IdentitySaliency` serves as a "no saliency map" option in that the
 gradients are returned as-is. `JacobianSaliency` comes from
 [JSMA](https://arxiv.org/pdf/1511.07528.pdf); specifically, it scores features
-based on how perturbing them will simultaneously move inputs away from the
-current target and towards other classes.
+based on how perturbing them will simultaneously move inputs away from their
+labels and towards other classes.
 
 ### Norms
 
