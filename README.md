@@ -3,9 +3,9 @@
 _Adversarial Machine Learning_ (`aml`) is a repo for measuring  the robustness
 of deep learning models against white-box evasion attacks. Designed for
 academics, it is principally designed for use in fundamental research to
-understand _adversarial examples_, inputs designed to cause models to make a
-mistake[[1](https://arxiv.org/abs/1412.6572)]. At its core, `aml` is based
-on a series of techniques used in six popular attacks:
+understand _adversarial examples_, [inputs designed to cause models to make a
+mistake](https://arxiv.org/abs/1412.6572). At its core, `aml` is based on a
+series of techniques used in eight popular attacks:
 
 1. [APGD-CE](https://arxiv.org/pdf/2003.01690.pdf) (Auto-PGD with CE loss)
 2. [APGD-DLR](https://arxiv.org/pdf/2003.01690.pdf) (Auto-PGD with DLR loss)
@@ -33,8 +33,9 @@ over-engineered ReadTheDocs documentation).
 ## Table of Contents
 
 * [Quick start](#quick-start)
+* [Advanced Usage](#advanced-usage)
 * [Repo Overview](#library-overview)
-* [Hyperparameters](#hyperparameters)
+* [Misc](#misc)
 * [Citation](#citation)
 
 ## Quick start
@@ -78,6 +79,8 @@ accuracy = model.accuracy(x_test + perturbations, y_test)
 mean_budget = perturbations.norm(torch.inf, 1).mean()
 ```
 
+## Advanced Usage
+
 ## Repo Overview
 
 This repo is based on [The Space of Adversarial
@@ -116,7 +119,6 @@ _Jacobian_ (from [JSMA](https://arxiv.org/pdf/1511.07528.pdf)), and _Identity_
 (no saliency map).
 * Norms (`surface.py`): manipulates gradients as to operate under the lp-threat
 model. Contains _l0_, _l2_, and _l∞_.
-
 
 ### Adversary
 
@@ -256,9 +258,9 @@ sign of the gradients.
 Norm objects also serve a dual purpose in that they are also called by `Attack`
 objects to ensure perturbations are compliant with the parameterized lp budget.
 `L0` objects project onto the l0-norm by computing the top-ε (by magnitude)
-perturbation components (where ε defines number of perturable features) and
+perturbation components (where ε defines number of perturbable features) and
 setting all other components zero. `L2` objects project onto the l2-norm by
-renorming peturbations such that their l2-norm is no greater than the budget.
+renorming perturbations such that their l2-norm is no greater than the budget.
 `Linf` objects project onto the l∞-norm by ensuring the value of perturbation
 component is between -ε and ε (where ε defines the maximum allowable change
 across all features).
@@ -303,8 +305,11 @@ as they are misclassified
 * `norm`: lp-norm to use
 * `saliency_map`: saliency map to use
 
-
 ### Optimizer
+
+#### Adam
+
+* [The implementation of Adam in PyTorch is used verbatim](https://pytorch.org/docs/stable/generated/torch.optim.Adam.html)
 
 #### BackwardSGD
 
@@ -316,6 +321,38 @@ as they are misclassified
 * `smap`: saliency map used (caches biased projection when using DeepFool)
 * `alpha_max`: maximum strength of biased projection
 * `beta`: backward step strength for misclassified inputs
+
+#### MomentumBestStart
+
+* `params`: perturbations
+* `attack_loss`: attack loss (caches attack loss on forward passes)
+* `epochs`: total number of optimization iterations
+* `epsilon`: lp budget
+* `maximize`: whether the attack loss is to be maximized (or minimized)
+* `alpha`: momentum factor
+* `pdecay`: period length decay
+* `pmin`: minimum period length
+* `rho`: minimum percentage of successful updates between checkpoints
+
+#### SGD
+
+* [The implementation of SGD in PyTorch is used verbatim](https://pytorch.org/docs/stable/generated/torch.optim.SGD.html)
+
+### Random Start Strategies
+
+#### IdentityStart
+
+* No parameters are necessary for this class
+
+#### MaxStart
+
+* `norm`: lp-norm used
+* `epsilon`: lp budget
+
+#### ShrinkingStart
+
+* `norm`: lp-norm used
+* `epsilon`: lp budget
 
 ### Loss
 
@@ -337,13 +374,67 @@ as they are misclassified
 
 * No parameters are necessary for this class
 
-####
+### Saliency Maps
 
+#### DeepFoolSaliency
+
+* `p`: lp-norm used
+* `classes`: number of classes
+
+#### IdentitySaliency
+
+* No parameters are necessary for this class
+
+#### JacobianSaliency
+
+* No parameters are necessary for this class
+
+### Norms
+
+#### L0
+
+* `epsilon`: maximum l0 distance for perturbations
+* `maximize`: whether the attack loss is to be maximized (or minimized)
+
+#### L2
+
+* `epsilon`: maximum l2 distance for perturbations
+
+#### Linf
+
+* `epsilon`: maximum l∞ distance for perturbations
 
 ### Misc
 
-Below are a list of some subtle parameters you may be interested in
-manipulating for a deeper exploration.
+Here are a list of some subtle parameters you may be interested in manipulating
+for a deeper exploration:
+
+* `betas`, `eps`, `weight_decay` and `amsgrad` in `Adam` optimizer
+* `alpha_max`, `beta`, and `minimum` in `BackwardSGD` optimizer
+* `alpha`, `pdecay`, `pmin`, and `rho` in `MomentumBestStart` optimizer
+* `minimum` in `MaxStart` random start strategy
+* `c` and `k` in `CWLoss` loss
+* `minimum` in `DLRLoss` loss
+* `minimum` in `DeepFoolSaliency` saliency map
+* `top` in `L0` norm
+* `minimum` in `L2` norm
+
+Moreover, below are some attack-specific observations:
+
+* The `DeepFoolSaliency` saliency map computes (in some sense) step sizes
+dynamically (Specifically, the absolute value of the logit differences over the
+normed gradient differences). Thus, when paired with an optimizer that lacks an
+adaptive learning rate (i.e., `BackwardSGD` and `SGD`), `alpha` in `Attack`
+objects should be set to `1.0`. This is done by default when instantiating
+`Attack` objects and can be overridden by setting `alpha_override` to `False`.
+Finally, attacks that use the `L0` norm with `MomentumBestStart` also require
+`alpha` to bet set to `1`.
+
+* When using attacks with non-deterministic components (e.g., random start
+strategies) or hyperparameters (e.g., `CWLoss`), leveraging the `Adversary`
+layer to repeat attacks multiple times or optimize hyperparameters can be an
+effective strategy (`hparam_bounds`, `hparam_steps`, and `num_restarts` are the
+parameters of interest in this regime).
 
 ## Citation
 
