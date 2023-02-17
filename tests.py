@@ -11,7 +11,7 @@ Mon Nov 28 2022
 """
 
 import aml  # ML robustness evaluations with PyTorch
-import dlm  # pytorch--based deep learning models with scikit-learn-like interfaces
+import dlm  # PyTorch-based deep learning models with Keras-like interfaces
 import importlib  # The implementation of import
 import mlds  # Scripts for downloading, preprocessing, and numpy-ifying popular machine learning datasets
 import numpy as np  # The fundamental package for scientific computing with Python
@@ -142,11 +142,11 @@ class BaseTest(unittest.TestCase):
 
         # load model hyperparameters
         cls.reset_seeds()
-        template = getattr(dlm.architectures, dataset)
+        template = getattr(dlm.templates, dataset)
         cls.model = (
-            dlm.CNNClassifier(**template.CNNClassifier)
-            if template.CNNClassifier is not None
-            else dlm.MLPClassifier(**template.MLPClassifier)
+            dlm.MLPClassifier(**template.mlp)
+            if template.cnn is None
+            else dlm.CNNClassifier(**template.cnn)
         )
 
         # train (or load) model and save craftset accuracy (for performance tests)
