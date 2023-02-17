@@ -120,7 +120,7 @@ class IdentityStart:
         :param epsilon: maximum allowable distortion
         :type epsilon: float
         :return: an identity random start strategy
-        :rtype: IdentitySTart object
+        :rtype: IdentityStart object
         """
         return None
 
