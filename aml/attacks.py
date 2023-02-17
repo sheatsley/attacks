@@ -13,7 +13,13 @@ import pandas  # Python Data Analysis Library
 import torch  # Tensors and Dynamic neural networks in Python with strong GPU acceleration
 
 # TODO
-# cleanup framework comparison experiment (support multiple datasets)
+# finish framework comparison example
+# complete visualization example
+# complete all attack performance example (plot attack curves and embedd into repo readme)
+# update readme when dlm is refactor (model accuracy wont exist in quick start)
+# shouldn't we be resetting attacks when using random start? (cw c wouldnt change across restarts atm..)
+# update to new model api (use acc etc)
+# retest with new models... (were trained with reduction=sum...)
 
 
 class Adversary:
@@ -27,7 +33,7 @@ class Adversary:
     most effective adversarial examples. This class provides such functions.
 
     :func:`__init__`: instantiates Adversary objects
-    :func:`__getattr__`: grab Attack object attributes
+    :func:`__getattr__`: return Attack object attributes
     :func:`__repr__`: returns the threat model
     :func:`__setattr__`: sets attributes of Attack objects
     :func:`binary_search`: optimizes hyperparamters via binary search
@@ -108,7 +114,7 @@ class Adversary:
             "hparam_update": hparam_update.__name__,
             "hparam_steps": hparam_steps,
             "num_restarts": num_restarts,
-            "attack": str(attack),
+            "attack": repr(attack),
         }
         return None
 
@@ -420,14 +426,19 @@ class Attack:
         }
         self.name = name_map.get(name, "-".join(name))
 
-        # save components and initialize traveler & surface
+        # save components and set parameters for __repr__
+        self.init_req = True
         self.loss_class = loss_func
         self.model = model
         self.norm_class = norm
         self.optimizer_class = optimizer_alg
         self.random_class = random_start
         self.saliency_class = saliency_map
-        self.reset()
+        self.params = {
+            "α": self.alpha,
+            "ε": self.epsilon,
+            "epochs": self.epochs,
+        }
         return None
 
     def __repr__(self):
@@ -473,7 +484,7 @@ class Attack:
         """
 
         # init perturbations, set misclassified outputs to 0, & compute ranges
-        reset and self.reset()
+        (reset or self.init_req) and self.reset()
         x = x.detach().clone()
         p = torch.zeros_like(x)
         correct = self.surface.model(x).argmax(1).eq(y).unsqueeze_(1)
@@ -526,8 +537,8 @@ class Attack:
         the number of forward passes necessary to compute interesting
         statistics, this method can have a high performance impact.
 
-        :param epoch: current epoch
-        :type epoch: int
+        :param e: current epoch
+        :type e: int
         :param x: inputs to produce adversarial examples from
         :type x: torch Tensor object (n, m)
         :param y: the labels (or initial predictions) of x
@@ -586,6 +597,7 @@ class Attack:
         """
 
         # instantiate traveler, surface, and necessary subcomponents
+        self.init_req = False
         attack_loss = self.loss_class(classes=self.model.classes)
         norm = self.norm_class(epsilon=self.epsilon, maximize=self.loss_class.max_obj)
         random_start = self.random_class(norm=self.lp, epsilon=self.epsilon)
