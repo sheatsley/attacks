@@ -12,7 +12,7 @@ setuptools.setup(
     author="Ryan Sheatsley",
     author_email="ryan@sheatsley.me",
     classifiers=[
-        "Development Status :: 3 - Alpha",
+        "Development Status :: 4 - Beta",
         "License :: OSI Approved :: BSD License",
         "Operating System :: OS Independent",
         "Programming Language :: Python :: 3.10",
@@ -20,10 +20,7 @@ setuptools.setup(
         "Topic :: Security",
     ],
     description="A PyTorch-based adversarial machine learning library",
-    install_requires=[
-        "scikit-learn",
-        "torch",
-    ],
+    install_requires=["pandas", "torch"],
     license="BSD",
     long_description=long_description,
     long_description_content_type="text/markdown",
@@ -32,5 +29,5 @@ setuptools.setup(
     packages=setuptools.find_packages(),
     python_requires=">=3.10",
     url="https://github.com/sheatsley/attacks",
-    version="1.0.0",
+    version="1.1",
 )
