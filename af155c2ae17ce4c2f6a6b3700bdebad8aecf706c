@@ -1,0 +1,1 @@
+need to rerun performance tests with new dlm api... looks to be a regression from jan 31st (cdbc990 shows TA apgddlr is outperforming on mnist)
