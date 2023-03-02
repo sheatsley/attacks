@@ -10,15 +10,17 @@ Authors: Ryan Sheatsley and Blaine Hoak
 Mon Nov 28 2022
 """
 
-import aml  # ML robustness evaluations with PyTorch
-import dlm  # PyTorch-based deep learning models with Keras-like interfaces
-import importlib  # The implementation of import
-import mlds  # Scripts for downloading, preprocessing, and numpy-ifying popular machine learning datasets
-import numpy as np  # The fundamental package for scientific computing with Python
-import pathlib  # Object-oriented filesystem paths
-import pickle  # Python object serialization
-import unittest  # Unit testing framework
-import torch  # Tensors and Dynamic neural networks in Python with strong GPU acceleration
+import importlib
+import pathlib
+import pickle
+import unittest
+
+import dlm
+import mlds
+import numpy as np
+import torch
+
+import aml
 
 
 class BaseTest(unittest.TestCase):
@@ -93,7 +95,7 @@ class BaseTest(unittest.TestCase):
         :type debug: bool
         :param epochs: number of attack iterations
         :type epochs: int
-        :param norm: maximum % of lp-budget consumption
+        :param norm: maximum percentage of lp-budget consumption
         :type norm: float
         :param seed: the seed to use to make randomized components determinisitc
         :type seed: int
@@ -119,18 +121,8 @@ class BaseTest(unittest.TestCase):
             cls.x = torch.from_numpy(data.dataset.data)
             cls.y = torch.from_numpy(data.dataset.labels).long()
 
-        # ensure image dataset dimensions are pytorch-compliant
-        shape = (
-            data.orgfshape[::-1]
-            if len(data.orgfshape) == 3
-            else (1,) + data.orgfshape
-            if len(data.orgfshape) == 2
-            else None
-        )
-
         # determine clipping range (non-image datasets may not be 0-1)
-        mins = torch.zeros(cls.x.size(1)) if shape else cls.x.min(0).values.clamp(max=0)
-        maxs = torch.ones(cls.x.size(1)) if shape else cls.x.max(0).values.clamp(min=1)
+        mins, maxs = cls.x.min(0).values.clamp(max=0), cls.x.max(0).values.clamp(min=1)
         clip = (mins, maxs)
         p_clip = (mins.sub(cls.x), maxs.sub(cls.x))
         clip_info = (
@@ -143,10 +135,10 @@ class BaseTest(unittest.TestCase):
         # load model hyperparameters
         cls.reset_seeds()
         template = getattr(dlm.templates, dataset)
-        cls.model = (
-            dlm.MLPClassifier(**template.mlp)
-            if template.cnn is None
-            else dlm.CNNClassifier(**template.cnn)
+        cls.model, hyperparameters = (
+            (dlm.CNNClassifier(**template.cnn), template.cnn)
+            if hasattr(template, "cnn")
+            else (dlm.MLPClassifier(**template.mlp), template.mlp)
         )
 
         # train (or load) model and save craftset accuracy (for performance tests)
@@ -154,17 +146,17 @@ class BaseTest(unittest.TestCase):
             path = pathlib.Path(f"/tmp/aml_trained_{dataset}_model.pkl")
             with path.open("rb") as f:
                 state = pickle.load(f)
-            temp_to_apply = getattr(template, type(cls.model).__name__)
-            assert state["template"] == temp_to_apply, "Hyperparameters have changed"
+            assert state["template"] == hyperparameters, "Hyperparameters have changed"
             assert state["seed"] == seed, f"Seed changed: {state['seed']} != {seed}"
             cls.model = state["model"]
-            print(f"Using pretrained {dataset} model from {path}")
+            print(f"Using pretrained {dataset} model from {path}.")
+            cls.model.summary()
         except (FileNotFoundError, AssertionError) as e:
             print(f"Training new model... ({e})")
-            cls.model.fit(*(x, y) if has_test else (cls.x, cls.y), shape=shape)
+            cls.model.fit(*(x, y) if has_test else (cls.x, cls.y))
             state = {
                 "model": cls.model,
-                "template": getattr(template, type(cls.model).__name__),
+                "template": hyperparameters,
                 "seed": seed,
             }
             with path.open("wb") as f:
@@ -220,7 +212,7 @@ class BaseTest(unittest.TestCase):
             f"Dataset: {dataset}, Test Set: {has_test}",
             f"Craftset shape: ({cls.x.size(0)}, {cls.x.size(1)})",
             f"Model Type: {type(cls.model).__name__}",
-            f"Train Acc: {cls.model.stats.train_acc.iloc[-1]:.1%}",
+            f"Train Acc: {cls.model.res.training_accuracy.iloc[-1]:.1%}",
             f"Craftset Acc: {cls.clean_acc:.1%}",
             f"Attack Clipping Values: {clip_info}",
             f"Attack Strength α: {cls.atk_params['alpha']}",
@@ -368,15 +360,12 @@ class BaseTest(unittest.TestCase):
                 ),
                 "ART",
             )
-        if (
-            "torchattacks" in self.available
-            and "shape" in self.atk_params["model"].params
-        ):
+        if "torchattacks" in self.available and hasattr(model, "shape"):
             from torchattacks import APGD
 
             print("Producing APGD-CE adversarial examples with Torchattacks...")
             self.reset_seeds()
-            ta_x = self.x.clone().unflatten(1, self.atk_params["model"].params["shape"])
+            ta_x = self.x.clone().unflatten(1, model.shape)
             ta_adv = (
                 APGD(
                     model=model,
@@ -445,13 +434,13 @@ class BaseTest(unittest.TestCase):
         if (
             "torchattacks" in self.available
             and self.art_classifier.nb_classes > 2
-            and "shape" in self.atk_params["model"].params
+            and hasattr(model, "shape")
         ):
             from torchattacks import APGD
 
             print("Producing APGD-DLR adversarial examples with Torchattacks...")
             self.reset_seeds()
-            ta_x = self.x.clone().unflatten(1, self.atk_params["model"].params["shape"])
+            ta_x = self.x.clone().unflatten(1, model.shape)
             ta_adv = (
                 APGD(
                     model=model,
@@ -659,11 +648,7 @@ class BaseTest(unittest.TestCase):
                 ).perturb(x=self.x.clone(), y=self.y.clone()),
                 "AdverTorch",
             )
-        if (
-            "art" in self.available
-            and norm == 2
-            or "shape" in self.atk_params["model"].params
-        ):
+        if "art" in self.available and norm == 2 or hasattr(model, "shape"):
             if norm == 0:
                 from art.attacks.evasion import CarliniL0Method as CarliniWagner
             elif norm == 2:
@@ -1054,7 +1039,7 @@ class BaseTest(unittest.TestCase):
             )
             fb_adv = (fb_adv, "Foolbox")
         if "torchattacks" in self.available and (
-            norm == "inf" or "shape" in self.atk_params["model"].params
+            norm == "inf" or hasattr(model, "shape")
         ):
             if norm == 2:
                 from torchattacks import PGDL2 as PGD
@@ -1083,10 +1068,10 @@ class FunctionalTests(BaseTest):
     """
     The following class implements functional tests. Functional correctness
     tests involve crafting adversarial examples and verifying that model
-    accuracy can be dropped to <1% for some "small" lp-budget. This is
-    typically defined as ~15% consumption of budget measured by the target
-    lp-norm (e.g., for a space with 100 features, this is budget is defined as
-    15 in l0, 10 in l2, and 0.15 in l∞).
+    accuracy can be dropped to <1 percent for some "small" lp-budget. This is
+    typically defined as ~15 percent consumption of budget measured by the
+    target lp-norm (e.g., for a space with 100 features, this is budget is
+    defined as 15 in l0, 10 in l2, and 0.15 in l∞).
 
     The following attacks are supported:
         APGD-CE (Auto-PGD with CE loss) (https://arxiv.org/pdf/2003.01690.pdf)
@@ -1369,10 +1354,10 @@ class PerformanceTests(BaseTest):
     performance of adversarial examples produced by known attacks within aml to
     those implemented in other adversarial machine learning frameworks. Attacks
     in aml are determined to be performant if the produced adversarial examples
-    are within no worse than 0.1% of the performance of adversarial examples
-    produced by other frameworks. Performance is defined as one minus the
-    l2-norm of normalized decrease in model accuracy and normalized lp-norm (In
-    other words, the closer the ratio of model accuracy over lp-norm to the
+    are within no worse than 0.1 percent of the performance of adversarial
+    examples produced by other frameworks. Performance is defined as one minus
+    the l2-norm of normalized decrease in model accuracy and normalized lp-norm
+    (In other words, the closer the ratio of model accuracy over lp-norm to the
     origin, the better the attack performance).
 
     The following frameworks are supported:
