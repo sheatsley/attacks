@@ -4,22 +4,21 @@ https://arxiv.org/pdf/2209.04521.pdf.
 Authors: Ryan Sheatsley & Blaine Hoak
 Thu Feb 2 2023
 """
-import aml.loss as loss  # Loss functions for crafting adversarial examples in PyTorch
-import aml.optimizer as optimizer  # Optimizers for crafting adversarial examples in PyTorch
-import aml.surface as surface  # Models for crafting adversarial examples
-import aml.traveler as traveler  # Perturbation schemes for adversarial examples
-import itertools  # Functions creating iterators for efficient looping
-import pandas  # Python Data Analysis Library
-import torch  # Tensors and Dynamic neural networks in Python with strong GPU acceleration
+
+import itertools
+
+import pandas
+import torch
+
+import aml.loss as loss
+import aml.optimizer as optimizer
+import aml.surface as surface
+import aml.traveler as traveler
 
 # TODO
 # finish framework comparison example
 # complete visualization example
 # complete all attack performance example (plot attack curves and embedd into repo readme)
-# update readme when dlm is refactor (model accuracy wont exist in quick start)
-# shouldn't we be resetting attacks when using random start? (cw c wouldnt change across restarts atm..)
-# update to new model api (use acc etc)
-# retest with new models... (were trained with reduction=sum...)
 
 
 class Adversary:
@@ -214,9 +213,10 @@ class Adversary:
 
         # instantiate bookkeeping and iterate over restarts & hyperparameters
         x = x.clone()
-        b = torch.full_like(x, torch.inf)
-        b[self.model(x).argmax(1).ne(y)] = 0
+        b = torch.zeros_like(x)
+        b[self.model.accuracy(x, y, as_tensor=True)] = torch.inf
         for r in range(self.num_restarts):
+            self.atk.reset()
             self.atk.restart = f"Restart {r} " if r > 0 else ""
             r > 0 and self.verbose and print(
                 f"On restart iteration {r} of {self.num_restarts - 1}...",
@@ -295,7 +295,7 @@ class Adversary:
         :return: the perturbations whose loss is maximal
         :rtype: torch Tensor object (n,)
         """
-        return self.model(x + p).argmax(1).ne(y)
+        return ~self.model.accuracy(x + p, y, as_tensor=True)
 
 
 class Attack:
@@ -328,6 +328,7 @@ class Attack:
         random_start,
         saliency_map,
         alpha_override=True,
+        device="cpu",
         statistics=False,
         verbosity=0.25,
     ):
@@ -339,6 +340,8 @@ class Attack:
 
         :param alpha_override: override manual alpha for certain components
         :type alpha_override: bool
+        :param device: hardware device to instantiate tensors on
+        :type device: str
         :param early_termination: whether misclassified inputs are perturbed
         :type early_termination: bool
         :param epochs: number of optimization steps to perform
@@ -392,6 +395,7 @@ class Attack:
 
         # set & save attack parameters, and build short attack name
         self.alpha = alpha
+        self.device = device
         self.epochs = epochs
         self.epsilon = epsilon
         self.et = early_termination
@@ -427,7 +431,6 @@ class Attack:
         self.name = name_map.get(name, "-".join(name))
 
         # save components and set parameters for __repr__
-        self.init_req = True
         self.loss_class = loss_func
         self.model = model
         self.norm_class = norm
@@ -438,7 +441,9 @@ class Attack:
             "α": self.alpha,
             "ε": self.epsilon,
             "epochs": self.epochs,
+            "early termination": self.et,
         }
+        self.reset()
         return None
 
     def __repr__(self):
@@ -460,7 +465,8 @@ class Attack:
         :return: the attack name with parameters
         :rtype: str
         """
-        return f"{self.name}({', '.join(f'{p}={v}' for p, v in self.params.items())})"
+        p = ", ".join(f"{p}={v}" for p, v in self.params.items())
+        return f"{self.name}({p}, early termination={self.et}, device={self.device})"
 
     def craft(self, x, y, o=None, reset=False):
         """
@@ -484,12 +490,12 @@ class Attack:
         """
 
         # init perturbations, set misclassified outputs to 0, & compute ranges
-        (reset or self.init_req) and self.reset()
+        reset and self.reset()
         x = x.detach().clone()
         p = torch.zeros_like(x)
-        correct = self.surface.model(x).argmax(1).eq(y).unsqueeze_(1)
+        correct = self.model.accuracy(x, y, as_tensor=True).unsqueeze_(1)
         o = torch.full_like(p, torch.inf).where(correct, p) if o is None else o.clone()
-        mins, maxs = (x.min(0).values.clamp(max=0), x.max(0).values.clamp(min=1))
+        mins, maxs = x.min(0).values.clamp(max=0), x.max(0).values.clamp(min=1)
 
         # set verbosity and configure batch & output results dataframes
         verbose = self.verbosity and self.verbosity != self.epochs
@@ -520,7 +526,7 @@ class Attack:
             ) if verbose and not e % self.verbosity else print(
                 f"{self.name}: {self.restart}{self.hparam}"
                 f"Epoch {e}... ({e / self.epochs:.1%})",
-                end="\r",
+                end="\x1b[K\r",
             )
 
         # set failed perturbations to zero and return
@@ -597,7 +603,6 @@ class Attack:
         """
 
         # instantiate traveler, surface, and necessary subcomponents
-        self.init_req = False
         attack_loss = self.loss_class(classes=self.model.classes)
         norm = self.norm_class(epsilon=self.epsilon, maximize=self.loss_class.max_obj)
         random_start = self.random_class(norm=self.lp, epsilon=self.epsilon)
@@ -627,6 +632,7 @@ class Attack:
             "ε": self.epsilon,
             "epochs": self.epochs,
             "early termination": self.et,
+            "device": self.device,
         }
         return None
 
