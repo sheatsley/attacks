@@ -4,9 +4,12 @@ https://arxiv.org/pdf/2209.04521.pdf.
 Authors: Blaine Hoak & Ryan Sheatsley
 Thu Feb 2 2023
 """
-import torch  # Tensors and Dynamic neural networks in Python with strong GPU acceleration
-from torch.optim import Adam  # Implements Adam: A Method for Stochasitc Optimization
-from torch.optim import SGD  # Implements stochasitc gradient descent
+
+import torch
+
+# Adam and SGD are aliased for a uniform interface
+Adam = torch.optim.Adam
+SGD = torch.optim.SGD
 
 
 class BackwardSGD(torch.optim.Optimizer):
