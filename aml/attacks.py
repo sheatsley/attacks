@@ -241,7 +241,7 @@ class Adversary:
         """
         This method serves as a restart rule as used in
         https://arxiv.org/pdf/1706.06083.pdf. Specifically, it returns the set
-        of perturbations whose has loss improved.
+        of misclassified perturbations whose loss has improved.
 
         :param x: inputs to produce adversarial examples from
         :type x: torch Tensor object (n, m)
@@ -256,7 +256,9 @@ class Adversary:
         """
         ploss = self.atk.surface.loss(self.atk.model(x + p), y)
         bloss = self.atk.surface.loss(self.atk.model(x + b.nan_to_num(posinf=0)), y)
-        return ploss.gt(bloss) if self.atk.surface.loss.max_obj else ploss.lt(bloss)
+        return self.misclassified(x, p, y).logical_and_(
+            ploss.gt(bloss) if self.atk.surface.loss.max_obj else ploss.lt(bloss)
+        )
 
     def min_norm(self, x, p, b, y):
         """
@@ -639,10 +641,10 @@ class Attack:
     def update(self, x, y, p, o):
         """
         This method updates the final perturbations returned by attacks.
-        Specifically, the update is determined as: (1) for minimum-norm
-        adversaries, perturbations that are both (a) misclassified, and (b) a
-        smaller lp-norm than the current best perturbations are saved, while
-        (2) for maximum-loss adversaries, perturbations that have greater model
+        Specifically, the update is determined as: perturbations that are
+        misclassified and (1) a smaller lp-norm than the current best
+        perturbations for minimum-norm adversaries, or (2) the attack loss has
+        improved for maximuim-loss adversaries.
 
         :param x: inputs to produce adversarial examples from
         :type x: torch Tensor object (n, m)
@@ -659,14 +661,13 @@ class Attack:
         p = self.project(p.clone())
         logits = self.surface.model(x + p)
         if self.et:
-            correct = logits.argmax(1).eq(y)
-            smaller = p.norm(self.lp, dim=1).lt(o.norm(self.lp, dim=1))
-            update = (~correct).logical_and_(smaller)
+            update = p.norm(self.lp, dim=1).lt(o.norm(self.lp, dim=1))
         else:
             ploss = self.surface.loss(logits, y)
             ologits = self.surface.model(x + o.nan_to_num(posinf=0))
             oloss = self.surface.loss(ologits, y)
-            update = oloss.lt(ploss) if self.surface.loss.max_obj else oloss.gt(ploss)
+            update = ploss.gt(oloss) if self.surface.loss.max_obj else ploss.lt(oloss)
+        update.logical_and_(logits.argmax(1).ne(y))
         o[update] = p[update]
         return None
 
@@ -796,7 +797,7 @@ def attack_builder(
 
 
 def apgdce(
-    alpha, epochs, epsilon, model, num_restarts=3, statistics=False, verbosity=1
+    alpha, epochs, epsilon, model, num_restarts=0, statistics=False, verbosity=1
 ):
     """
     This function serves as an alias to build Auto-PGD with Cross-Entropy loss
