@@ -4,7 +4,6 @@ https://arxiv.org/pdf/2209.04521.pdf.
 Authors: Ryan Sheatsley & Blaine Hoak
 Thu Feb 2 2023
 """
-
 import itertools
 
 import pandas
@@ -19,6 +18,9 @@ import aml.traveler as traveler
 # finish framework comparison example
 # complete visualization example
 # complete all attack performance example (plot attack curves and embedd into repo readme)
+# consider refactoring epsilons so that they are passed in as a percentage (doesnt make much sense to rely on the user to pass in the correct eps)
+# turn off model verbosity in framework comparison
+# change all examples to use __file__ when saving figs
 
 
 class Adversary:
@@ -797,7 +799,7 @@ def attack_builder(
 
 
 def apgdce(
-    alpha, epochs, epsilon, model, num_restarts=0, statistics=False, verbosity=1
+    alpha, epochs, epsilon, model, num_restarts=3, statistics=False, verbosity=1
 ):
     """
     This function serves as an alias to build Auto-PGD with Cross-Entropy loss
@@ -1001,7 +1003,7 @@ def cwl2(
     )
 
 
-def df(alpha, epochs, epsilon, model, statistics=True, verbosity=1):
+def df(alpha, epochs, epsilon, model, statistics=False, verbosity=1):
     """
     This function serves as an alias to build DeepFool (DF), as shown in
     (https://arxiv.org/pdf/1511.04599.pdf) Specifically, DF: uses the
