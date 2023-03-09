@@ -4,7 +4,6 @@ https://arxiv.org/pdf/2209.04521.pdf.
 Authors: Ryan Sheatsley & Blaine Hoak
 Thu Feb 2 2023
 """
-
 import torch
 
 
@@ -184,7 +183,7 @@ class DeepFoolSaliency:
 
     jac_req = True
 
-    def __init__(self, p, classes, minimum=1e-4, **kwargs):
+    def __init__(self, p, classes, minimum=1e-4, **_):
         """
         This method instantiates a DeepFoolSaliency object. As described above,
         ith class is defined as the minimum logit difference scaled by the
@@ -206,7 +205,7 @@ class DeepFoolSaliency:
         self.minimum = minimum
         return None
 
-    def __call__(self, g, loss, y, p, **kwargs):
+    def __call__(self, g, loss, y, p, **_):
         """
         This method applies the heuristic defined above. Specifically, this
         computes the logit and gradient differences between the true class and
@@ -297,7 +296,7 @@ class IdentitySaliency:
 
     jac_req = False
 
-    def __init__(self, **kwargs):
+    def __init__(self, **_):
         """
         This method instantiates an IdentitySaliency object. It accepts no
         arguments (keyword arguments are accepted for a homogeneous interface).
@@ -307,7 +306,7 @@ class IdentitySaliency:
         """
         return None
 
-    def __call__(self, g, **kwargs):
+    def __call__(self, g, **_):
         """
         This method simply squeezes the classes dimension of the input gradient
         g. To provide a single interface across all saliency maps, keyword
@@ -354,7 +353,7 @@ class JacobianSaliency:
 
     jac_req = True
 
-    def __init__(self, **kwargs):
+    def __init__(self, **_):
         """
         This method instantiates a JacobianSaliency object. It accepts no
         arguments (keyword arguments are accepted for a homogeneous interface).
@@ -364,7 +363,7 @@ class JacobianSaliency:
         """
         return None
 
-    def __call__(self, g, y, **kwargs):
+    def __call__(self, g, y, **_):
         """
         This method applies the heuristic defined above. Specifically, this:
         (1) computes the the sum of the gradients for non-true classes and
@@ -409,7 +408,7 @@ class L0:
     :func:`project`: enforces l0 threat models
     """
 
-    def __init__(self, epsilon, maximize, top=0.01, **kwargs):
+    def __init__(self, epsilon, maximize, top=0.01, **_):
         """
         This method instantiates an L0 object. It accepts as arguments the l0
         budget, whether the loss is to be maximized, and the amount of features
@@ -432,7 +431,7 @@ class L0:
         self.top = top
         return None
 
-    def __call__(self, g, p, **kwargs):
+    def __call__(self, g, p, **_):
         """
         This method projects gradients into the l0-norm space. Specifically,
         features are scored based on the product of their gradients and the
@@ -503,7 +502,7 @@ class L2:
     :func:`project`: enforces l2 threat models
     """
 
-    def __init__(self, epsilon, minimum=1e-12, **kwargs):
+    def __init__(self, epsilon, minimum=1e-12, **_):
         """
         This method instantiates an L2 object. It accepts as arguments the l2
         budget and the minimum possible norm value (used for mitigating
@@ -521,7 +520,7 @@ class L2:
         self.minimum = minimum
         return None
 
-    def __call__(self, g, **kwargs):
+    def __call__(self, g, **_):
         """
         This method  projects gradients into the l2-norm space. Specifically,
         this is defined as normalizing the gradients by thier l2-norm. Keyword
@@ -562,7 +561,7 @@ class Linf:
     :func:`project`: enforces l∞ threat models
     """
 
-    def __init__(self, epsilon, **kwargs):
+    def __init__(self, epsilon, **_):
         """
         This method instantiates an Linf object. It accepts as arguments the l∞
         budget. Keyword arguments are accepted to provide a homogeneous
@@ -576,7 +575,7 @@ class Linf:
         self.epsilon = epsilon
         return None
 
-    def __call__(self, g, **kwargs):
+    def __call__(self, g, **_):
         """
         This function projects gradients into the l∞-norm space. Specifically,
         this is defined as taking the sign of the gradients. Keyword arguments

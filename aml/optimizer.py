@@ -4,7 +4,6 @@ https://arxiv.org/pdf/2209.04521.pdf.
 Authors: Blaine Hoak & Ryan Sheatsley
 Thu Feb 2 2023
 """
-
 import torch
 
 # Adam and SGD are aliased for a uniform interface
@@ -64,7 +63,7 @@ class BackwardSGD(torch.optim.Optimizer):
         alpha_max=0.1,
         beta=0.9,
         minimum=1e-8,
-        **kwargs,
+        **_,
     ):
         """
         This method instanties a Backward SGD object. Beyond standard optimizer
@@ -203,7 +202,7 @@ class MomentumBestStart(torch.optim.Optimizer):
         pdecay=0.03,
         pmin=0.06,
         rho=0.75,
-        **kwargs,
+        **_,
     ):
         """
         This method instanties a MomentumBest Start object. Beyond standard

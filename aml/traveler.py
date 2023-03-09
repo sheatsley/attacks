@@ -4,7 +4,6 @@ https://arxiv.org/pdf/2209.04521.pdf.
 Authors: Ryan Sheatsley & Blaine Hoak
 Thu Feb 2 2023
 """
-
 import torch
 
 
@@ -111,7 +110,7 @@ class IdentityStart:
     :func:`__call__`: returns the input as-is
     """
 
-    def __init__(self, **kwargs):
+    def __init__(self, **_):
         """
         This method instantiates an IdentityStart object. It accepts no
         arguments (keyword arguments are accepted for a homogeneous interface).
@@ -125,7 +124,7 @@ class IdentityStart:
         """
         return None
 
-    def __call__(self, p, **kwargs):
+    def __call__(self, p, **_):
         """
         This method serves as an identity function. It returns the input as-is.
         Keyword arguments are accepted to provide a homogeneous interface
@@ -176,7 +175,7 @@ class MaxStart:
         self.lp = {0: self.l0, 2: self.l2, torch.inf: self.linf}[norm]
         return None
 
-    def __call__(self, p, **kwargs):
+    def __call__(self, p, **_):
         """
         This method applies the max start random start strategy based on the
         lp-norm passed on initialization. Keyword arguments are accepted to
@@ -276,7 +275,7 @@ class ShrinkingStart(MaxStart):
         super().__init__(norm, epsilon)
         return None
 
-    def __call__(self, p, o, **kwargs):
+    def __call__(self, p, o, **_):
         """
         This method shrinks epsilon based on the smallest norm seen thus far
         and the lp-threat model, divided by two. Subsequently, this calls the

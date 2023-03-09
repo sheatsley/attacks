@@ -4,7 +4,6 @@ https://arxiv.org/pdf/2209.04521.pdf.
 Authors: Ryan Sheatsley & Blaine Hoak
 Thu Feb 2 2023
 """
-
 import torch
 
 
@@ -24,7 +23,7 @@ class CELoss(torch.nn.CrossEntropyLoss):
     p_req = False
     max_obj = True
 
-    def __init__(self, classes=None, **kwargs):
+    def __init__(self, **_):
         """
         This method instantiates a CELoss object. It accepts keyword arguments
         for the PyTorch parent class described in:
@@ -33,14 +32,10 @@ class CELoss(torch.nn.CrossEntropyLoss):
         gradients to underflow when computing adversarial examples for large
         batch sizes.
 
-        :param classes: number of classes (not used)
-        :type classes: int
-        :param kwargs: keyword arguments for torch.nn.CrossEntropyLoss
-        :type kwargs: dict
         :return: Cross Entropy loss
         :rtype: CELoss object
         """
-        super().__init__(reduction="none", **kwargs)
+        super().__init__(reduction="none")
         return None
 
     def forward(self, logits, y, yt=None):
@@ -203,7 +198,7 @@ class DLRLoss(torch.nn.Module):
     p_req = False
     max_obj = True
 
-    def __init__(self, classes, minimum=1e-8, **kwargs):
+    def __init__(self, classes, minimum=1e-8):
         """
         This method instantiates an IdentityLoss object. It accepts the number
         of classes (so that logit differences can be computed accurately).
@@ -276,7 +271,7 @@ class IdentityLoss(torch.nn.Module):
     p_req = False
     max_obj = False
 
-    def __init__(self, **kwargs):
+    def __init__(self, **_):
         """
         This method instantiates an IdentityLoss object. It accepts no
         arguments.
