@@ -4,12 +4,11 @@ frameworks and plots the model accuracy over the norm.
 Author: Ryan Sheatsley
 Sat Feb 4 2023
 """
-
 import argparse
+import collections
 import importlib
 import pickle
 
-import aml
 import dlm
 import matplotlib.ticker
 import mlds
@@ -17,6 +16,8 @@ import numpy as np
 import pandas
 import seaborn
 import torch
+
+import aml
 
 
 def apgdce(art_classifier, clip, fb_classifier, frameworks, parameters, x, y):
@@ -115,12 +116,18 @@ def apgddlr(art_classifier, clip, fb_classifier, frameworks, parameters, x, y):
 
     :param art_classifier: classifier for ART
     :type art_classifier: art.estimator.classification PyTorchClassifier object
+    :param clip: allowable feature range for the domain
+    :type clip: torch Tensor object (2, m)
     :param fb_classifier: classifier for Foolbox
     :type fb_classifier: foolbox PyTorchModel object
     :param frameworks: frameworks to craft adversarial examples with
     :type frameworks: tuple of str
     :param parameters: attack parameters
     :type parameters: dict
+    :param x: inputs to craft adversarial examples from
+    :type x: torch Tensor object (n, m)
+    :param y: labels of inputs to craft adversarail examples from
+    :type x: torch Tensor object (n,)
     :return: APGD-DLR adversarial examples
     :rtype: tuple of tuples: torch Tensor object (n, m) and str
     """
@@ -145,7 +152,7 @@ def apgddlr(art_classifier, clip, fb_classifier, frameworks, parameters, x, y):
             torch.from_numpy(
                 AutoProjectedGradientDescent(
                     estimator=art_classifier,
-                    norm="linf",
+                    norm="inf",
                     eps=eps,
                     eps_step=eps_step,
                     max_iter=max_iter,
@@ -200,14 +207,18 @@ def bim(art_classifier, clip, fb_classifier, frameworks, parameters, x, y):
 
     :param art_classifier: classifier for ART
     :type art_classifier: art.estimator.classification PyTorchClassifier object
+    :param clip: allowable feature range for the domain
+    :type clip: torch Tensor object (2, m)
     :param fb_classifier: classifier for Foolbox
     :type fb_classifier: foolbox PyTorchModel object
     :param frameworks: frameworks to craft adversarial examples with
     :type frameworks: tuple of str
     :param parameters: attack parameters
     :type parameters: dict
-    :param norm: norm to use (only modified for special tests)
-    :type norm: str or int
+    :param x: inputs to craft adversarial examples from
+    :type x: torch Tensor object (n, m)
+    :param y: labels of inputs to craft adversarail examples from
+    :type x: torch Tensor object (n,)
     :return: BIM adversarial examples
     :rtype: tuple of tuples: torch Tensor object (n, m) and str
     """
@@ -217,8 +228,7 @@ def bim(art_classifier, clip, fb_classifier, frameworks, parameters, x, y):
     at_adv = art_adv = ch_adv = fb_adv = ta_adv = None
     aml_adv = (x + bim.craft(x, y), "aml")
     if "advertorch" in frameworks:
-        from advertorch.attacks import \
-            LinfBasicIterativeAttack as BasicIterativeAttack
+        from advertorch.attacks import LinfBasicIterativeAttack as BasicIterativeAttack
 
         print("Producing BIM adversarial examples with AdverTorch...", end="\r")
         at_adv = (
@@ -253,8 +263,9 @@ def bim(art_classifier, clip, fb_classifier, frameworks, parameters, x, y):
             "ART",
         )
     if "cleverhans" in frameworks:
-        from cleverhans.torch.attacks.projected_gradient_descent import \
-            projected_gradient_descent as basic_iterative_method
+        from cleverhans.torch.attacks.projected_gradient_descent import (
+            projected_gradient_descent as basic_iterative_method,
+        )
 
         print("Producing BIM adversarial examples with CleverHans...", end="\r")
         ch_adv = (
@@ -276,8 +287,7 @@ def bim(art_classifier, clip, fb_classifier, frameworks, parameters, x, y):
             "CleverHans",
         )
     if "foolbox" in frameworks:
-        from foolbox.attacks import \
-            LinfBasicIterativeAttack as BasicIterativeAttack
+        from foolbox.attacks import LinfBasicIterativeAttack as BasicIterativeAttack
 
         print("Producing BIM adversarial examples with Foolbox...", end="\r")
         _, fb_adv, _ = BasicIterativeAttack(
@@ -314,8 +324,20 @@ def cwl2(art_classifier, clip, fb_classifier, frameworks, parameters, x, y):
     ART) require a substantial number of additional iterations, so the minimum
     number of steps is set to be at least 300.
 
-    :param norm: norm to use (only modified for special tests)
-    :type norm: str or int
+    :param art_classifier: classifier for ART
+    :type art_classifier: art.estimator.classification PyTorchClassifier object
+    :param clip: allowable feature range for the domain
+    :type clip: torch Tensor object (2, m)
+    :param fb_classifier: classifier for Foolbox
+    :type fb_classifier: foolbox PyTorchModel object
+    :param frameworks: frameworks to craft adversarial examples with
+    :type frameworks: tuple of str
+    :param parameters: attack parameters
+    :type parameters: dict
+    :param x: inputs to craft adversarial examples from
+    :type x: torch Tensor object (n, m)
+    :param y: labels of inputs to craft adversarail examples from
+    :type x: torch Tensor object (n,)
     :return: CW-L2 adversarial examples
     :rtype: tuple of tuples: torch Tensor object (n, m) and str
     """
@@ -384,8 +406,7 @@ def cwl2(art_classifier, clip, fb_classifier, frameworks, parameters, x, y):
             "ART",
         )
     if "cleverhans" in frameworks:
-        from cleverhans.torch.attacks.carlini_wagner_l2 import \
-            carlini_wagner_l2
+        from cleverhans.torch.attacks.carlini_wagner_l2 import carlini_wagner_l2
 
         print("Producing CW-L2 adversarial examples with CleverHans...", end="\r")
         ch_adv = (
@@ -446,8 +467,20 @@ def df(art_classifier, clip, fb_classifier, frameworks, parameters, x, y):
     aml DF's learning rate alpha minus one (not to be confused with the epsilon
     parameter used in aml, which governs the norm-ball size).
 
-    :param norm: norm to use (only modified for special tests)
-    :type norm: str or int
+    :param art_classifier: classifier for ART
+    :type art_classifier: art.estimator.classification PyTorchClassifier object
+    :param clip: allowable feature range for the domain
+    :type clip: torch Tensor object (2, m)
+    :param fb_classifier: classifier for Foolbox
+    :type fb_classifier: foolbox PyTorchModel object
+    :param frameworks: frameworks to craft adversarial examples with
+    :type frameworks: tuple of str
+    :param parameters: attack parameters
+    :type parameters: dict
+    :param x: inputs to craft adversarial examples from
+    :type x: torch Tensor object (n, m)
+    :param y: labels of inputs to craft adversarail examples from
+    :type x: torch Tensor object (n,)
     :return: DeepFool adversarial examples
     :rtype: tuple of tuples: torch Tensor object (n, m) and str
     """
@@ -509,8 +542,20 @@ def fab(art_classifier, clip, fb_classifier, frameworks, parameters, x, y):
     (https://arxiv.org/pdf/1907.02044.pdf). The supported frameworks for FAB
     include AdverTorch and Torchattacks.
 
-    :param norm: norm to use (only modified for special tests)
-    :type norm: str or int
+    :param art_classifier: classifier for ART
+    :type art_classifier: art.estimator.classification PyTorchClassifier object
+    :param clip: allowable feature range for the domain
+    :type clip: torch Tensor object (2, m)
+    :param fb_classifier: classifier for Foolbox
+    :type fb_classifier: foolbox PyTorchModel object
+    :param frameworks: frameworks to craft adversarial examples with
+    :type frameworks: tuple of str
+    :param parameters: attack parameters
+    :type parameters: dict
+    :param x: inputs to craft adversarial examples from
+    :type x: torch Tensor object (n, m)
+    :param y: labels of inputs to craft adversarail examples from
+    :type x: torch Tensor object (n,)
     :return: FAB adversarial examples
     :rtype: tuple of tuples: torch Tensor object (n, m) and str
     """
@@ -653,13 +698,11 @@ def init_data(dataset, pretrained):
     :type dataset: str
     :param pretrained: use a pretrained model, if possible
     :type pretrained: bool
-    :return: test data, clips, model, and if a dedicated test set was found
+    :return: test data, clips, model, and test accuracy
     :rtype: tuple of:
         - tuple of torch Tensor objects (n, m) and (n,)
         - torch Tensor object (2, m)
         - dlm LinearClassifier-inherited object
-        - bool
-        - float
         - float
     """
 
@@ -670,13 +713,11 @@ def init_data(dataset, pretrained):
         train_y = torch.from_numpy(data.train.labels).long()
         x = torch.from_numpy(data.test.data)
         y = torch.from_numpy(data.test.labels).long()
-        has_test = True
     except AttributeError:
         train_x = torch.from_numpy(data.dataset.data)
         train_y = torch.from_numpy(data.dataset.labels).long()
-        x = train_x
-        y = train_y
-        has_test = False
+        x = train_x.clone()
+        y = train_y.clone()
     clip = torch.stack((x.min(0).values.clamp(max=0), x.max(0).values.clamp(min=1)))
 
     # load model hyperparameters and train a model (or load a saved one)
@@ -698,9 +739,8 @@ def init_data(dataset, pretrained):
         model.fit(train_x, train_y)
     with open(f"/tmp/framework_comparison_{dataset}_model.pkl", "wb") as f:
         pickle.dump(model, f)
-    train_acc = model.accuracy(train_x, train_y)
     test_acc = model.accuracy(x, y)
-    return (x, y), clip, model, has_test, train_acc.item(), test_acc.item()
+    return (x, y), clip, model, test_acc.item()
 
 
 def init_fb_classifier(clip, model):
@@ -736,16 +776,31 @@ def jsma(art_classifier, clip, fb_classifier, frameworks, parameters, x, y):
     once, often leading to memory crashes (e.g., it'll terminate on a 16GB
     system with MNIST).
 
+
+    :param art_classifier: classifier for ART
+    :type art_classifier: art.estimator.classification PyTorchClassifier object
+    :param clip: allowable feature range for the domain
+    :type clip: torch Tensor object (2, m)
+    :param fb_classifier: classifier for Foolbox
+    :type fb_classifier: foolbox PyTorchModel object
+    :param frameworks: frameworks to craft adversarial examples with
+    :type frameworks: tuple of str
+    :param parameters: attack parameters
+    :type parameters: dict
+    :param x: inputs to craft adversarial examples from
+    :type x: torch Tensor object (n, m)
+    :param y: labels of inputs to craft adversarail examples from
+    :type x: torch Tensor object (n,)
     :return: JSMA adversarial examples
     :rtype: tuple of tuples: torch Tensor object (n, m) and str
     """
     clip_min, clip_max = clip.unbind()
-    jsma = aml.attacks.jsma(**parameters)
+    jsma = aml.attacks.jsma(**parameters | dict(alpha=1))
     (model, num_classes, gamma, theta) = (
         jsma.model,
         jsma.model.classes,
         jsma.epsilon / x.size(1),
-        1,
+        jsma.alpha,
     )
     at_adv = art_adv = None
     aml_adv = (x + jsma.craft(x, y), "aml")
@@ -833,12 +888,12 @@ def linf_proj(linf, p):
     return p.clamp(-linf, linf)
 
 
-def main(alpha, attacks, budget, datasets, epochs, frameworks, pretrained):
+def main(alpha, attacks, budget, datasets, epochs, frameworks, pretrained, trials):
     """
     This function is the main entry point for the framework comparison
     benchmark. Specifically this: (1) loads and trains a model for each
-    dataset, (3) crafts adversarial examples for each framework, (4) measures
-    statistics and assembles dataframes, and (5) plots the results.
+    dataset, (2) crafts adversarial examples for each framework, (3) measures
+    statistics and assembles dataframes, and (4) plots the results.
 
     :param alpha: perturbation strength, per-iteration
     :type alpha: float
@@ -854,63 +909,68 @@ def main(alpha, attacks, budget, datasets, epochs, frameworks, pretrained):
     :type frameworks: tuple of str
     :param pretrained: use a pretrained model, if possible
     :type pretrained: bool
+    :param trials: number of experiment trials
+    :type trials: int
     :return: None
     :rtype: NoneType
     """
     print(
-        f"Analyzing {len(attacks)} across {len(datasets)} with "
-        f"{len(frameworks)} frameworks..."
+        f"Analyzing {len(attacks)} attacks across {len(datasets)} datasets with "
+        f"{len(frameworks)} frameworks in {trials} trials..."
     )
-    results = pandas.DataFrame(
-        columns=("dataset", "attack", "baseline", "framework", "accuracy", "budget"),
-    )
+    metrics = "dataset", "attack", "baseline", "framework", "accuracy", "budget"
+    results = pandas.DataFrame(columns=metrics)
+    norms = collections.namedtuple("norms", ("budget", "projection", "ord"))
+    norms = {
+        apgdce: norms(None, linf_proj, torch.inf),
+        apgddlr: norms(None, linf_proj, torch.inf),
+        bim: norms(None, linf_proj, torch.inf),
+        cwl2: norms(None, l2_proj, 2),
+        df: norms(None, l2_proj, 2),
+        fab: norms(None, l2_proj, 2),
+        jsma: norms(None, l0_proj, 0),
+        pgd: norms(None, linf_proj, torch.inf),
+    }
     row = 0
-    for i, d in enumerate(datasets):
+    for d in datasets:
 
         # load data, clipping bounds, attacks, and train a model
-        print(f"Preparing {d} model...", end="\r")
-        (x, y), clip, model, has_test, train_acc, test_acc = init_data(d, pretrained)
-        parameters, art_model, fb_model, l0, l2, linf = init_attacks(
-            alpha, budget, clip, epochs, x.size(1), frameworks, model
-        )
-        norms = {
-            apgdce: (linf, linf_proj, torch.inf),
-            apgddlr: (linf, linf_proj, torch.inf),
-            bim: (linf, linf_proj, torch.inf),
-            cwl2: (l2, l2_proj, 2),
-            df: (l2, l2_proj, 2),
-            fab: (l2, l2_proj, 2),
-            jsma: (l0, l0_proj, 0),
-            pgd: (linf, linf_proj, torch.inf),
-        }
-
-        # craft adversarial examples
-        for j, a in enumerate(attacks):
-            print(
-                f"Attacking {d} model with {a.__name__}... {j} of {len(attacks)}",
-                end="\r",
+        for t in range(trials):
+            print(f"Preparing {d} model... Trial {t} of {trials}", end="\r")
+            (x, y), clip, model, test_acc = init_data(d, pretrained)
+            parameters, art_model, fb_model, l0, l2, linf = init_attacks(
+                alpha, budget, clip, epochs, x.size(1), frameworks, model
             )
-            advs = a(
-                art_model,
-                clip,
-                fb_model,
-                frameworks,
-                parameters | dict(epsilon=norms[a][0]),
-                x,
-                y,
-            )
+            for a, n in norms.items():
+                norms[a] = n._replace(
+                    budget=linf if n.ord == torch.inf else l2 if n.ord == 2 else l0
+                )
 
-            # ensure adversarial examples comply with clips and epsilon
-            for adv, fw in advs:
-                print(f"Analyzing {fw} {a.__name__} adversarial examples...", end="\r")
-                adv = adv.clamp(*clip.unbind())
-                p = norms[a][1](norms[a][0], adv.sub(x))
-                acc = model.accuracy(x + p, y).item()
-                budget_used = p.norm(norms[a][2], 1).mean().div(norms[a][0]).item()
-                results.loc[row] = d, a.__name__, train_acc, fw, acc, budget_used
-                row += 1
+            # craft adversarial examples
+            for j, a in enumerate(attacks):
+                print(f"Attacking with {a.__name__}... {j} of {len(attacks)}", end="\r")
+                advs = a(
+                    art_model,
+                    clip,
+                    fb_model,
+                    frameworks,
+                    parameters | dict(epsilon=norms[a].budget),
+                    x,
+                    y,
+                )
 
-    # plot and save the results
+                # ensure adversarial examples comply with clips and epsilon
+                for adv, fw in advs:
+                    print(f"Computing results for {fw} {a.__name__}...", end="\r")
+                    adv = adv.clamp(*clip.unbind())
+                    p = norms[a].projection(norms[a].budget, adv.sub(x))
+                    acc = model.accuracy(x + p, y).item()
+                    used = p.norm(norms[a].ord, 1).mean().div(norms[a].budget).item()
+                    results.loc[row] = d, a.__name__, test_acc, fw, acc, used
+                    row += 1
+
+    # take the median of the results, plot, and save
+    results = results.groupby(["dataset", "attack", "framework"]).median().reset_index()
     plot(results)
     return None
 
@@ -934,19 +994,32 @@ def plot(results):
         data=results,
         col="dataset",
         col_wrap=(results.dataset.unique().size + 1) // 2,
-        # facet_kws=dict(xlim=(0, 1), ylim=(0, 1)),
+        facet_kws=dict(subplot_kws=dict(xscale="log", yscale="log")),
         hue="framework",
         kind="scatter",
         legend="full" if results.dataset.unique().size > 1 else "auto",
         style="attack",
         x="budget",
         y="accuracy",
-        **dict(alpha=0.75),
+        **dict(alpha=0.7, s=100),
     )
     plot.map_dataframe(
-        color="r", func=seaborn.lineplot, linestyle="--", x="budget", y="baseline"
+        color="r",
+        func=seaborn.lineplot,
+        linestyle="--",
+        x="budget",
+        y="baseline",
     )
-    plot.set(xscale="log", yscale="log")
+    plot.legend.remove()
+    plot._legend_data["baseline"] = plot._legend_data["framework"]
+    plot._legend_data["clean"] = plot.axes[0].lines[0]
+    plot.add_legend(adjust_subtitles=True)
+    plot.set(ylabel="accuracy")
+    for ax in plot.axes.flat:
+        ax.xaxis.set_major_formatter(matplotlib.ticker.PercentFormatter(1))
+        ax.xaxis.set_minor_formatter(matplotlib.ticker.PercentFormatter(1))
+        ax.xaxis.set_minor_locator(matplotlib.ticker.LogLocator(subs=(1, 3, 5, 8)))
+        ax.yaxis.set_major_formatter(matplotlib.ticker.PercentFormatter(1))
     plot.savefig(
         "/".join(__file__.split("/")[:-1]) + "/framework_comparison.pdf",
         bbox_inches="tight",
@@ -960,8 +1033,20 @@ def pgd(art_classifier, clip, fb_classifier, frameworks, parameters, x, y):
     Descent)) (https://arxiv.org/pdf/1706.06083.pdf). The supported frameworks
     for PGD include AdverTorch, ART, CleverHans, and Torchattacks.
 
-    :param norm: norm to use (only modified for special tests)
-    :type norm: str or int
+    :param art_classifier: classifier for ART
+    :type art_classifier: art.estimator.classification PyTorchClassifier object
+    :param clip: allowable feature range for the domain
+    :type clip: torch Tensor object (2, m)
+    :param fb_classifier: classifier for Foolbox
+    :type fb_classifier: foolbox PyTorchModel object
+    :param frameworks: frameworks to craft adversarial examples with
+    :type frameworks: tuple of str
+    :param parameters: attack parameters
+    :type parameters: dict
+    :param x: inputs to craft adversarial examples from
+    :type x: torch Tensor object (n, m)
+    :param y: labels of inputs to craft adversarail examples from
+    :type x: torch Tensor object (n,)
     :return: PGD adversarial examples
     :rtype: tuple of tuples: aml Attack object & torch Tensor object (n, m)
     """
@@ -1021,8 +1106,9 @@ def pgd(art_classifier, clip, fb_classifier, frameworks, parameters, x, y):
             "ART",
         )
     if "cleverhans" in frameworks:
-        from cleverhans.torch.attacks.projected_gradient_descent import \
-            projected_gradient_descent
+        from cleverhans.torch.attacks.projected_gradient_descent import (
+            projected_gradient_descent,
+        )
 
         print("Producing PGD adversarial examples with CleverHans...", end="\r")
         reset_seeds()
@@ -1045,9 +1131,9 @@ def pgd(art_classifier, clip, fb_classifier, frameworks, parameters, x, y):
             "CleverHans",
         )
     if "foolbox" in frameworks:
-        from foolbox.attacks import \
-            LinfProjectedGradientDescentAttack as \
-            ProjectedGradientDescentAttack
+        from foolbox.attacks import (
+            LinfProjectedGradientDescentAttack as ProjectedGradientDescentAttack,
+        )
 
         print("Producing PGD adversarial examples with Foolbox...", end="\r")
         reset_seeds()
@@ -1175,6 +1261,13 @@ if __name__ == "__main__":
         default=False,
         help="Avoid training a new model, if possible (helpful for debugging)",
     )
+    parser.add_argument(
+        "-t",
+        "--trials",
+        default=1,
+        help="Number of experiment trials (set to 1 if pretrained is true)",
+        type=int,
+    )
     args = parser.parse_args()
     main(
         alpha=args.alpha,
@@ -1184,5 +1277,6 @@ if __name__ == "__main__":
         epochs=args.epochs,
         frameworks=tuple(args.frameworks),
         pretrained=args.pretrained,
+        trials=1 if args.pretrained else args.trials,
     )
     raise SystemExit(0)
