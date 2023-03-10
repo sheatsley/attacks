@@ -14,9 +14,6 @@ import aml.optimizer as optimizer
 import aml.surface as surface
 import aml.traveler as traveler
 
-# TODO
-# finish sensitivity analysis example
-
 
 class Adversary:
     """
@@ -88,6 +85,7 @@ class Adversary:
             type(None) if hparam_update is None else hparam_update.__get__(self)
         )
         num_restarts = 0 if num_restarts is None else num_restarts
+        hparam_steps = 0 if hparam_steps is None else hparam_steps
 
         # set attributes and update total number of iterations
         self.__dict__["atk"] = attack
@@ -99,7 +97,7 @@ class Adversary:
         self.__dict__["best_update"] = best_update
         self.__dict__["hparam"] = hparam
         self.__dict__["hparam_bounds"] = hparam_bounds
-        self.__dict__["hparam_steps"] = hparam_steps
+        self.__dict__["hparam_steps"] = hparam_steps + 1
         self.__dict__["hparam_update"] = hparam_update
         self.__dict__["num_restarts"] = num_restarts + 1
         self.__dict__["verbose"] = verbose
@@ -112,8 +110,8 @@ class Adversary:
             "num_restarts": num_restarts,
             "attack": repr(attack),
         }
-        self.__dict__["atk"].total *= (num_restarts + 1) * (
-            1 if hparam_steps is None else hparam_steps + 1
+        self.__dict__["atk"].total *= (
+            self.__dict__["num_restarts"] * self.__dict__["hparam_steps"]
         )
         return None
 
@@ -179,7 +177,6 @@ class Adversary:
         lb, ub = torch.tensor(self.hparam_bounds).repeat(y.numel(), 1).unbind(1)
         for h in range(1, self.hparam_steps + 1):
             p = self.atk.craft(x, y, b, reset)
-            self.atk.step += 1
             self.atk.hparam = f"BS Step {h} "
             self.verbose and print(
                 f"On hyperparameter iteration {h} of {self.hparam_steps}...",
