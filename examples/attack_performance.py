@@ -1,18 +1,21 @@
 """
 This script compares the performance of known attacks within the aml framework
-and plots the model accuracy and (normalized) loss over the crafting epochs.
+and plots the model accuracy and loss over the crafting epochs.
 Author: Ryan Sheatsley
 Wed Mar 8 2023
 """
 import argparse
+import warnings
 
+import aml
 import dlm
 import mlds
 import pandas
 import seaborn
 import torch
 
-import aml
+# dlm uses lazy modules which induce warnings that overload stdout
+warnings.filterwarnings("ignore", category=UserWarning)
 
 
 def plot(results):
@@ -20,7 +23,7 @@ def plot(results):
     This function plots the attack comparison results. Specifically, this
     produces two line plots per dataset containing model accuracy and loss over
     the attack epoch, with shading represtenting 95% CI. Attacks are divided by
-    color. The ploty is written to disk in the current directory.
+    color. The plot is written to disk in the current directory.
 
     :param results: results of the attack comparison
     :type results: pandas Dataframe object
