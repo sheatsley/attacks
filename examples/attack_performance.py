@@ -76,7 +76,7 @@ def main(alpha, attacks, budget, datasets, epochs, trials):
     )
 
     # load data, train a model, and compute budgets
-    for i, d in enumerate(datasets, start=1):
+    for i, d in enumerate(datasets):
         data = getattr(mlds, d)
         try:
             train_x = torch.from_numpy(data.train.data)
@@ -95,10 +95,10 @@ def main(alpha, attacks, budget, datasets, epochs, trials):
             else dlm.MLPClassifier(**template.mlp)
         )
         model.verbosity = 0
-        for t in range(1, trials + 1):
+        for t in range(trials):
             print(
-                f"On {d} trial {t} of {trials}... "
-                f"({(i * t) / (len(datasets) * trials):.2%})"
+                f"On dataset {i + 1} ({d}) of {len(datasets)}, trial {t + 1} of "
+                f"{trials}... ({(t + i * trials) / (len(datasets) * trials):.2%})"
             )
             model.fit(train_x, train_y)
             l0 = int(x.size(1) * budget) + 1
