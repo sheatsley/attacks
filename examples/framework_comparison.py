@@ -8,7 +8,9 @@ import argparse
 import collections
 import importlib
 import pickle
+import warnings
 
+import aml
 import dlm
 import matplotlib.ticker
 import mlds
@@ -17,7 +19,8 @@ import pandas
 import seaborn
 import torch
 
-import aml
+# dlm uses lazy modules which induce warnings that overload stdout
+warnings.filterwarnings("ignore", category=UserWarning)
 
 
 def apgdce(art_classifier, clip, fb_classifier, frameworks, parameters, x, y):
@@ -727,6 +730,7 @@ def init_data(dataset, pretrained):
         if hasattr(template, "cnn")
         else dlm.MLPClassifier(**template.mlp)
     )
+    model.verbosity = 0
     try:
         if pretrained:
             with open(f"/tmp/framework_comparison_{dataset}_model.pkl", "rb") as f:
@@ -978,12 +982,12 @@ def main(alpha, attacks, budget, datasets, epochs, frameworks, pretrained, trial
 def plot(results):
     """
     This function plots the framework comparison results. Specifically, this
-    produces this produces one scatter plot per dataset containing model
-    accuracy on the crafting set over the percentage of the budget consumed
-    (with a dotted line designating the original model accuracy on the clean
-    data). Frameworks labeled above points and are divided by color, while
-    attacks are divided by marker style. Axes are in log scale to show
-    separation. The plot is written to disk in the current directory.
+    produces  one scatter plot per dataset containing model accuracy on the
+    crafting set over the percentage of the budget consumed (with a dotted line
+    designating the original model accuracy on the clean data). Frameworks
+    labeled above points and are divided by color, while attacks are divided by
+    marker style. Axes are in log scale to show separation. The plot is written
+    to disk in the current directory.
 
     :param results: results of the framework comparison
     :type results: pandas Dataframe object
@@ -1020,10 +1024,7 @@ def plot(results):
         ax.xaxis.set_minor_formatter(matplotlib.ticker.PercentFormatter(1))
         ax.xaxis.set_minor_locator(matplotlib.ticker.LogLocator(subs=(1, 3, 5, 8)))
         ax.yaxis.set_major_formatter(matplotlib.ticker.PercentFormatter(1))
-    plot.savefig(
-        "/".join(__file__.split("/")[:-1]) + "/framework_comparison.pdf",
-        bbox_inches="tight",
-    )
+    plot.savefig(__file__[:-2] + ".pdf", bbox_inches="tight")
     return None
 
 
