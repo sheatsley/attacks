@@ -7,12 +7,11 @@ Thu Mar 9 2023
 import argparse
 
 import aml
+import dlm
 import matplotlib.pyplot as plt
 import mlds
 import pandas
 import torch
-
-import dlm
 
 
 def plot(dataset, results):
@@ -180,8 +179,10 @@ if __name__ == "__main__":
     parser.add_argument(
         "-d",
         "--datasets",
-        choices=mlds.__available__,
-        default="phishing",
+        choices=(
+            d for d in mlds.__available__ if hasattr(getattr(dlm.templates, d), "cnn")
+        ),
+        default="mnist",
         help="Dataset to use",
     )
     parser.add_argument(
