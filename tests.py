@@ -334,7 +334,7 @@ class BaseTest(unittest.TestCase):
             {2: self.l2, "inf": self.linf}[norm],
             self.atk_params["alpha"],
             self.atk_params["epochs"],
-            self.attacks["apgdce"].params["num_restarts"] + 1,
+            self.attacks["apgdce"].num_restarts,
             self.attacks["apgdce"].atk.traveler.optimizer.param_groups[0]["rho"],
         )
         art_adv = ta_adv = None
@@ -405,7 +405,7 @@ class BaseTest(unittest.TestCase):
             {2: self.l2, "inf": self.linf}[norm],
             self.atk_params["alpha"],
             self.atk_params["epochs"],
-            self.attacks["apgddlr"].params["num_restarts"] + 1,
+            self.attacks["apgddlr"].num_restarts,
             self.attacks["apgddlr"].atk.traveler.optimizer.param_groups[0]["rho"],
         )
         art_adv = ta_adv = None
