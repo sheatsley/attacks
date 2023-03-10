@@ -15,12 +15,7 @@ import aml.surface as surface
 import aml.traveler as traveler
 
 # TODO
-# finish framework comparison example
-# complete visualization example
-# complete all attack performance example (plot attack curves and embedd into repo readme)
-# consider refactoring epsilons so that they are passed in as a percentage (doesnt make much sense to rely on the user to pass in the correct eps)
-# turn off model verbosity in framework comparison
-# change all examples to use __file__ when saving figs
+# finish sensitivity analysis example
 
 
 class Adversary:
@@ -42,7 +37,7 @@ class Adversary:
     :func:`max_loss`: restart rule used in PGD attack
     :func:`min_norm`: restart rule used in FAB attack
     :func:`misclassified`: hyperparameter rule used in CW-L2 attack
-    :func:`reset`: reset attack state (akin to reinstantiation)
+    :func:`progress`: updates output dataframe
     """
 
     def __init__(
@@ -94,7 +89,7 @@ class Adversary:
         )
         num_restarts = 0 if num_restarts is None else num_restarts
 
-        # set attributes
+        # set attributes and update total number of iterations
         self.__dict__["atk"] = attack
         self.__dict__["craft_p"] = (
             (lambda x, y, b, reset: (attack.craft(x, y, b, reset),))
@@ -117,6 +112,9 @@ class Adversary:
             "num_restarts": num_restarts,
             "attack": repr(attack),
         }
+        self.__dict__["atk"].total *= (num_restarts + 1) * (
+            1 if hparam_steps is None else hparam_steps + 1
+        )
         return None
 
     def __getattr__(self, name):
@@ -181,6 +179,7 @@ class Adversary:
         lb, ub = torch.tensor(self.hparam_bounds).repeat(y.numel(), 1).unbind(1)
         for h in range(1, self.hparam_steps + 1):
             p = self.atk.craft(x, y, b, reset)
+            self.atk.step += 1
             self.atk.hparam = f"BS Step {h} "
             self.verbose and print(
                 f"On hyperparameter iteration {h} of {self.hparam_steps}...",
@@ -227,6 +226,7 @@ class Adversary:
 
             # store the best adversarial perturbations seen thus far
             for p in self.craft_p(x, y, b, reset):
+                self.atk.step += 1
                 update = self.best_update(x, p, b, y)
                 non_adv = b.isinf().any(1)
                 b[update] = p[update]
@@ -237,6 +237,9 @@ class Adversary:
                     f"(+{update.mean(dtype=torch.float):.2%})",
                     f"(New {new:.2%}, Improved {improved:.2%})",
                 )
+
+                # override output dataframe for meaningful results
+                self.statistics and self.progress()
         return b.nan_to_num_(nan=None, posinf=0)
 
     def max_loss(self, x, p, b, y):
@@ -300,6 +303,32 @@ class Adversary:
         :rtype: torch Tensor object (n,)
         """
         return ~self.model.accuracy(x + p, y, as_tensor=True)
+
+    def progress(self):
+        """
+        This method updates the output results dataframe so that the recorded
+        results can be meaningfully interpreted. Specifically, since the output
+        dataframe is computed from the output buffer, output results dataframes
+        are not particularly meaningful. For attacks that use random restarts
+        or hyperparamter optimization, attack performance can be meaningfuly
+        interpreted by taking the best results across batch results dataframes
+        instead. To this end, this method records the best accuracy, model loss
+        attack loss, and norms observed across batch results dataframes.
+
+        :param results: dataframe of best batch performance
+        :type results: pandas DataFrame object
+        :return: None
+        :rtype: NoneType
+        """
+        try:
+            last_out = self.last_res.iloc[-1]
+            self.last_res = self.last_res.assign(
+                **(self.last_res - (last_out - self.res)).drop(columns="epoch")
+            )
+            self.res = self.last_res
+        except AttributeError:
+            self.last_res = self.res.copy()
+        return None
 
 
 class Attack:
@@ -406,7 +435,9 @@ class Attack:
         self.hparam = ""
         self.lp = {surface.L0: 0, surface.L2: 2, surface.Linf: torch.inf}[norm]
         self.restart = ""
+        self.step = 0
         self.statistics = statistics
+        self.total = epochs
         self.verbosity = max(int(epochs * verbosity), 1 if verbosity else 0)
         self.components = {
             "loss function": loss_func.__name__,
@@ -529,7 +560,7 @@ class Attack:
                 f"Epoch {e:{len(str(self.epochs))}} / {self.epochs} {prog:<15}"
             ) if verbose and not e % self.verbosity else print(
                 f"{self.name}: {self.restart}{self.hparam}"
-                f"Epoch {e}... ({e / self.epochs:.1%})",
+                f"Epoch {e}... ({(e + self.epochs * self.step) / self.total:.1%})",
                 end="\x1b[K\r",
             )
 
