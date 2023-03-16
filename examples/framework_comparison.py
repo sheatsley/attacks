@@ -738,8 +738,7 @@ def init_data(dataset, pretrained):
                 model.summary()
         else:
             raise FileNotFoundError("Pretrained flag was false")
-    except FileNotFoundError as e:
-        print(f"Training a new model ({e})")
+    except FileNotFoundError:
         model.fit(train_x, train_y)
     with open(f"/tmp/framework_comparison_{dataset}_model.pkl", "wb") as f:
         pickle.dump(model, f)
@@ -1024,7 +1023,7 @@ def plot(results):
         ax.xaxis.set_minor_formatter(matplotlib.ticker.PercentFormatter(1))
         ax.xaxis.set_minor_locator(matplotlib.ticker.LogLocator(subs=(1, 3, 5, 8)))
         ax.yaxis.set_major_formatter(matplotlib.ticker.PercentFormatter(1))
-    plot.savefig(__file__[:-2] + ".pdf", bbox_inches="tight")
+    plot.savefig(__file__[:-2] + "pdf")
     return None
 
 
