@@ -29,23 +29,53 @@ def plot(dataset, results):
     :return: None
     :rtype: NoneType
     """
+    # plot = seaborn.relplot(
+    #     data=results,
+    #     col="attack",
+    #     col_wrap=(results.attack.unique().size + 1) // 2,
+    #     facet_kws={"sharey": False},
+    #     hue="class",
+    #     kind="scatter",
+    #     legend="full" if results.attack.unique().size > 1 else "auto",
+    #     x="feature",
+    #     y="value",
+    #     **dict(alpha=0.01),
+    # )
+
     plot = seaborn.catplot(
         data=results,
         col="attack",
         col_wrap=(results.attack.unique().size + 1) // 2,
+        common_bins=False,
+        facet_kws={"sharey": False},
         hue="value",
-        kind="strip",
+        kind="violin",
         legend="full" if results.attack.unique().size > 1 else "auto",
-        palette="flare",
+        split=True,
         x="feature",
         y="class",
     )
-    plot.fig.subptitle(dataset)
-    plot.savefig(__file__[:-2] + f"_{dataset}.pdf", bbox_inches="tight")
+
+    # plot = seaborn.displot(
+    #     data=results,
+    #     col="attack",
+    #     col_wrap=(results.attack.unique().size + 1) // 2,
+    #     common_bins=False,
+    #     facet_kws={"sharey": False},
+    #     hue="class",
+    #     kind="hist",
+    #     legend="full" if results.attack.unique().size > 1 else "auto",
+    #     stat="count",
+    #     x="feature",
+    #     y="value",
+    #     **dict(discrete=(True, False)),
+    # )
+    plot.fig.suptitle(dataset)
+    plot.savefig(__file__[:-3] + f"_{dataset}.pdf")
     return None
 
 
-def main(alpha, attacks, budget, dataset, epochs):
+def main(alpha, attacks, budget, dataset, epochs, points):
     """
     This function is the main entry point for the saliency analysis.
     Specifically, this: (1) loads and trains a model for each dataset, (2)
@@ -61,6 +91,8 @@ def main(alpha, attacks, budget, dataset, epochs):
     :type dataset: str
     :param epochs: number of attack iterations
     :type epochs: int
+    :param points: maximum number of points per plot
+    :type points: int
     :return: None
     :rtype: NoneType
     """
@@ -79,11 +111,7 @@ def main(alpha, attacks, budget, dataset, epochs):
         x = train_x.clone()
         y = train_y.clone()
     template = getattr(dlm.templates, dataset)
-    results = pandas.DataFrame(
-        0,
-        index=range(len(attacks) * x.numel()),
-        columns=("attack", "class", "feature", "value"),
-    )
+    results = pandas.DataFrame(columns=("attack", "class", "feature", "value"))
     model = (
         dlm.CNNClassifier(**template.cnn)
         if hasattr(template, "cnn")
@@ -112,13 +140,16 @@ def main(alpha, attacks, budget, dataset, epochs):
         print(f"Attacking with {a.__name__}... ({i} of {len(attacks)})")
         attack = a(alpha, epochs, norms[a], model)
         p = attack.craft(x, y).flatten()
-        attack_results = torch.vstack((labels, features, p)).T
+
+        # exclude features that were not perturbed
+        attack_results = torch.vstack((labels, features, p))[:, p.nonzero().flatten()].T
         res = pandas.DataFrame(attack_results, columns=("class", "feature", "value"))
         res["attack"] = attack.name
         results = pandas.concat((results, res))
 
     # plot results and save
-    plot(dataset, results)
+    # plot(dataset, results.sample(n=min(len(results), points)))
+    plot(dataset, results.reset_index())
     return None
 
 
@@ -189,6 +220,13 @@ if __name__ == "__main__":
         help="Number of attack iterations",
         type=int,
     )
+    parser.add_argument(
+        "-p",
+        "--points",
+        default=100000,
+        help="Maximum number of points per plot",
+        type=int,
+    )
     args = parser.parse_args()
     main(
         alpha=args.alpha,
@@ -196,5 +234,6 @@ if __name__ == "__main__":
         budget=args.budget,
         dataset=args.dataset,
         epochs=args.epochs,
+        points=args.points,
     )
     raise SystemExit(0)
