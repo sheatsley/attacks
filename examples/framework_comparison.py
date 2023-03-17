@@ -994,6 +994,7 @@ def plot(results):
     :rtype: NoneType
     """
     plot = seaborn.relplot(
+        alpha=0.7,
         data=results,
         col="dataset",
         col_wrap=(results.dataset.unique().size + 1) // 2,
@@ -1001,10 +1002,10 @@ def plot(results):
         hue="framework",
         kind="scatter",
         legend="full" if results.dataset.unique().size > 1 else "auto",
+        s=100,
         style="attack",
         x="budget",
         y="accuracy",
-        **dict(alpha=0.7, s=100),
     )
     plot.map_dataframe(
         color="r",
@@ -1023,7 +1024,7 @@ def plot(results):
         ax.xaxis.set_minor_formatter(matplotlib.ticker.PercentFormatter(1))
         ax.xaxis.set_minor_locator(matplotlib.ticker.LogLocator(subs=(1, 3, 5, 8)))
         ax.yaxis.set_major_formatter(matplotlib.ticker.PercentFormatter(1))
-    plot.savefig(__file__[:-2] + "pdf")
+    plot.savefig(__file__[:-3] + ".pdf")
     return None
 
 
