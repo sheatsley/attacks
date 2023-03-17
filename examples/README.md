@@ -27,3 +27,5 @@ following known attacks:[APGD-CE](https://arxiv.org/pdf/2003.01690.pdf),
 * `perturbation_visualization.py`: visualizes perturbations of known attacks
     and plots one example of a worst-, average-, and best-case perturbation (as
     measured by lp norm).
+* `saliency_analysis.py`: plots the class-specific mean and standard deviation of
+    perturbation values over the feature space across known attacks.
