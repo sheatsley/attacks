@@ -8,6 +8,7 @@ import argparse
 
 import aml
 import dlm
+import matplotlib
 import mlds
 import pandas
 import seaborn
@@ -17,10 +18,10 @@ import torch
 def plot(dataset, results):
     """
     This function plots the perturbation saliency results. Specifically, this
-    produces n strip plots (where n is the number of attacks) of the
-    perturbations with classes on the y-axis and the feature number on the
-    x-axis. Perturbation values are encoded by hue. The plot is written to
-    disk in the current directory.
+    produces n scatter plots (where n is the number of attacks) of the mean of
+    the perturbations with classes on the y-axis and the feature number on the
+    x-axis. Perturbation values are encoded by hue and error bars represent the
+    standard deviation. The plot is written to disk in the current directory.
 
     :param dataset: dataset used
     :type dataset: str
@@ -29,53 +30,32 @@ def plot(dataset, results):
     :return: None
     :rtype: NoneType
     """
-    # plot = seaborn.relplot(
-    #     data=results,
-    #     col="attack",
-    #     col_wrap=(results.attack.unique().size + 1) // 2,
-    #     facet_kws={"sharey": False},
-    #     hue="class",
-    #     kind="scatter",
-    #     legend="full" if results.attack.unique().size > 1 else "auto",
-    #     x="feature",
-    #     y="value",
-    #     **dict(alpha=0.01),
-    # )
 
-    plot = seaborn.catplot(
+    # https://github.com/mwaskom/seaborn/blob/a69eb55f2d89b00e1d31b9c9ec29982fe0a187cb/seaborn/regression.py#L397
+    seaborn.set_style("whitegrid")
+    matplotlib.rcParams["lines.linewidth"] = 0.01
+    plot = seaborn.lmplot(
         data=results,
         col="attack",
         col_wrap=(results.attack.unique().size + 1) // 2,
-        common_bins=False,
-        facet_kws={"sharey": False},
-        hue="value",
-        kind="violin",
+        facet_kws=dict(sharey=False),
+        fit_reg=False,
+        hue="class",
         legend="full" if results.attack.unique().size > 1 else "auto",
-        split=True,
+        scatter_kws=dict(alpha=0.8, facecolors="none", linewidths=0.5, s=10),
         x="feature",
-        y="class",
+        y="value",
+        x_ci="sd",
+        x_bins=int(results["feature"].max() + 1),
+        x_jitter=1 / results["class"].max(),
+        y_jitter=1 / results["class"].max(),
     )
-
-    # plot = seaborn.displot(
-    #     data=results,
-    #     col="attack",
-    #     col_wrap=(results.attack.unique().size + 1) // 2,
-    #     common_bins=False,
-    #     facet_kws={"sharey": False},
-    #     hue="class",
-    #     kind="hist",
-    #     legend="full" if results.attack.unique().size > 1 else "auto",
-    #     stat="count",
-    #     x="feature",
-    #     y="value",
-    #     **dict(discrete=(True, False)),
-    # )
-    plot.fig.suptitle(dataset)
+    plot.fig.suptitle(f"dataset = {dataset}")
     plot.savefig(__file__[:-3] + f"_{dataset}.pdf")
     return None
 
 
-def main(alpha, attacks, budget, dataset, epochs, points):
+def main(alpha, attacks, budget, dataset, epochs):
     """
     This function is the main entry point for the saliency analysis.
     Specifically, this: (1) loads and trains a model for each dataset, (2)
@@ -91,8 +71,6 @@ def main(alpha, attacks, budget, dataset, epochs, points):
     :type dataset: str
     :param epochs: number of attack iterations
     :type epochs: int
-    :param points: maximum number of points per plot
-    :type points: int
     :return: None
     :rtype: NoneType
     """
@@ -118,6 +96,7 @@ def main(alpha, attacks, budget, dataset, epochs, points):
         else dlm.MLPClassifier(**template.mlp)
     )
     model.fit(train_x, train_y)
+    print(f"Crafting set: ({x.size(0), x.size(1)}) ✕ ({y.numel()},)")
     size = int(x.size(1) ** (1 / 2))
     l0 = int(x.size(1) * budget) + 1
     l2 = size * budget
@@ -148,7 +127,6 @@ def main(alpha, attacks, budget, dataset, epochs, points):
         results = pandas.concat((results, res))
 
     # plot results and save
-    # plot(dataset, results.sample(n=min(len(results), points)))
     plot(dataset, results.reset_index())
     return None
 
@@ -220,13 +198,6 @@ if __name__ == "__main__":
         help="Number of attack iterations",
         type=int,
     )
-    parser.add_argument(
-        "-p",
-        "--points",
-        default=100000,
-        help="Maximum number of points per plot",
-        type=int,
-    )
     args = parser.parse_args()
     main(
         alpha=args.alpha,
@@ -234,6 +205,5 @@ if __name__ == "__main__":
         budget=args.budget,
         dataset=args.dataset,
         epochs=args.epochs,
-        points=args.points,
     )
     raise SystemExit(0)
