@@ -4,7 +4,7 @@ This directory contains various examples showing how `aml` can be used. Note
 that these examples will write figures to this directory. All of these examples
 depend on [dlm](https://github.com/sheatsley/models)
 [mlds](https://github.com/sheatsley/datasets) repos and investigate the
-following known attacks:[APGD-CE](https://arxiv.org/pdf/2003.01690.pdf),
+following known attacks: [APGD-CE](https://arxiv.org/pdf/2003.01690.pdf),
 [APGD-DLR](https://arxiv.org/pdf/2003.01690.pdf),
 [BIM](https://arxiv.org/pdf/1611.01236.pdf),
 [CW-L2](https://arxiv.org/pdf/1608.04644.pdf),
