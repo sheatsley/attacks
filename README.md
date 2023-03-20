@@ -47,13 +47,13 @@ hyperparameters optimization (e.g.,
 
 ## Table of Contents
 
-* [Quick start](#quick-start)
+* [Quick Start](#quick-start)
 * [Advanced Usage](#advanced-usage)
 * [Repo Overview](#repo-overview)
 * [Misc](#misc)
 * [Citation](#citation)
 
-## Quick start
+## Quick Start
 
 This repo is, by design, to be interoperable with the following
 [datasets](https://github.com/sheatsley/datasets) and
@@ -65,10 +65,10 @@ an editable version of this repo via `pip install -e`. Afterwards, you can
 craft adversarial examples using any of the eight attacks above as follows:
 
 ```
-import aml # ML robustness evaluations with PyTorch
-import dlm  # Pytorch-based deep learning models with scikit-learn-like interfaces
-import mlds  # Scripts for downloading, preprocessing, and numpy-ifying popular machine learning datasets
-import torch  # Tensors and Dynamic neural networks in Python with strong GPU acceleration
+import aml 
+import dlm  
+import mlds  
+import torch  
 
 # load data
 mnist = mlds.mnist
