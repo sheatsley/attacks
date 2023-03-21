@@ -50,6 +50,7 @@ hyperparameters optimization (e.g.,
 * [Quick Start](#quick-start)
 * [Advanced Usage](#advanced-usage)
 * [Repo Overview](#repo-overview)
+* [Parameters](#parameters)
 * [Misc](#misc)
 * [Citation](#citation)
 
@@ -93,6 +94,9 @@ perturbations = pgd.craft(x_test, y_test)
 accuracy = model.accuracy(x_test + perturbations, y_test)
 mean_budget = perturbations.norm(torch.inf, 1).mean()
 ```
+
+Other uses can be found in the
+[examples](https://github.com/sheatsley/attacks/tree/main/examples) directory.
 
 ## Advanced Usage
 
