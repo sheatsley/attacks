@@ -174,7 +174,11 @@ class Adversary:
         :return: adversarial perturbations
         :rtype: generator of torch Tensor objects (n, m)
         """
-        lb, ub = torch.tensor(self.hparam_bounds).repeat(y.numel(), 1).unbind(1)
+        lb, ub = (
+            torch.tensor(self.hparam_bounds, device=b.device)
+            .repeat(y.numel(), 1)
+            .unbind(1)
+        )
         for h in range(1, self.hparam_steps + 1):
             p = self.atk.craft(x, y, b, reset)
             self.atk.hparam = f"BS Step {h} "
