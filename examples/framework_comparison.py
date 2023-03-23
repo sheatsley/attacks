@@ -621,13 +621,15 @@ def fab(art_classifier, clip, fb_classifier, frameworks, parameters, x, y):
     return tuple([fw for fw in (at_adv, ta_adv) if fw is not None] + [aml_adv])
 
 
-def init_art_classifier(clip, model, features):
+def init_art_classifier(clip, device, model, features):
     """
     This method instantiates an art (pytorch) classifier (as required by art
     evasion attacks).
 
     :param clip: minimum and maximum feature ranges
     :type clip: torch Tensor object (2, m)
+    :param device: hardware device to use
+    :param device: str
     :param features: number of features (used for determing budgets)
     :type features: int
     :param model: neural network
@@ -645,10 +647,11 @@ def init_art_classifier(clip, model, features):
         optimizer=model.optimizer,
         input_shape=(features,),
         nb_classes=model.classes,
+        device_type="gpu" if device == "cuda" else device,
     )
 
 
-def init_attacks(alpha, budget, clip, epochs, features, frameworks, model):
+def init_attacks(alpha, budget, clip, device, epochs, features, frameworks, model):
     """
     This function instantiates attacks from aml and other supported libraries.
     Specifically, it: (1) computes lp budgets and (2) prepares framework
@@ -660,6 +663,8 @@ def init_attacks(alpha, budget, clip, epochs, features, frameworks, model):
     :type budget: float
     :param clip: minimum and maximum feature ranges
     :type clip: torch Tensor object (2, m)
+    :param device: hardware device to use
+    :param device: str
     :param epochs: number of attack iterations
     :type epochs: int
     :param dataset: dataset to use
@@ -684,13 +689,17 @@ def init_attacks(alpha, budget, clip, epochs, features, frameworks, model):
     linf = budget
     params = {"alpha": alpha, "epochs": epochs, "model": model}
     art_model = (
-        init_art_classifier(clip, model, features) if "art" in frameworks else None
+        init_art_classifier(clip, device, model, features)
+        if "art" in frameworks
+        else None
     )
-    fb_model = init_fb_classifier(clip, model) if "foolbox" in frameworks else None
+    fb_model = (
+        init_fb_classifier(clip, device, model) if "foolbox" in frameworks else None
+    )
     return params, art_model, fb_model, l0, l2, linf
 
 
-def init_data(dataset, pretrained):
+def init_data(dataset, device, pretrained):
     """
     This function obtains all necessary prerequisites for crafting adversarial
     examples. Specifically, this: (1) loads data, (2) determines clipping
@@ -699,6 +708,8 @@ def init_data(dataset, pretrained):
 
     :param dataset: dataset to load, analyze, and train with
     :type dataset: str
+    :param device: hardware device to use
+    :param device: str
     :param pretrained: use a pretrained model, if possible
     :type pretrained: bool
     :return: test data, clips, model, and test accuracy
@@ -712,23 +723,25 @@ def init_data(dataset, pretrained):
     # load dataset and determine clips (non-image datasets may not be 0-1)
     data = getattr(mlds, dataset)
     try:
-        train_x = torch.from_numpy(data.train.data)
-        train_y = torch.from_numpy(data.train.labels).long()
-        x = torch.from_numpy(data.test.data)
-        y = torch.from_numpy(data.test.labels).long()
+        train_x = torch.from_numpy(data.train.data).to(device)
+        train_y = torch.from_numpy(data.train.labels).long().to(device)
+        x = torch.from_numpy(data.test.data).to(device)
+        y = torch.from_numpy(data.test.labels).long().to(device)
     except AttributeError:
-        train_x = torch.from_numpy(data.dataset.data)
-        train_y = torch.from_numpy(data.dataset.labels).long()
-        x = train_x.clone()
-        y = train_y.clone()
+        train_x = torch.from_numpy(data.dataset.data).to(device)
+        train_y = torch.from_numpy(data.dataset.labels).long().to(device)
+        x = train_x.clone().to(device)
+        y = train_y.clone().to(device)
     clip = torch.stack((x.min(0).values.clamp(max=0), x.max(0).values.clamp(min=1)))
 
     # load model hyperparameters and train a model (or load a saved one)
     template = getattr(dlm.templates, dataset)
     model = (
-        dlm.CNNClassifier(**template.cnn)
+        dlm.CNNClassifier(**template.cnn, auto_batch=device == "cuda", device=device)
         if hasattr(template, "cnn")
-        else dlm.MLPClassifier(**template.mlp)
+        else dlm.MLPClassifier(
+            **template.mlp, auto_batch=device == "cuda", device=device
+        )
     )
     model.verbosity = 0
     try:
@@ -746,13 +759,15 @@ def init_data(dataset, pretrained):
     return (x, y), clip, model, test_acc.item()
 
 
-def init_fb_classifier(clip, model):
+def init_fb_classifier(clip, device, model):
     """
     This method instantiates an art (pytorch) classifier (as required by foolbox
     evasion attacks).
 
     :param clip: minimum and maximum feature ranges
     :type clip: torch Tensor object (2, m)
+    :param device: hardware device to use
+    :param device: str
     :param model: neural network
     :type model: dlm LinearClassifier-inherited object
     :return: a foolbox (PyTorch) classifier
@@ -764,6 +779,7 @@ def init_fb_classifier(clip, model):
     return PyTorchModel(
         model=model.model,
         bounds=(mins.min().item(), maxs.max().item()),
+        device=device,
     )
 
 
@@ -891,7 +907,9 @@ def linf_proj(linf, p):
     return p.clamp(-linf, linf)
 
 
-def main(alpha, attacks, budget, datasets, epochs, frameworks, pretrained, trials):
+def main(
+    alpha, attacks, budget, datasets, device, epochs, frameworks, pretrained, trials
+):
     """
     This function is the main entry point for the framework comparison
     benchmark. Specifically this: (1) loads and trains a model for each
@@ -906,6 +924,8 @@ def main(alpha, attacks, budget, datasets, epochs, frameworks, pretrained, trial
     :type budget: float
     :param datasets: dataset(s) to use
     :type datasets: tuple of str
+    :param device: hardware device to use
+    :param device: str
     :param epochs: number of attack iterations
     :type epochs: int
     :param frameworks: frameworks to compare against
@@ -940,9 +960,9 @@ def main(alpha, attacks, budget, datasets, epochs, frameworks, pretrained, trial
         # load data, clipping bounds, attacks, and train a model
         for t in range(trials):
             print(f"Preparing {d} model... Trial {t} of {trials}", end="\r")
-            (x, y), clip, model, test_acc = init_data(d, pretrained)
+            (x, y), clip, model, test_acc = init_data(d, device, pretrained)
             parameters, art_model, fb_model, l0, l2, linf = init_attacks(
-                alpha, budget, clip, epochs, x.size(1), frameworks, model
+                alpha, budget, clip, device, epochs, x.size(1), frameworks, model
             )
             for a, n in norms.items():
                 norms[a] = n._replace(
@@ -1241,6 +1261,12 @@ if __name__ == "__main__":
         nargs="+",
     )
     parser.add_argument(
+        "--device",
+        choices=("cpu", "cuda", "mps"),
+        default="cpu",
+        help="Hardware device to use",
+    )
+    parser.add_argument(
         "-e",
         "--epochs",
         default=100,
@@ -1275,6 +1301,7 @@ if __name__ == "__main__":
         attacks=args.attacks,
         budget=args.budget,
         datasets=args.datasets,
+        device=args.device,
         epochs=args.epochs,
         frameworks=tuple(args.frameworks),
         pretrained=args.pretrained,
