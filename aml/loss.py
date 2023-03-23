@@ -215,7 +215,11 @@ class DLRLoss(torch.nn.Module):
         super().__init__()
         self.classes = classes
         self.minimum = minimum
-        self.d = lambda x: x[:, 0].sub(x[:, 2]) if classes > 2 else torch.tensor(1.0)
+        self.d = (
+            lambda x: x[:, 0].sub(x[:, 2])
+            if classes > 2
+            else torch.tensor(1.0, device=x.device())
+        )
         return None
 
     def forward(self, logits, y, yt=None):
@@ -319,6 +323,8 @@ def record(loss, logits, y, yt):
     """
     classes = y.numel() // yt.numel()
     offset = yt if y.numel() != yt.numel() else 0
-    loss = loss.detach().take(torch.arange(0, y.numel(), classes).add(offset))
+    loss = loss.detach().take(
+        torch.arange(0, y.numel(), classes, device=loss.device).add(offset)
+    )
     accuracy = logits.detach()[::classes].argmax(1).eq(yt)
     return loss, accuracy
