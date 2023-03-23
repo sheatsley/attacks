@@ -262,15 +262,23 @@ class MomentumBestStart(torch.optim.Optimizer):
                 state["best_p"] = p.clone()
                 state["best_g"] = torch.zeros_like(p)
                 state["epoch"] = 0
-                state["lr"] = torch.full((p.size(0), 1), 2 * group["epsilon"])
-                state["lr_updated"] = torch.zeros(p.size(0), dtype=torch.bool)
-                state["num_l_updates"] = torch.zeros(p.size(0), dtype=torch.int)
-                state["best_l"] = torch.full(
-                    (p.size(0),), -torch.inf if maximize else torch.inf
+                state["lr"] = torch.full(
+                    (p.size(0), 1), 2 * group["epsilon"], device=p.device
                 )
-                state["best_l_updated"] = torch.zeros(p.size(0), dtype=torch.bool)
+                state["lr_updated"] = torch.zeros(
+                    p.size(0), device=p.device, dtype=torch.bool
+                )
+                state["num_l_updates"] = torch.zeros(
+                    p.size(0), device=p.device, dtype=torch.int
+                )
+                state["best_l"] = torch.full(
+                    (p.size(0),), -torch.inf if maximize else torch.inf, device=p.device
+                )
+                state["best_l_updated"] = torch.zeros(
+                    p.size(0), device=p.device, dtype=torch.bool
+                )
                 state["momentum_buffer"] = p.clone()
-                state["prev_l"] = torch.zeros(p.size(0))
+                state["prev_l"] = torch.zeros(p.size(0), device=p.device)
                 state["step"] = 0
         return None
 
