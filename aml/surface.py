@@ -84,7 +84,7 @@ class Surface:
         xj, yj, pj, cj = (
             (
                 x.repeat_interleave(cj, dim=0),
-                torch.arange(cj).repeat(x.size(0)),
+                torch.arange(cj, device=p.device).repeat(x.size(0)),
                 p.repeat_interleave(cj, dim=0),
                 cj,
             )
