@@ -1,8 +1,9 @@
 # Adversarial Machine Learning Examples
 
 This directory contains various examples showing how `aml` can be used. Note
-that these examples will write figures to this directory. All of these examples
-depend on [dlm](https://github.com/sheatsley/models)
+that these examples will write figures to this directory (and depend on
+`matplotlib` or `seaborn`). All of these examples depend on
+[dlm](https://github.com/sheatsley/models)
 [mlds](https://github.com/sheatsley/datasets) repos and investigate the
 following known attacks: [APGD-CE](https://arxiv.org/pdf/2003.01690.pdf),
 [APGD-DLR](https://arxiv.org/pdf/2003.01690.pdf),
