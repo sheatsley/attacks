@@ -155,22 +155,24 @@ class MaxStart:
     :func:`linf`: applies a random-start for l∞-based threat models.
     """
 
-    def __init__(self, norm, epsilon, minimum=1e-12):
+    def __init__(self, device, epsilon, norm, minimum=1e-12):
         """
         This method instantiates a MaxStart object. It accepts lp-norm threat
         model as an argument to determine which max start strategy to apply.
 
-        :param norm: lp-norm threat model
-        :type norm: 0, 2, or inf
+        :param device: hardware device
+        :type device: str
         :param epsilon: maximum allowable distortion
         :type epsilon: float
+        :param norm: lp-norm threat model
+        :type norm: 0, 2, or inf
         :param minimum: minimum gradient value (to mitigate underflow in l2)
         :type minimum: float
         :return: a max random start strategy
         :rtype: MaxStart object
         """
         self.norm = norm
-        self.epsilon = torch.tensor(epsilon)
+        self.epsilon = torch.tensor(epsilon, device=device)
         self.minimum = minimum
         self.lp = {0: self.l0, 2: self.l2, torch.inf: self.linf}[norm]
         return None
@@ -206,9 +208,15 @@ class MaxStart:
         :rtype: torch Tensor object (n, m)
         """
         p.uniform_(-1, 1)
-        shuffle = torch.randint(p.size(1), p.size()).argsort()
-        keep = torch.arange(1, p.size(1) + 1).repeat(p.size(0), 1).add_(epsilon)
-        return p.scatter_(1, shuffle, p.where(keep > p.size(1), torch.tensor(0)))
+        shuffle = torch.randint(p.size(1), p.size(), device=p.device).argsort()
+        keep = (
+            torch.arange(1, p.size(1) + 1, device=p.device)
+            .repeat(p.size(0), 1)
+            .add_(epsilon)
+        )
+        return p.scatter_(
+            1, shuffle, p.where(keep > p.size(1), torch.tensor(0, device=p.device))
+        )
 
     def l2(self, p, epsilon):
         """
@@ -259,12 +267,14 @@ class ShrinkingStart(MaxStart):
     :func:`__call__`: shrinks epsilon and applies a random-start
     """
 
-    def __init__(self, norm, epsilon):
+    def __init__(self, device, epsilon, norm):
         """
         This method instantiates a ShrinkingStart object. It accepts the
         lp-norm threat model to determine which max start strategy to apply as
         well as the maximum allowable distortion.
 
+        :param device: hardware device
+        :type device: str
         :param norm: lp-norm threat model
         :type norm: 0, 2, or inf
         :param epsilon: maximum allowable distortion
@@ -272,7 +282,7 @@ class ShrinkingStart(MaxStart):
         :return: a shrinking random start strategy
         :rtype: ShrinkingStart object
         """
-        super().__init__(norm, epsilon)
+        super().__init__(device, epsilon, norm)
         return None
 
     def __call__(self, p, o, **_):
@@ -294,5 +304,6 @@ class ShrinkingStart(MaxStart):
         # set the "smallest" norm to zero if we have yet to craft
         o = o if o.nan_to_num(posinf=0).nonzero().any() else o.nan_to_num(posinf=0)
         on = o.norm(self.norm, dim=1, keepdim=True)
+        self.epsilon = self.epsilon.to(p.device)
         epsilon = on.where(on < self.epsilon, self.epsilon).div(2)
         return self.lp(p, epsilon.int() if self.norm == 0 else epsilon)
