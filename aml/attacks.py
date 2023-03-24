@@ -362,7 +362,6 @@ class Attack:
         random_start,
         saliency_map,
         alpha_override=True,
-        device="cpu",
         statistics=False,
         verbosity=0.25,
     ):
@@ -374,8 +373,6 @@ class Attack:
 
         :param alpha_override: override manual alpha for certain components
         :type alpha_override: bool
-        :param device: hardware device to instantiate tensors on
-        :type device: str
         :param early_termination: whether misclassified inputs are perturbed
         :type early_termination: bool
         :param epochs: number of optimization steps to perform
@@ -429,7 +426,7 @@ class Attack:
 
         # set & save attack parameters, and build short attack name
         self.alpha = alpha
-        self.device = device
+        self.device = model.device
         self.epochs = epochs
         self.epsilon = epsilon
         self.et = early_termination
@@ -639,9 +636,13 @@ class Attack:
         """
 
         # instantiate traveler, surface, and necessary subcomponents
-        attack_loss = self.loss_class(classes=self.model.classes)
-        norm = self.norm_class(epsilon=self.epsilon, maximize=self.loss_class.max_obj)
-        random_start = self.random_class(norm=self.lp, epsilon=self.epsilon)
+        attack_loss = self.loss_class(classes=self.model.classes, device=self.device)
+        norm = self.norm_class(
+            device=self.device, epsilon=self.epsilon, maximize=self.loss_class.max_obj
+        )
+        random_start = self.random_class(
+            device=self.device, epsilon=self.epsilon, norm=self.lp
+        )
         saliency_map = self.saliency_class(classes=self.model.classes, p=self.lp)
         aml_opt = {
             "attack_loss": attack_loss,
