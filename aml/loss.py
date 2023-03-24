@@ -88,7 +88,7 @@ class CWLoss(torch.nn.Module):
     p_req = True
     max_obj = False
 
-    def __init__(self, classes, c=1.0, k=0.0):
+    def __init__(self, classes, device, c=1.0, k=0.0):
         """
         This method instantiates a CWLoss object. It accepts four arguments:
         (1) the number of classes (so that logit differences can be computed
@@ -99,8 +99,10 @@ class CWLoss(torch.nn.Module):
         logit and the next largest logit). Finally, a reference to c is saved
         and exposed as an optimizable hyperparameter.
 
-        :param num_classses: number of classes
+        :param classses: number of classes
         :type classes: int
+        :param device: hardware device
+        :type device: str
         :param norm: lp-space to project gradients into
         :type norm: supported ord arguments in torch linalg.vector_norm function
         :param c: importance of misclassification over imperceptability
@@ -112,7 +114,7 @@ class CWLoss(torch.nn.Module):
         """
         super().__init__()
         self.classes = classes
-        self.c = torch.tensor((c,))
+        self.c = torch.tensor((c,), device=device)
         self.k = k
         self.hparam = ("c", self.c)
         return None
@@ -198,7 +200,7 @@ class DLRLoss(torch.nn.Module):
     p_req = False
     max_obj = True
 
-    def __init__(self, classes, minimum=1e-8):
+    def __init__(self, classes, minimum=1e-8, **_):
         """
         This method instantiates an IdentityLoss object. It accepts the number
         of classes (so that logit differences can be computed accurately).
@@ -218,7 +220,7 @@ class DLRLoss(torch.nn.Module):
         self.d = (
             lambda x: x[:, 0].sub(x[:, 2])
             if classes > 2
-            else torch.tensor(1.0, device=x.device())
+            else torch.tensor(1.0, device=x.device)
         )
         return None
 
@@ -323,8 +325,8 @@ def record(loss, logits, y, yt):
     """
     classes = y.numel() // yt.numel()
     offset = yt if y.numel() != yt.numel() else 0
+    accuracy = logits.detach()[::classes].argmax(1).eq(yt)
     loss = loss.detach().take(
         torch.arange(0, y.numel(), classes, device=loss.device).add(offset)
     )
-    accuracy = logits.detach()[::classes].argmax(1).eq(yt)
     return loss, accuracy
