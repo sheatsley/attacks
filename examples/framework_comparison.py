@@ -77,7 +77,7 @@ def apgdce(art_classifier, clip, fb_classifier, frameworks, parameters, x, y):
                     batch_size=x.size(0),
                     loss_type="cross_entropy",
                     verbose=False,
-                ).generate(x=x.clone().numpy())
+                ).generate(x=x.clone().cpu().numpy())
             ),
             "ART",
         )
@@ -164,7 +164,7 @@ def apgddlr(art_classifier, clip, fb_classifier, frameworks, parameters, x, y):
                     batch_size=x.size(0),
                     loss_type="difference_logits_ratio",
                     verbose=False,
-                ).generate(x=x.clone().numpy())
+                ).generate(x=x.clone().cpu().numpy())
             ),
             "ART",
         )
@@ -261,7 +261,7 @@ def bim(art_classifier, clip, fb_classifier, frameworks, parameters, x, y):
                     targeted=False,
                     batch_size=x.size(0),
                     verbose=False,
-                ).generate(x=x.clone().numpy())
+                ).generate(x=x.clone().cpu().numpy())
             ),
             "ART",
         )
@@ -404,7 +404,7 @@ def cwl2(art_classifier, clip, fb_classifier, frameworks, parameters, x, y):
                     max_doubling=binary_search_steps // 2,
                     batch_size=x.size(0),
                     verbose=False,
-                ).generate(x=x.clone().numpy())
+                ).generate(x=x.clone().cpu().numpy())
             ),
             "ART",
         )
@@ -509,7 +509,7 @@ def df(art_classifier, clip, fb_classifier, frameworks, parameters, x, y):
                     nb_grads=nb_grads,
                     batch_size=x.size(0),
                     verbose=False,
-                ).generate(x=x.clone().numpy())
+                ).generate(x=x.clone().cpu().numpy())
             ),
             "ART",
         )
@@ -699,7 +699,7 @@ def init_attacks(alpha, budget, clip, device, epochs, features, frameworks, mode
     return params, art_model, fb_model, l0, l2, linf
 
 
-def init_data(dataset, device, pretrained):
+def init_data(dataset, device, pretrained, utilization):
     """
     This function obtains all necessary prerequisites for crafting adversarial
     examples. Specifically, this: (1) loads data, (2) determines clipping
@@ -712,6 +712,8 @@ def init_data(dataset, device, pretrained):
     :param device: str
     :param pretrained: use a pretrained model, if possible
     :type pretrained: bool
+    :param utilization: target gpu memory utilization (useful with low vram)
+    :type utilization: float
     :return: test data, clips, model, and test accuracy
     :rtype: tuple of:
         - tuple of torch Tensor objects (n, m) and (n,)
@@ -735,15 +737,13 @@ def init_data(dataset, device, pretrained):
     clip = torch.stack((x.min(0).values.clamp(max=0), x.max(0).values.clamp(min=1)))
 
     # load model hyperparameters and train a model (or load a saved one)
+    params = dict(auto_batch=utilization, device=device, verbosity=0)
     template = getattr(dlm.templates, dataset)
     model = (
-        dlm.CNNClassifier(**template.cnn, auto_batch=device == "cuda", device=device)
+        dlm.CNNClassifier(**template.cnn | params)
         if hasattr(template, "cnn")
-        else dlm.MLPClassifier(
-            **template.mlp, auto_batch=device == "cuda", device=device
-        )
+        else dlm.MLPClassifier(**template.mlp | params)
     )
-    model.verbosity = 0
     try:
         if pretrained:
             with open(f"/tmp/framework_comparison_{dataset}_model.pkl", "rb") as f:
@@ -850,7 +850,7 @@ def jsma(art_classifier, clip, fb_classifier, frameworks, parameters, x, y):
                     gamma=gamma,
                     batch_size=x.size(0),
                     verbose=False,
-                ).generate(x=x.clone().numpy())
+                ).generate(x=x.clone().cpu().numpy())
             ),
             "ART",
         )
@@ -908,7 +908,16 @@ def linf_proj(linf, p):
 
 
 def main(
-    alpha, attacks, budget, datasets, device, epochs, frameworks, pretrained, trials
+    alpha,
+    attacks,
+    budget,
+    datasets,
+    device,
+    epochs,
+    frameworks,
+    pretrained,
+    trials,
+    utilization,
 ):
     """
     This function is the main entry point for the framework comparison
@@ -934,6 +943,8 @@ def main(
     :type pretrained: bool
     :param trials: number of experiment trials
     :type trials: int
+    :param utilization: target gpu memory utilization (useful with low vram)
+    :type utilization: float
     :return: None
     :rtype: NoneType
     """
@@ -960,7 +971,9 @@ def main(
         # load data, clipping bounds, attacks, and train a model
         for t in range(trials):
             print(f"Preparing {d} model... Trial {t} of {trials}", end="\r")
-            (x, y), clip, model, test_acc = init_data(d, device, pretrained)
+            (x, y), clip, model, test_acc = init_data(
+                d, device, pretrained, utilization
+            )
             parameters, art_model, fb_model, l0, l2, linf = init_attacks(
                 alpha, budget, clip, device, epochs, x.size(1), frameworks, model
             )
@@ -1122,7 +1135,7 @@ def pgd(art_classifier, clip, fb_classifier, frameworks, parameters, x, y):
                     random_eps=True,
                     summary_writer=False,
                     verbose=False,
-                ).generate(x=x.clone().numpy())
+                ).generate(x=x.clone().cpu().numpy())
             ),
             "ART",
         )
@@ -1295,6 +1308,13 @@ if __name__ == "__main__":
         help="Number of experiment trials (set to 1 if pretrained is true)",
         type=int,
     )
+    parser.add_argument(
+        "-u",
+        "--utilization",
+        default=1.0,
+        help="Target GPU utilization (useful with GPUs that have low VRAM)",
+        type=float,
+    )
     args = parser.parse_args()
     main(
         alpha=args.alpha,
@@ -1306,5 +1326,6 @@ if __name__ == "__main__":
         frameworks=tuple(args.frameworks),
         pretrained=args.pretrained,
         trials=1 if args.pretrained else args.trials,
+        utilization=args.utilization,
     )
     raise SystemExit(0)
