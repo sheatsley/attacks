@@ -998,7 +998,7 @@ def main(
                 # ensure adversarial examples comply with clips and epsilon
                 for adv, fw in advs:
                     print(f"Computing results for {fw} {a.__name__}...", end="\r")
-                    adv = adv.clamp(*clip.unbind())
+                    adv = adv.to(device).clamp(*clip.unbind())
                     p = norms[a].projection(norms[a].budget, adv.sub(x))
                     acc = model.accuracy(x + p, y).item()
                     used = p.norm(norms[a].ord, 1).mean().div(norms[a].budget).item()
