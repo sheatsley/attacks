@@ -49,7 +49,7 @@ def apgdce(art_classifier, clip, fb_classifier, frameworks, parameters, verbose,
     :param y: labels of inputs to craft adversarail examples from
     :type x: torch Tensor object (n,)
     :return: APGD-CE adversarial examples
-    :rtype: tuple of tuples: torch Tensor object (n, m) and str
+    :rtype: tuple of tuples: torch Tensor object (n, m), float, and str
     """
     apgdce = aml.attacks.apgdce(**parameters)
     model, eps, eps_step, max_iter, nb_random_init, rho = (
@@ -62,7 +62,8 @@ def apgdce(art_classifier, clip, fb_classifier, frameworks, parameters, verbose,
     )
     art_adv = ta_adv = None
     reset_seeds()
-    aml_adv = (x + apgdce.craft(x, y), "aml")
+    start = time.time()
+    aml_adv = (x + apgdce.craft(x, y), time.time() - start, "aml")
     if "art" in frameworks:
         from art.attacks.evasion import AutoProjectedGradientDescent
 
@@ -71,6 +72,7 @@ def apgdce(art_classifier, clip, fb_classifier, frameworks, parameters, verbose,
             end="\n" if verbose else "\r",
         )
         reset_seeds()
+        start = time.time()
         art_adv = (
             torch.from_numpy(
                 AutoProjectedGradientDescent(
@@ -86,6 +88,7 @@ def apgdce(art_classifier, clip, fb_classifier, frameworks, parameters, verbose,
                     verbose=verbose,
                 ).generate(x=x.clone().cpu().numpy())
             ),
+            time.time() - start,
             "ART",
         )
     if "torchattacks" in frameworks and hasattr(model, "shape"):
@@ -97,6 +100,7 @@ def apgdce(art_classifier, clip, fb_classifier, frameworks, parameters, verbose,
         )
         reset_seeds()
         ta_x = x.clone().unflatten(1, model.shape)
+        start = time.time()
         ta_adv = (
             APGD(
                 model=model,
@@ -112,6 +116,7 @@ def apgdce(art_classifier, clip, fb_classifier, frameworks, parameters, verbose,
             )(inputs=ta_x, labels=y)
             .flatten(1)
             .detach(),
+            time.time() - start,
             "Torchattacks",
         )
     reset_seeds()
@@ -144,7 +149,7 @@ def apgddlr(art_classifier, clip, fb_classifier, frameworks, parameters, verbose
     :param y: labels of inputs to craft adversarail examples from
     :type x: torch Tensor object (n,)
     :return: APGD-DLR adversarial examples
-    :rtype: tuple of tuples: torch Tensor object (n, m) and str
+    :rtype: tuple of tuples: torch Tensor object (n, m), float, and str
     """
     apgddlr = aml.attacks.apgddlr(**parameters)
     model, eps, eps_step, max_iter, nb_random_init, rho = (
@@ -157,7 +162,8 @@ def apgddlr(art_classifier, clip, fb_classifier, frameworks, parameters, verbose
     )
     art_adv = ta_adv = None
     reset_seeds()
-    aml_adv = (x + apgddlr.craft(x, y), "aml")
+    start = time.time()
+    aml_adv = (x + apgddlr.craft(x, y), time.time() - start, "aml")
     if "art" in frameworks and art_classifier.nb_classes > 2:
         from art.attacks.evasion import AutoProjectedGradientDescent
 
@@ -166,6 +172,7 @@ def apgddlr(art_classifier, clip, fb_classifier, frameworks, parameters, verbose
             end="\n" if verbose else "\r",
         )
         reset_seeds()
+        start = time.time()
         art_adv = (
             torch.from_numpy(
                 AutoProjectedGradientDescent(
@@ -181,6 +188,7 @@ def apgddlr(art_classifier, clip, fb_classifier, frameworks, parameters, verbose
                     verbose=verbose,
                 ).generate(x=x.clone().cpu().numpy())
             ),
+            time.time() - start,
             "ART",
         )
     if (
@@ -196,6 +204,7 @@ def apgddlr(art_classifier, clip, fb_classifier, frameworks, parameters, verbose
         )
         reset_seeds()
         ta_x = x.clone().unflatten(1, model.shape)
+        start = time.time()
         ta_adv = (
             APGD(
                 model=model,
@@ -211,6 +220,7 @@ def apgddlr(art_classifier, clip, fb_classifier, frameworks, parameters, verbose
             )(inputs=ta_x, labels=y)
             .flatten(1)
             .detach(),
+            time.time() - start,
             "Torchattacks",
         )
     reset_seeds()
@@ -243,13 +253,14 @@ def bim(art_classifier, clip, fb_classifier, frameworks, parameters, verbose, x,
     :param y: labels of inputs to craft adversarail examples from
     :type x: torch Tensor object (n,)
     :return: BIM adversarial examples
-    :rtype: tuple of tuples: torch Tensor object (n, m) and str
+    :rtype: tuple of tuples: torch Tensor object (n, m), float, and str
     """
     clip_min, clip_max = clip.unbind()
     bim = aml.attacks.bim(**parameters)
     model, eps, nb_iter, eps_iter = bim.model, bim.epsilon, bim.epochs, bim.alpha
     at_adv = art_adv = ch_adv = fb_adv = ta_adv = None
-    aml_adv = (x + bim.craft(x, y), "aml")
+    start = time.time()
+    aml_adv = (x + bim.craft(x, y), time.time() - start, "aml")
     if "advertorch" in frameworks:
         from advertorch.attacks import LinfBasicIterativeAttack as BasicIterativeAttack
 
@@ -257,6 +268,7 @@ def bim(art_classifier, clip, fb_classifier, frameworks, parameters, verbose, x,
             "Producing BIM adversarial examples with AdverTorch...",
             end="\n" if verbose else "\r",
         )
+        start = time.time()
         at_adv = (
             BasicIterativeAttack(
                 predict=model,
@@ -268,6 +280,7 @@ def bim(art_classifier, clip, fb_classifier, frameworks, parameters, verbose, x,
                 clip_max=clip_max,
                 targeted=False,
             ).perturb(x=x.clone(), y=y.clone()),
+            time.time() - start,
             "AdverTorch",
         )
     if "art" in frameworks:
@@ -277,6 +290,7 @@ def bim(art_classifier, clip, fb_classifier, frameworks, parameters, verbose, x,
             "Producing BIM adversarial examples with ART...",
             end="\n" if verbose else "\r",
         )
+        start = time.time()
         art_adv = (
             torch.from_numpy(
                 BasicIterativeMethod(
@@ -289,6 +303,7 @@ def bim(art_classifier, clip, fb_classifier, frameworks, parameters, verbose, x,
                     verbose=verbose,
                 ).generate(x=x.clone().cpu().numpy())
             ),
+            time.time() - start,
             "ART",
         )
     if "cleverhans" in frameworks:
@@ -300,6 +315,7 @@ def bim(art_classifier, clip, fb_classifier, frameworks, parameters, verbose, x,
             "Producing BIM adversarial examples with CleverHans...",
             end="\n" if verbose else "\r",
         )
+        start = time.time()
         ch_adv = (
             basic_iterative_method(
                 model_fn=model,
@@ -316,6 +332,7 @@ def bim(art_classifier, clip, fb_classifier, frameworks, parameters, verbose, x,
                 rand_minmax=0,
                 sanity_checks=False,
             ).detach(),
+            time.time() - start,
             "CleverHans",
         )
     if "foolbox" in frameworks:
@@ -325,13 +342,14 @@ def bim(art_classifier, clip, fb_classifier, frameworks, parameters, verbose, x,
             "Producing BIM adversarial examples with Foolbox...",
             end="\n" if verbose else "\r",
         )
+        start = time.time()
         _, fb_adv, _ = BasicIterativeAttack(
             rel_stepsize=None,
             abs_stepsize=eps_iter,
             steps=nb_iter,
             random_start=False,
         )(fb_classifier, x.clone(), y.clone(), epsilons=eps)
-        fb_adv = (fb_adv, "Foolbox")
+        fb_adv = (fb_adv, time.time() - start, "Foolbox")
     if "torchattacks" in frameworks:
         from torchattacks import BIM
 
@@ -339,10 +357,12 @@ def bim(art_classifier, clip, fb_classifier, frameworks, parameters, verbose, x,
             "Producing BIM adversarial examples with Torchattacks...",
             end="\n" if verbose else "\r",
         )
+        start = time.time()
         ta_adv = (
             BIM(model=model, eps=eps, alpha=eps_iter, steps=nb_iter)(
                 inputs=x.clone(), labels=y
             ),
+            time.time() - start,
             "Torchattacks",
         )
     return tuple(
@@ -379,7 +399,7 @@ def cwl2(art_classifier, clip, fb_classifier, frameworks, parameters, verbose, x
     :param y: labels of inputs to craft adversarail examples from
     :type x: torch Tensor object (n,)
     :return: CW-L2 adversarial examples
-    :rtype: tuple of tuples: torch Tensor object (n, m) and str
+    :rtype: tuple of tuples: torch Tensor object (n, m), float, and str
     """
     clip_min, clip_max = clip.unbind()
     cwl2 = aml.attacks.cwl2(**parameters)
@@ -402,7 +422,8 @@ def cwl2(art_classifier, clip, fb_classifier, frameworks, parameters, verbose, x
         cwl2.surface.loss.c.item(),
     )
     at_adv = art_adv = ch_adv = fb_adv = ta_adv = None
-    aml_adv = (x + cwl2.craft(x, y), "aml")
+    start = time.time()
+    aml_adv = (x + cwl2.craft(x, y), time.time() - start, "aml")
     if "advertorch" in frameworks:
         from advertorch.attacks import CarliniWagnerL2Attack
 
@@ -410,6 +431,7 @@ def cwl2(art_classifier, clip, fb_classifier, frameworks, parameters, verbose, x
             "Producing CW-L2 adversarial examples with AdverTorch...",
             end="\n" if verbose else "\r",
         )
+        start = time.time()
         at_adv = (
             CarliniWagnerL2Attack(
                 predict=model,
@@ -424,6 +446,7 @@ def cwl2(art_classifier, clip, fb_classifier, frameworks, parameters, verbose, x
                 clip_min=clip_min,
                 clip_max=clip_max,
             ).perturb(x=x.clone(), y=y.clone()),
+            time.time() - start,
             "AdverTorch",
         )
     if "art" in frameworks:
@@ -433,6 +456,7 @@ def cwl2(art_classifier, clip, fb_classifier, frameworks, parameters, verbose, x
             "Producing CW-L2 adversarial examples with ART...",
             end="\n" if verbose else "\r",
         )
+        start = time.time()
         art_adv = (
             torch.from_numpy(
                 CarliniWagner(
@@ -449,6 +473,7 @@ def cwl2(art_classifier, clip, fb_classifier, frameworks, parameters, verbose, x
                     verbose=verbose,
                 ).generate(x=x.clone().cpu().numpy())
             ),
+            time.time() - start,
             "ART",
         )
     if "cleverhans" in frameworks:
@@ -458,6 +483,7 @@ def cwl2(art_classifier, clip, fb_classifier, frameworks, parameters, verbose, x
             "Producing CW-L2 adversarial examples with CleverHans...",
             end="\n" if verbose else "\r",
         )
+        start = time.time()
         ch_adv = (
             carlini_wagner_l2(
                 model_fn=model,
@@ -472,6 +498,7 @@ def cwl2(art_classifier, clip, fb_classifier, frameworks, parameters, verbose, x
                 binary_search_steps=binary_search_steps,
                 max_iterations=max_iterations,
             ).detach(),
+            time.time() - start,
             "CleverHans",
         )
     if "foolbox" in frameworks:
@@ -481,6 +508,7 @@ def cwl2(art_classifier, clip, fb_classifier, frameworks, parameters, verbose, x
             "Producing CW-L2 adversarial examples with Foolbox...",
             end="\n" if verbose else "\r",
         )
+        start = time.time()
         _, fb_adv, _ = L2CarliniWagnerAttack(
             binary_search_steps=binary_search_steps,
             steps=max_iterations,
@@ -489,7 +517,7 @@ def cwl2(art_classifier, clip, fb_classifier, frameworks, parameters, verbose, x
             initial_const=initial_const,
             abort_early=True,
         )(fb_classifier, x.clone(), y.clone(), epsilons=cwl2.epsilon)
-        fb_adv = (fb_adv, "Foolbox")
+        fb_adv = (fb_adv, time.time() - start, "Foolbox")
     if "torchattacks" in frameworks:
         from torchattacks import CW
 
@@ -497,6 +525,7 @@ def cwl2(art_classifier, clip, fb_classifier, frameworks, parameters, verbose, x
             "Producing CW-L2 adversarial examples with Torchattacks...",
             end="\n" if verbose else "\r",
         )
+        start = time.time()
         ta_adv = CW(
             model=model,
             c=initial_const,
@@ -506,7 +535,11 @@ def cwl2(art_classifier, clip, fb_classifier, frameworks, parameters, verbose, x
         )(inputs=x.clone(), labels=y)
 
         # torchattack's implementation can return nans
-        ta_adv = (torch.where(ta_adv.isnan(), x, ta_adv), "Torchattacks")
+        ta_adv = (
+            torch.where(ta_adv.isnan(), x, ta_adv),
+            time.time() - start,
+            "Torchattacks",
+        )
     return tuple(
         [fw for fw in (at_adv, art_adv, ch_adv, fb_adv, ta_adv) if fw is not None]
         + [aml_adv]
@@ -539,7 +572,7 @@ def df(art_classifier, clip, fb_classifier, frameworks, parameters, verbose, x, 
     :param y: labels of inputs to craft adversarail examples from
     :type x: torch Tensor object (n,)
     :return: DeepFool adversarial examples
-    :rtype: tuple of tuples: torch Tensor object (n, m) and str
+    :rtype: tuple of tuples: torch Tensor object (n, m), float, and str
     """
     df = aml.attacks.df(**parameters)
     model, max_iter, epsilon, nb_grads = (
@@ -549,7 +582,8 @@ def df(art_classifier, clip, fb_classifier, frameworks, parameters, verbose, x, 
         df.model.classes,
     )
     art_adv = fb_adv = ta_adv = None
-    aml_adv = (x + df.craft(x, y), "aml")
+    start = time.time()
+    aml_adv = (x + df.craft(x, y), time.time() - start, "aml")
     if "art" in frameworks:
         from art.attacks.evasion import DeepFool
 
@@ -557,6 +591,7 @@ def df(art_classifier, clip, fb_classifier, frameworks, parameters, verbose, x, 
             "Producing DF adversarial examples with ART...",
             end="\n" if verbose else "\r",
         )
+        start = time.time()
         art_adv = (
             torch.from_numpy(
                 DeepFool(
@@ -568,6 +603,7 @@ def df(art_classifier, clip, fb_classifier, frameworks, parameters, verbose, x, 
                     verbose=verbose,
                 ).generate(x=x.clone().cpu().numpy())
             ),
+            time.time() - start,
             "ART",
         )
     if "foolbox" in frameworks:
@@ -577,13 +613,14 @@ def df(art_classifier, clip, fb_classifier, frameworks, parameters, verbose, x, 
             "Producing DF adversarial examples with Foolbox...",
             end="\n" if verbose else "\r",
         )
+        start = time.time()
         _, fb_adv, _ = DeepFoolAttack(
             steps=max_iter,
             candidates=nb_grads,
             overshoot=epsilon,
             loss="logits",
         )(fb_classifier, x.clone(), y.clone(), epsilons=df.epsilon)
-        fb_adv = (fb_adv, "Foolbox")
+        fb_adv = (fb_adv, time.time() - start, "Foolbox")
     if "torchattacks" in frameworks:
         from torchattacks import DeepFool
 
@@ -591,6 +628,7 @@ def df(art_classifier, clip, fb_classifier, frameworks, parameters, verbose, x, 
             "Producing DF adversarial examples with Torchattacks...",
             end="\n" if verbose else "\r",
         )
+        start = time.time()
         ta_adv = DeepFool(
             model=model,
             steps=max_iter,
@@ -598,7 +636,11 @@ def df(art_classifier, clip, fb_classifier, frameworks, parameters, verbose, x, 
         )(inputs=x.clone(), labels=y)
 
         # torchattack's implementation can return nans
-        ta_adv = (torch.where(ta_adv.isnan(), x, ta_adv), "Torchattacks")
+        ta_adv = (
+            torch.where(ta_adv.isnan(), x, ta_adv),
+            time.time() - start,
+            "Torchattacks",
+        )
     return tuple([fw for fw in (art_adv, fb_adv, ta_adv) if fw is not None] + [aml_adv])
 
 
@@ -625,7 +667,7 @@ def fab(art_classifier, clip, fb_classifier, frameworks, parameters, verbose, x,
     :param y: labels of inputs to craft adversarail examples from
     :type x: torch Tensor object (n,)
     :return: FAB adversarial examples
-    :rtype: tuple of tuples: torch Tensor object (n, m) and str
+    :rtype: tuple of tuples: torch Tensor object (n, m), float, and str
     """
     fab = aml.attacks.fab(**parameters)
     (model, n_restarts, n_iter, eps, alpha, eta, beta, n_classes) = (
@@ -640,7 +682,8 @@ def fab(art_classifier, clip, fb_classifier, frameworks, parameters, verbose, x,
     )
     at_adv = ta_adv = None
     reset_seeds()
-    aml_adv = (x + fab.craft(x, y), "aml")
+    start = time.time()
+    aml_adv = (x + fab.craft(x, y), time.time() - start, "aml")
     if "advertorch" in frameworks:
         from advertorch.attacks import FABAttack
 
@@ -649,6 +692,7 @@ def fab(art_classifier, clip, fb_classifier, frameworks, parameters, verbose, x,
             end="\n" if verbose else "\r",
         )
         reset_seeds()
+        start = time.time()
         at_adv = (
             FABAttack(
                 predict=model,
@@ -661,6 +705,7 @@ def fab(art_classifier, clip, fb_classifier, frameworks, parameters, verbose, x,
                 beta=beta,
                 verbose=verbose,
             ).perturb(x=x.clone(), y=y.clone()),
+            time.time() - start,
             "AdverTorch",
         )
     if "torchattacks" in frameworks:
@@ -671,6 +716,7 @@ def fab(art_classifier, clip, fb_classifier, frameworks, parameters, verbose, x,
             end="\n" if verbose else "\r",
         )
         reset_seeds()
+        start = time.time()
         ta_adv = (
             FAB(
                 model=model,
@@ -686,6 +732,7 @@ def fab(art_classifier, clip, fb_classifier, frameworks, parameters, verbose, x,
                 multi_targeted=False,
                 n_classes=n_classes,
             )(inputs=x.clone(), labels=y),
+            time.time() - start,
             "Torchattacks",
         )
     reset_seeds()
@@ -897,7 +944,7 @@ def jsma(art_classifier, clip, fb_classifier, frameworks, parameters, verbose, x
     :param y: labels of inputs to craft adversarail examples from
     :type x: torch Tensor object (n,)
     :return: JSMA adversarial examples
-    :rtype: tuple of tuples: torch Tensor object (n, m) and str
+    :rtype: tuple of tuples: torch Tensor object (n, m), float, and str
     """
     clip_min, clip_max = clip.unbind()
     jsma = aml.attacks.jsma(**parameters | dict(alpha=1))
@@ -908,7 +955,8 @@ def jsma(art_classifier, clip, fb_classifier, frameworks, parameters, verbose, x
         jsma.alpha,
     )
     at_adv = art_adv = None
-    aml_adv = (x + jsma.craft(x, y), "aml")
+    start = time.time()
+    aml_adv = (x + jsma.craft(x, y), time.time() - start, "aml")
     if "advertorch" in frameworks and x.size(1) < 784:
         from advertorch.attacks import JacobianSaliencyMapAttack
 
@@ -916,6 +964,7 @@ def jsma(art_classifier, clip, fb_classifier, frameworks, parameters, verbose, x
             "Producing JSMA adversarial examples with AdverTorch...",
             end="\n" if verbose else "\r",
         )
+        start = time.time()
         at_adv = (
             JacobianSaliencyMapAttack(
                 predict=model,
@@ -925,6 +974,7 @@ def jsma(art_classifier, clip, fb_classifier, frameworks, parameters, verbose, x
                 gamma=gamma,
                 theta=theta,
             ).perturb(x=x.clone(), y=torch.randint(num_classes, y.size())),
+            time.time() - start,
             "AdverTorch",
         )
     if "art" in frameworks:
@@ -934,6 +984,7 @@ def jsma(art_classifier, clip, fb_classifier, frameworks, parameters, verbose, x
             "Producing JSMA adversarial examples with ART...",
             end="\n" if verbose else "\r",
         )
+        start = time.time()
         art_adv = (
             torch.from_numpy(
                 SaliencyMapMethod(
@@ -944,6 +995,7 @@ def jsma(art_classifier, clip, fb_classifier, frameworks, parameters, verbose, x
                     verbose=verbose,
                 ).generate(x=x.clone().cpu().numpy())
             ),
+            time.time() - start,
             "ART",
         )
     return tuple([fw for fw in (at_adv, art_adv) if fw is not None] + [aml_adv])
@@ -1047,7 +1099,7 @@ def main(
         f"Analyzing {len(attacks)} attacks across {len(datasets)} datasets with "
         f"{len(frameworks)} frameworks in {trials} trials..."
     )
-    metrics = "dataset", "attack", "baseline", "framework", "accuracy", "budget"
+    metrics = "dataset", "attack", "baseline", "framework", "accuracy", "budget", "time"
     results = pandas.DataFrame(columns=metrics)
     norms = collections.namedtuple("norms", ("budget", "projection", "ord"))
     norms = {
@@ -1106,7 +1158,7 @@ def main(
                 )
 
                 # ensure adversarial examples comply with clips and epsilon
-                for adv, fw in advs:
+                for adv, times, fw in advs:
                     print(
                         f"Computing results for {fw} {a.__name__}...",
                         end="\n" if verbose else "\r",
@@ -1115,24 +1167,25 @@ def main(
                     p = norms[a].projection(norms[a].budget, adv.sub(x))
                     acc = model.accuracy(x + p, y).item()
                     used = p.norm(norms[a].ord, 1).mean().div(norms[a].budget).item()
-                    results.loc[row] = d, a.__name__, test_acc, fw, acc, used
+                    results.loc[row] = d, a.__name__, test_acc, fw, acc, used, times
                     row += 1
 
     # take the median of the results, plot, and save
-    results = results.groupby(["dataset", "attack", "framework"]).median().reset_index()
-    plot(results)
+    med_res = results.groupby(["dataset", "attack", "framework"]).median().reset_index()
+    plot_performance(med_res)
+    plot_time(results)
     return None
 
 
-def plot(results):
+def plot_performance(results):
     """
-    This function plots the framework comparison results. Specifically, this
-    produces  one scatter plot per dataset containing model accuracy on the
-    crafting set over the percentage of the budget consumed (with a dotted line
-    designating the original model accuracy on the clean data). Frameworks
-    labeled above points and are divided by color, while attacks are divided by
-    marker style. Axes are in log scale to show separation. The plot is written
-    to disk in the current directory.
+    This function plots the framework comparison performance results.
+    Specifically, this produces one scatter plot per dataset containing model
+    accuracy on the crafting set over the percentage of the budget consumed
+    (with a dotted line designating the original model accuracy on the clean
+    data). Frameworks labeled above points and are divided by color, while
+    attacks are divided by marker style. Axes are in log scale to show
+    separation. The plot is written to disk in the current directory.
 
     :param results: results of the framework comparison
     :type results: pandas Dataframe object
@@ -1170,7 +1223,35 @@ def plot(results):
         ax.xaxis.set_minor_formatter(matplotlib.ticker.PercentFormatter(1))
         ax.xaxis.set_minor_locator(matplotlib.ticker.LogLocator(subs=(1, 3, 5, 8)))
         ax.yaxis.set_major_formatter(matplotlib.ticker.PercentFormatter(1))
-    plot.savefig(__file__[:-3] + ".pdf")
+    plot.savefig(__file__[:-3] + "_performance.pdf")
+    return None
+
+
+def plot_time(results):
+    """
+    This function plots the framework comparison crafting time results.
+    Specifically, this produces one grouped bar plot per dataset containing
+    attacks over the crafting time (in seconds). Frameworks are divided by
+    color and error bars represent standard devation. The plot is written to
+    disk in the current directory.
+
+    :param results: results of the framework comparison
+    :type results: pandas Dataframe object
+    :return: None
+    :rtype: NoneType
+    """
+    plot = seaborn.catplot(
+        data=results,
+        col="dataset",
+        col_wrap=(results.dataset.unique().size + 1) // 2,
+        errorbar="sd",
+        hue="framework",
+        kind="bar",
+        legend="full" if results.dataset.unique().size > 1 else "auto",
+        x="time",
+        y="attack",
+    )
+    plot.savefig(__file__[:-3] + "_time.pdf")
     return None
 
 
@@ -1197,7 +1278,7 @@ def pgd(art_classifier, clip, fb_classifier, frameworks, parameters, verbose, x,
     :param y: labels of inputs to craft adversarail examples from
     :type x: torch Tensor object (n,)
     :return: PGD adversarial examples
-    :rtype: tuple of tuples: aml Attack object & torch Tensor object (n, m)
+    :rtype: tuple of tuples: torch Tensor object (n, m), float, and str
     """
     clip_min, clip_max = clip.unbind()
     pgd = aml.attacks.pgd(**parameters)
@@ -1209,7 +1290,8 @@ def pgd(art_classifier, clip, fb_classifier, frameworks, parameters, verbose, x,
     )
     at_adv = art_adv = ch_adv = fb_adv = ta_adv = None
     reset_seeds()
-    aml_adv = (x + pgd.craft(x, y), "aml")
+    start = time.time()
+    aml_adv = (x + pgd.craft(x, y), time.time() - start, "aml")
     if "advertorch" in frameworks:
         from advertorch.attacks import PGDAttack
 
@@ -1218,6 +1300,7 @@ def pgd(art_classifier, clip, fb_classifier, frameworks, parameters, verbose, x,
             end="\n" if verbose else "\r",
         )
         reset_seeds()
+        start = time.time()
         at_adv = (
             PGDAttack(
                 predict=model,
@@ -1231,6 +1314,7 @@ def pgd(art_classifier, clip, fb_classifier, frameworks, parameters, verbose, x,
                 ord=float("inf"),
                 targeted=False,
             ).perturb(x=x.clone(), y=y.clone()),
+            time.time() - start,
             "AdverTorch",
         )
     if "art" in frameworks:
@@ -1241,6 +1325,7 @@ def pgd(art_classifier, clip, fb_classifier, frameworks, parameters, verbose, x,
             end="\n" if verbose else "\r",
         )
         reset_seeds()
+        start = time.time()
         art_adv = (
             torch.from_numpy(
                 ProjectedGradientDescent(
@@ -1258,6 +1343,7 @@ def pgd(art_classifier, clip, fb_classifier, frameworks, parameters, verbose, x,
                     verbose=verbose,
                 ).generate(x=x.clone().cpu().numpy())
             ),
+            time.time() - start,
             "ART",
         )
     if "cleverhans" in frameworks:
@@ -1270,6 +1356,7 @@ def pgd(art_classifier, clip, fb_classifier, frameworks, parameters, verbose, x,
             end="\n" if verbose else "\r",
         )
         reset_seeds()
+        start = time.time()
         ch_adv = (
             projected_gradient_descent(
                 model_fn=model,
@@ -1286,6 +1373,7 @@ def pgd(art_classifier, clip, fb_classifier, frameworks, parameters, verbose, x,
                 rand_minmax=eps,
                 sanity_checks=False,
             ).detach(),
+            time.time() - start,
             "CleverHans",
         )
     if "foolbox" in frameworks:
@@ -1298,6 +1386,7 @@ def pgd(art_classifier, clip, fb_classifier, frameworks, parameters, verbose, x,
             end="\n" if verbose else "\r",
         )
         reset_seeds()
+        start = time.time()
         _, fb_adv, _ = ProjectedGradientDescentAttack(
             rel_stepsize=None,
             abs_stepsize=eps_iter,
@@ -1309,7 +1398,7 @@ def pgd(art_classifier, clip, fb_classifier, frameworks, parameters, verbose, x,
             y.clone(),
             epsilons=eps,
         )
-        fb_adv = (fb_adv, "Foolbox")
+        fb_adv = (fb_adv, time.time() - start, "Foolbox")
     if "torchattacks" in frameworks:
         from torchattacks import PGD
 
@@ -1318,6 +1407,7 @@ def pgd(art_classifier, clip, fb_classifier, frameworks, parameters, verbose, x,
             end="\n" if verbose else "\r",
         )
         reset_seeds()
+        start = time.time()
         ta_adv = (
             PGD(
                 model=model,
@@ -1326,6 +1416,7 @@ def pgd(art_classifier, clip, fb_classifier, frameworks, parameters, verbose, x,
                 steps=nb_iter,
                 random_start=True,
             )(inputs=x.clone(), labels=y),
+            time.time() - start,
             "Torchattacks",
         )
     reset_seeds()
@@ -1377,8 +1468,8 @@ if __name__ == "__main__":
     (https://github.com/Harry24k/adversarial-attacks-pytorch). Specifically,
     this script: (1) parses command-line arguments, (2) loads dataset(s), (3)
     trains a model, (4) crafts adversarial examples for each framework, (5)
-    collects statistics on model accuracy and lp-norm of the adversarial
-    examples, and (6) plots the results.
+    collects statistics on model accuracy, lp-norm, and crafting time of the
+    adversarial examples, and (6) plots the results.
     """
 
     # determine available frameworks
