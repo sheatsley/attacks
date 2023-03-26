@@ -1231,9 +1231,9 @@ def plot_time(results):
     """
     This function plots the framework comparison crafting time results.
     Specifically, this produces one grouped bar plot per dataset containing
-    attacks over the crafting time (in seconds). Frameworks are divided by
-    color and error bars represent standard devation. The plot is written to
-    disk in the current directory.
+    attacks over the crafting time (in seconds) in log scale. Frameworks are
+    divided by color and error bars represent standard devation. The plot is
+    written to disk in the current directory.
 
     :param results: results of the framework comparison
     :type results: pandas Dataframe object
@@ -1245,12 +1245,17 @@ def plot_time(results):
         col="dataset",
         col_wrap=(results.dataset.unique().size + 1) // 2,
         errorbar="sd",
+        facet_kws=dict(subplot_kws=dict(xscale="log")),
         hue="framework",
         kind="bar",
         legend="full" if results.dataset.unique().size > 1 else "auto",
+        sharex=False,
         x="time",
         y="attack",
     )
+    for ax in plot.axes.flat:
+        ax.xaxis.set_major_formatter(matplotlib.ticker.ScalarFormatter())
+        ax.xaxis.set_minor_formatter(matplotlib.ticker.ScalarFormatter())
     plot.savefig(__file__[:-3] + "_time.pdf")
     return None
 
