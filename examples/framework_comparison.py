@@ -5,9 +5,11 @@ Author: Ryan Sheatsley
 Sat Feb 4 2023
 """
 import argparse
+import builtins
 import collections
 import importlib
 import pickle
+import time
 import warnings
 
 import aml
@@ -23,7 +25,7 @@ import torch
 warnings.filterwarnings("ignore", category=UserWarning)
 
 
-def apgdce(art_classifier, clip, fb_classifier, frameworks, parameters, x, y):
+def apgdce(art_classifier, clip, fb_classifier, frameworks, parameters, verbose, x, y):
     """
     This method crafts adversarial examples with APGD-CE (Auto-PGD with CE
     loss) (https://arxiv.org/pdf/2003.01690.pdf). The supported frameworks for
@@ -40,6 +42,8 @@ def apgdce(art_classifier, clip, fb_classifier, frameworks, parameters, x, y):
     :type frameworks: tuple of str
     :param parameters: attack parameters
     :type parameters: dict
+    :param verbose: enable verbose output
+    :tyhpe verbose: bool
     :param x: inputs to craft adversarial examples from
     :type x: torch Tensor object (n, m)
     :param y: labels of inputs to craft adversarail examples from
@@ -62,7 +66,10 @@ def apgdce(art_classifier, clip, fb_classifier, frameworks, parameters, x, y):
     if "art" in frameworks:
         from art.attacks.evasion import AutoProjectedGradientDescent
 
-        print("Producing APGD-CE adversarial examples with ART...", end="\r")
+        print(
+            "Producing APGD-CE adversarial examples with ART...",
+            end="\n" if verbose else "\r",
+        )
         reset_seeds()
         art_adv = (
             torch.from_numpy(
@@ -76,7 +83,7 @@ def apgdce(art_classifier, clip, fb_classifier, frameworks, parameters, x, y):
                     nb_random_init=nb_random_init,
                     batch_size=x.size(0),
                     loss_type="cross_entropy",
-                    verbose=False,
+                    verbose=verbose,
                 ).generate(x=x.clone().cpu().numpy())
             ),
             "ART",
@@ -84,7 +91,10 @@ def apgdce(art_classifier, clip, fb_classifier, frameworks, parameters, x, y):
     if "torchattacks" in frameworks and hasattr(model, "shape"):
         from torchattacks import APGD
 
-        print("Producing APGD-CE adversarial examples with Torchattacks...", end="\r")
+        print(
+            "Producing APGD-CE adversarial examples with Torchattacks...",
+            end="\n" if verbose else "\r",
+        )
         reset_seeds()
         ta_x = x.clone().unflatten(1, model.shape)
         ta_adv = (
@@ -98,7 +108,7 @@ def apgdce(art_classifier, clip, fb_classifier, frameworks, parameters, x, y):
                 loss="ce",
                 eot_iter=1,
                 rho=rho,
-                verbose=False,
+                verbose=verbose,
             )(inputs=ta_x, labels=y)
             .flatten(1)
             .detach(),
@@ -108,7 +118,7 @@ def apgdce(art_classifier, clip, fb_classifier, frameworks, parameters, x, y):
     return tuple([fw for fw in (art_adv, ta_adv) if fw is not None] + [aml_adv])
 
 
-def apgddlr(art_classifier, clip, fb_classifier, frameworks, parameters, x, y):
+def apgddlr(art_classifier, clip, fb_classifier, frameworks, parameters, verbose, x, y):
     """
     This method crafts adversarial examples with APGD-DLR (Auto-PGD with DLR
     loss) (https://arxiv.org/pdf/2003.01690.pdf). The supported frameworks for
@@ -127,6 +137,8 @@ def apgddlr(art_classifier, clip, fb_classifier, frameworks, parameters, x, y):
     :type frameworks: tuple of str
     :param parameters: attack parameters
     :type parameters: dict
+    :param verbose: enable verbose output
+    :tyhpe verbose: bool
     :param x: inputs to craft adversarial examples from
     :type x: torch Tensor object (n, m)
     :param y: labels of inputs to craft adversarail examples from
@@ -149,7 +161,10 @@ def apgddlr(art_classifier, clip, fb_classifier, frameworks, parameters, x, y):
     if "art" in frameworks and art_classifier.nb_classes > 2:
         from art.attacks.evasion import AutoProjectedGradientDescent
 
-        print("Producing APGD-DLR adversarial examples with ART...", end="\r")
+        print(
+            "Producing APGD-DLR adversarial examples with ART...",
+            end="\n" if verbose else "\r",
+        )
         reset_seeds()
         art_adv = (
             torch.from_numpy(
@@ -163,7 +178,7 @@ def apgddlr(art_classifier, clip, fb_classifier, frameworks, parameters, x, y):
                     nb_random_init=nb_random_init,
                     batch_size=x.size(0),
                     loss_type="difference_logits_ratio",
-                    verbose=False,
+                    verbose=verbose,
                 ).generate(x=x.clone().cpu().numpy())
             ),
             "ART",
@@ -175,7 +190,10 @@ def apgddlr(art_classifier, clip, fb_classifier, frameworks, parameters, x, y):
     ):
         from torchattacks import APGD
 
-        print("Producing APGD-DLR adversarial examples with Torchattacks...", end="\r")
+        print(
+            "Producing APGD-DLR adversarial examples with Torchattacks...",
+            end="\n" if verbose else "\r",
+        )
         reset_seeds()
         ta_x = x.clone().unflatten(1, model.shape)
         ta_adv = (
@@ -189,7 +207,7 @@ def apgddlr(art_classifier, clip, fb_classifier, frameworks, parameters, x, y):
                 loss="dlr",
                 eot_iter=1,
                 rho=rho,
-                verbose=False,
+                verbose=verbose,
             )(inputs=ta_x, labels=y)
             .flatten(1)
             .detach(),
@@ -199,7 +217,7 @@ def apgddlr(art_classifier, clip, fb_classifier, frameworks, parameters, x, y):
     return tuple([fw for fw in (art_adv, ta_adv) if fw is not None] + [aml_adv])
 
 
-def bim(art_classifier, clip, fb_classifier, frameworks, parameters, x, y):
+def bim(art_classifier, clip, fb_classifier, frameworks, parameters, verbose, x, y):
     """
     This method crafts adversarial examples with BIM (Basic Iterative
     Method) (https://arxiv.org/pdf/1611.01236.pdf). The supported
@@ -218,6 +236,8 @@ def bim(art_classifier, clip, fb_classifier, frameworks, parameters, x, y):
     :type frameworks: tuple of str
     :param parameters: attack parameters
     :type parameters: dict
+    :param verbose: enable verbose output
+    :tyhpe verbose: bool
     :param x: inputs to craft adversarial examples from
     :type x: torch Tensor object (n, m)
     :param y: labels of inputs to craft adversarail examples from
@@ -233,7 +253,10 @@ def bim(art_classifier, clip, fb_classifier, frameworks, parameters, x, y):
     if "advertorch" in frameworks:
         from advertorch.attacks import LinfBasicIterativeAttack as BasicIterativeAttack
 
-        print("Producing BIM adversarial examples with AdverTorch...", end="\r")
+        print(
+            "Producing BIM adversarial examples with AdverTorch...",
+            end="\n" if verbose else "\r",
+        )
         at_adv = (
             BasicIterativeAttack(
                 predict=model,
@@ -250,7 +273,10 @@ def bim(art_classifier, clip, fb_classifier, frameworks, parameters, x, y):
     if "art" in frameworks:
         from art.attacks.evasion import BasicIterativeMethod
 
-        print("Producing BIM adversarial examples with ART...", end="\r")
+        print(
+            "Producing BIM adversarial examples with ART...",
+            end="\n" if verbose else "\r",
+        )
         art_adv = (
             torch.from_numpy(
                 BasicIterativeMethod(
@@ -260,7 +286,7 @@ def bim(art_classifier, clip, fb_classifier, frameworks, parameters, x, y):
                     max_iter=nb_iter,
                     targeted=False,
                     batch_size=x.size(0),
-                    verbose=False,
+                    verbose=verbose,
                 ).generate(x=x.clone().cpu().numpy())
             ),
             "ART",
@@ -270,7 +296,10 @@ def bim(art_classifier, clip, fb_classifier, frameworks, parameters, x, y):
             projected_gradient_descent as basic_iterative_method,
         )
 
-        print("Producing BIM adversarial examples with CleverHans...", end="\r")
+        print(
+            "Producing BIM adversarial examples with CleverHans...",
+            end="\n" if verbose else "\r",
+        )
         ch_adv = (
             basic_iterative_method(
                 model_fn=model,
@@ -292,7 +321,10 @@ def bim(art_classifier, clip, fb_classifier, frameworks, parameters, x, y):
     if "foolbox" in frameworks:
         from foolbox.attacks import LinfBasicIterativeAttack as BasicIterativeAttack
 
-        print("Producing BIM adversarial examples with Foolbox...", end="\r")
+        print(
+            "Producing BIM adversarial examples with Foolbox...",
+            end="\n" if verbose else "\r",
+        )
         _, fb_adv, _ = BasicIterativeAttack(
             rel_stepsize=None,
             abs_stepsize=eps_iter,
@@ -303,7 +335,10 @@ def bim(art_classifier, clip, fb_classifier, frameworks, parameters, x, y):
     if "torchattacks" in frameworks:
         from torchattacks import BIM
 
-        print("Producing BIM adversarial examples with Torchattacks...", end="\r")
+        print(
+            "Producing BIM adversarial examples with Torchattacks...",
+            end="\n" if verbose else "\r",
+        )
         ta_adv = (
             BIM(model=model, eps=eps, alpha=eps_iter, steps=nb_iter)(
                 inputs=x.clone(), labels=y
@@ -316,7 +351,7 @@ def bim(art_classifier, clip, fb_classifier, frameworks, parameters, x, y):
     )
 
 
-def cwl2(art_classifier, clip, fb_classifier, frameworks, parameters, x, y):
+def cwl2(art_classifier, clip, fb_classifier, frameworks, parameters, verbose, x, y):
     """
     This method crafts adversariale examples with CW-L2 (Carlini-Wagner with l2
     norm) (https://arxiv.org/pdf/1608.04644.pdf). The supported frameworks for
@@ -337,6 +372,8 @@ def cwl2(art_classifier, clip, fb_classifier, frameworks, parameters, x, y):
     :type frameworks: tuple of str
     :param parameters: attack parameters
     :type parameters: dict
+    :param verbose: enable verbose output
+    :tyhpe verbose: bool
     :param x: inputs to craft adversarial examples from
     :type x: torch Tensor object (n, m)
     :param y: labels of inputs to craft adversarail examples from
@@ -369,7 +406,10 @@ def cwl2(art_classifier, clip, fb_classifier, frameworks, parameters, x, y):
     if "advertorch" in frameworks:
         from advertorch.attacks import CarliniWagnerL2Attack
 
-        print("Producing CW-L2 adversarial examples with AdverTorch...", end="\r")
+        print(
+            "Producing CW-L2 adversarial examples with AdverTorch...",
+            end="\n" if verbose else "\r",
+        )
         at_adv = (
             CarliniWagnerL2Attack(
                 predict=model,
@@ -389,7 +429,10 @@ def cwl2(art_classifier, clip, fb_classifier, frameworks, parameters, x, y):
     if "art" in frameworks:
         from art.attacks.evasion import CarliniL2Method as CarliniWagner
 
-        print("Producing CW-L2 adversarial examples with ART...", end="\r")
+        print(
+            "Producing CW-L2 adversarial examples with ART...",
+            end="\n" if verbose else "\r",
+        )
         art_adv = (
             torch.from_numpy(
                 CarliniWagner(
@@ -403,7 +446,7 @@ def cwl2(art_classifier, clip, fb_classifier, frameworks, parameters, x, y):
                     max_halving=binary_search_steps // 2,
                     max_doubling=binary_search_steps // 2,
                     batch_size=x.size(0),
-                    verbose=False,
+                    verbose=verbose,
                 ).generate(x=x.clone().cpu().numpy())
             ),
             "ART",
@@ -411,7 +454,10 @@ def cwl2(art_classifier, clip, fb_classifier, frameworks, parameters, x, y):
     if "cleverhans" in frameworks:
         from cleverhans.torch.attacks.carlini_wagner_l2 import carlini_wagner_l2
 
-        print("Producing CW-L2 adversarial examples with CleverHans...", end="\r")
+        print(
+            "Producing CW-L2 adversarial examples with CleverHans...",
+            end="\n" if verbose else "\r",
+        )
         ch_adv = (
             carlini_wagner_l2(
                 model_fn=model,
@@ -431,7 +477,10 @@ def cwl2(art_classifier, clip, fb_classifier, frameworks, parameters, x, y):
     if "foolbox" in frameworks:
         from foolbox.attacks import L2CarliniWagnerAttack
 
-        print("Producing CW-L2 adversarial examples with Foolbox...", end="\r")
+        print(
+            "Producing CW-L2 adversarial examples with Foolbox...",
+            end="\n" if verbose else "\r",
+        )
         _, fb_adv, _ = L2CarliniWagnerAttack(
             binary_search_steps=binary_search_steps,
             steps=max_iterations,
@@ -444,7 +493,10 @@ def cwl2(art_classifier, clip, fb_classifier, frameworks, parameters, x, y):
     if "torchattacks" in frameworks:
         from torchattacks import CW
 
-        print("Producing CW-L2 adversarial examples with Torchattacks...", end="\r")
+        print(
+            "Producing CW-L2 adversarial examples with Torchattacks...",
+            end="\n" if verbose else "\r",
+        )
         ta_adv = CW(
             model=model,
             c=initial_const,
@@ -461,7 +513,7 @@ def cwl2(art_classifier, clip, fb_classifier, frameworks, parameters, x, y):
     )
 
 
-def df(art_classifier, clip, fb_classifier, frameworks, parameters, x, y):
+def df(art_classifier, clip, fb_classifier, frameworks, parameters, verbose, x, y):
     """
     This method crafts adversarial examples with DF (DeepFool)
     (https://arxiv.org/pdf/1611.01236.pdf). The supported frameworks for DF
@@ -480,6 +532,8 @@ def df(art_classifier, clip, fb_classifier, frameworks, parameters, x, y):
     :type frameworks: tuple of str
     :param parameters: attack parameters
     :type parameters: dict
+    :param verbose: enable verbose output
+    :tyhpe verbose: bool
     :param x: inputs to craft adversarial examples from
     :type x: torch Tensor object (n, m)
     :param y: labels of inputs to craft adversarail examples from
@@ -499,7 +553,10 @@ def df(art_classifier, clip, fb_classifier, frameworks, parameters, x, y):
     if "art" in frameworks:
         from art.attacks.evasion import DeepFool
 
-        print("Producing DF adversarial examples with ART...", end="\r")
+        print(
+            "Producing DF adversarial examples with ART...",
+            end="\n" if verbose else "\r",
+        )
         art_adv = (
             torch.from_numpy(
                 DeepFool(
@@ -508,7 +565,7 @@ def df(art_classifier, clip, fb_classifier, frameworks, parameters, x, y):
                     epsilon=epsilon,
                     nb_grads=nb_grads,
                     batch_size=x.size(0),
-                    verbose=False,
+                    verbose=verbose,
                 ).generate(x=x.clone().cpu().numpy())
             ),
             "ART",
@@ -516,7 +573,10 @@ def df(art_classifier, clip, fb_classifier, frameworks, parameters, x, y):
     if "foolbox" in frameworks:
         from foolbox.attacks import L2DeepFoolAttack as DeepFoolAttack
 
-        print("Producing DF adversarial examples with Foolbox...", end="\r")
+        print(
+            "Producing DF adversarial examples with Foolbox...",
+            end="\n" if verbose else "\r",
+        )
         _, fb_adv, _ = DeepFoolAttack(
             steps=max_iter,
             candidates=nb_grads,
@@ -527,7 +587,10 @@ def df(art_classifier, clip, fb_classifier, frameworks, parameters, x, y):
     if "torchattacks" in frameworks:
         from torchattacks import DeepFool
 
-        print("Producing DF adversarial examples with Torchattacks...", end="\r")
+        print(
+            "Producing DF adversarial examples with Torchattacks...",
+            end="\n" if verbose else "\r",
+        )
         ta_adv = DeepFool(
             model=model,
             steps=max_iter,
@@ -539,7 +602,7 @@ def df(art_classifier, clip, fb_classifier, frameworks, parameters, x, y):
     return tuple([fw for fw in (art_adv, fb_adv, ta_adv) if fw is not None] + [aml_adv])
 
 
-def fab(art_classifier, clip, fb_classifier, frameworks, parameters, x, y):
+def fab(art_classifier, clip, fb_classifier, frameworks, parameters, verbose, x, y):
     """
     This method crafts adversarial examples with FAB (Fast Adaptive Boundary)
     (https://arxiv.org/pdf/1907.02044.pdf). The supported frameworks for FAB
@@ -555,6 +618,8 @@ def fab(art_classifier, clip, fb_classifier, frameworks, parameters, x, y):
     :type frameworks: tuple of str
     :param parameters: attack parameters
     :type parameters: dict
+    :param verbose: enable verbose output
+    :tyhpe verbose: bool
     :param x: inputs to craft adversarial examples from
     :type x: torch Tensor object (n, m)
     :param y: labels of inputs to craft adversarail examples from
@@ -579,38 +644,44 @@ def fab(art_classifier, clip, fb_classifier, frameworks, parameters, x, y):
     if "advertorch" in frameworks:
         from advertorch.attacks import FABAttack
 
-        print("Producing FAB adversarial examples with AdverTorch...", end="\r")
+        print(
+            "Producing FAB adversarial examples with AdverTorch...",
+            end="\n" if verbose else "\r",
+        )
         reset_seeds()
         at_adv = (
             FABAttack(
                 predict=model,
-                norm="Linf",
+                norm="L2",
                 n_restarts=n_restarts,
                 n_iter=n_iter,
                 eps=eps,
                 alpha_max=alpha,
                 eta=eta,
                 beta=beta,
-                verbose=False,
+                verbose=verbose,
             ).perturb(x=x.clone(), y=y.clone()),
             "AdverTorch",
         )
     if "torchattacks" in frameworks:
         from torchattacks import FAB
 
-        print("Producing FAB adversarial examples with Torchattacks...", end="\r")
+        print(
+            "Producing FAB adversarial examples with Torchattacks...",
+            end="\n" if verbose else "\r",
+        )
         reset_seeds()
         ta_adv = (
             FAB(
                 model=model,
-                norm="Linf",
+                norm="L2",
                 eps=eps,
                 steps=n_iter,
                 n_restarts=n_restarts,
                 alpha_max=alpha,
                 eta=eta,
                 beta=beta,
-                verbose=False,
+                verbose=verbose,
                 seed=0,
                 multi_targeted=False,
                 n_classes=n_classes,
@@ -651,7 +722,9 @@ def init_art_classifier(clip, device, model, features):
     )
 
 
-def init_attacks(alpha, budget, clip, device, epochs, features, frameworks, model):
+def init_attacks(
+    alpha, budget, clip, device, epochs, features, frameworks, model, verbose
+):
     """
     This function instantiates attacks from aml and other supported libraries.
     Specifically, it: (1) computes lp budgets and (2) prepares framework
@@ -675,6 +748,8 @@ def init_attacks(alpha, budget, clip, device, epochs, features, frameworks, mode
     :type frameworks: list of str
     :param model: neural network
     :type model: dlm LinearClassifier-inherited object
+    :param verbose: enable verbose output
+    :tyhpe verbose: bool
     :return: instantiated attacks
     :rtype: tuple of:
         - dict
@@ -687,7 +762,12 @@ def init_attacks(alpha, budget, clip, device, epochs, features, frameworks, mode
     l0 = int(features * budget) + 1
     l2 = clip.diff(dim=0).norm(2).item() * budget
     linf = budget
-    params = {"alpha": alpha, "epochs": epochs, "model": model}
+    params = {
+        "alpha": alpha,
+        "epochs": epochs,
+        "model": model,
+        "verbosity": float(verbose),
+    }
     art_model = (
         init_art_classifier(clip, device, model, features)
         if "art" in frameworks
@@ -699,7 +779,7 @@ def init_attacks(alpha, budget, clip, device, epochs, features, frameworks, mode
     return params, art_model, fb_model, l0, l2, linf
 
 
-def init_data(dataset, device, pretrained, utilization):
+def init_data(dataset, device, pretrained, utilization, verbose):
     """
     This function obtains all necessary prerequisites for crafting adversarial
     examples. Specifically, this: (1) loads data, (2) determines clipping
@@ -714,6 +794,8 @@ def init_data(dataset, device, pretrained, utilization):
     :type pretrained: bool
     :param utilization: target gpu memory utilization (useful with low vram)
     :type utilization: float
+    :param verbose: enable verbose output
+    :type verbose: bool
     :return: test data, clips, model, and test accuracy
     :rtype: tuple of:
         - tuple of torch Tensor objects (n, m) and (n,)
@@ -737,7 +819,9 @@ def init_data(dataset, device, pretrained, utilization):
     clip = torch.stack((x.min(0).values.clamp(max=0), x.max(0).values.clamp(min=1)))
 
     # load model hyperparameters and train a model (or load a saved one)
-    params = dict(auto_batch=utilization, device=device, verbosity=0)
+    params = dict(
+        auto_batch=utilization, device=device, verbosity=0.25 if verbose else 0
+    )
     template = getattr(dlm.templates, dataset)
     model = (
         dlm.CNNClassifier(**template.cnn | params)
@@ -783,7 +867,7 @@ def init_fb_classifier(clip, device, model):
     )
 
 
-def jsma(art_classifier, clip, fb_classifier, frameworks, parameters, x, y):
+def jsma(art_classifier, clip, fb_classifier, frameworks, parameters, verbose, x, y):
     """
     This method crafts adversarial examples with JSMA (Jacobian Saliency Map
     Approach) (https://arxiv.org/pdf/1511.07528.pdf). The supported frameworks
@@ -806,6 +890,8 @@ def jsma(art_classifier, clip, fb_classifier, frameworks, parameters, x, y):
     :type frameworks: tuple of str
     :param parameters: attack parameters
     :type parameters: dict
+    :param verbose: enable verbose output
+    :tyhpe verbose: bool
     :param x: inputs to craft adversarial examples from
     :type x: torch Tensor object (n, m)
     :param y: labels of inputs to craft adversarail examples from
@@ -826,7 +912,10 @@ def jsma(art_classifier, clip, fb_classifier, frameworks, parameters, x, y):
     if "advertorch" in frameworks and x.size(1) < 784:
         from advertorch.attacks import JacobianSaliencyMapAttack
 
-        print("Producing JSMA adversarial examples with AdverTorch...", end="\r")
+        print(
+            "Producing JSMA adversarial examples with AdverTorch...",
+            end="\n" if verbose else "\r",
+        )
         at_adv = (
             JacobianSaliencyMapAttack(
                 predict=model,
@@ -841,7 +930,10 @@ def jsma(art_classifier, clip, fb_classifier, frameworks, parameters, x, y):
     if "art" in frameworks:
         from art.attacks.evasion import SaliencyMapMethod
 
-        print("Producing JSMA adversarial examples with ART...", end="\r")
+        print(
+            "Producing JSMA adversarial examples with ART...",
+            end="\n" if verbose else "\r",
+        )
         art_adv = (
             torch.from_numpy(
                 SaliencyMapMethod(
@@ -849,7 +941,7 @@ def jsma(art_classifier, clip, fb_classifier, frameworks, parameters, x, y):
                     theta=theta,
                     gamma=gamma,
                     batch_size=x.size(0),
-                    verbose=False,
+                    verbose=verbose,
                 ).generate(x=x.clone().cpu().numpy())
             ),
             "ART",
@@ -918,6 +1010,7 @@ def main(
     pretrained,
     trials,
     utilization,
+    verbose,
 ):
     """
     This function is the main entry point for the framework comparison
@@ -945,6 +1038,8 @@ def main(
     :type trials: int
     :param utilization: target gpu memory utilization (useful with low vram)
     :type utilization: float
+    :param verbose: enable verbose output
+    :tyhpe verbose: bool
     :return: None
     :rtype: NoneType
     """
@@ -970,12 +1065,23 @@ def main(
 
         # load data, clipping bounds, attacks, and train a model
         for t in range(trials):
-            print(f"Preparing {d} model... Trial {t} of {trials}", end="\r")
+            print(
+                f"Preparing {d} model... Trial {t} of {trials}",
+                end="\n" if verbose else "\r",
+            )
             (x, y), clip, model, test_acc = init_data(
-                d, device, pretrained, utilization
+                d, device, pretrained, utilization, verbose
             )
             parameters, art_model, fb_model, l0, l2, linf = init_attacks(
-                alpha, budget, clip, device, epochs, x.size(1), frameworks, model
+                alpha,
+                budget,
+                clip,
+                device,
+                epochs,
+                x.size(1),
+                frameworks,
+                model,
+                verbose,
             )
             for a, n in norms.items():
                 norms[a] = n._replace(
@@ -984,20 +1090,27 @@ def main(
 
             # craft adversarial examples
             for j, a in enumerate(attacks):
-                print(f"Attacking with {a.__name__}... {j} of {len(attacks)}", end="\r")
+                print(
+                    f"Attacking with {a.__name__}... {j} of {len(attacks)}",
+                    end="\n" if verbose else "\r",
+                )
                 advs = a(
                     art_model,
                     clip,
                     fb_model,
                     frameworks,
                     parameters | dict(epsilon=norms[a].budget),
+                    verbose,
                     x,
                     y,
                 )
 
                 # ensure adversarial examples comply with clips and epsilon
                 for adv, fw in advs:
-                    print(f"Computing results for {fw} {a.__name__}...", end="\r")
+                    print(
+                        f"Computing results for {fw} {a.__name__}...",
+                        end="\n" if verbose else "\r",
+                    )
                     adv = adv.to(device).clamp(*clip.unbind())
                     p = norms[a].projection(norms[a].budget, adv.sub(x))
                     acc = model.accuracy(x + p, y).item()
@@ -1061,7 +1174,7 @@ def plot(results):
     return None
 
 
-def pgd(art_classifier, clip, fb_classifier, frameworks, parameters, x, y):
+def pgd(art_classifier, clip, fb_classifier, frameworks, parameters, verbose, x, y):
     """
     This method crafts adversarial examples with PGD (Projected Gradient
     Descent)) (https://arxiv.org/pdf/1706.06083.pdf). The supported frameworks
@@ -1077,6 +1190,8 @@ def pgd(art_classifier, clip, fb_classifier, frameworks, parameters, x, y):
     :type frameworks: tuple of str
     :param parameters: attack parameters
     :type parameters: dict
+    :param verbose: enable verbose output
+    :tyhpe verbose: bool
     :param x: inputs to craft adversarial examples from
     :type x: torch Tensor object (n, m)
     :param y: labels of inputs to craft adversarail examples from
@@ -1098,7 +1213,10 @@ def pgd(art_classifier, clip, fb_classifier, frameworks, parameters, x, y):
     if "advertorch" in frameworks:
         from advertorch.attacks import PGDAttack
 
-        print("Producing PGD adversarial examples with AdverTorch...", end="\r")
+        print(
+            "Producing PGD adversarial examples with AdverTorch...",
+            end="\n" if verbose else "\r",
+        )
         reset_seeds()
         at_adv = (
             PGDAttack(
@@ -1118,7 +1236,10 @@ def pgd(art_classifier, clip, fb_classifier, frameworks, parameters, x, y):
     if "art" in frameworks:
         from art.attacks.evasion import ProjectedGradientDescent
 
-        print("Producing PGD adversarial examples with ART...", end="\r")
+        print(
+            "Producing PGD adversarial examples with ART...",
+            end="\n" if verbose else "\r",
+        )
         reset_seeds()
         art_adv = (
             torch.from_numpy(
@@ -1134,7 +1255,7 @@ def pgd(art_classifier, clip, fb_classifier, frameworks, parameters, x, y):
                     batch_size=x.size(0),
                     random_eps=True,
                     summary_writer=False,
-                    verbose=False,
+                    verbose=verbose,
                 ).generate(x=x.clone().cpu().numpy())
             ),
             "ART",
@@ -1144,7 +1265,10 @@ def pgd(art_classifier, clip, fb_classifier, frameworks, parameters, x, y):
             projected_gradient_descent,
         )
 
-        print("Producing PGD adversarial examples with CleverHans...", end="\r")
+        print(
+            "Producing PGD adversarial examples with CleverHans...",
+            end="\n" if verbose else "\r",
+        )
         reset_seeds()
         ch_adv = (
             projected_gradient_descent(
@@ -1169,7 +1293,10 @@ def pgd(art_classifier, clip, fb_classifier, frameworks, parameters, x, y):
             LinfProjectedGradientDescentAttack as ProjectedGradientDescentAttack,
         )
 
-        print("Producing PGD adversarial examples with Foolbox...", end="\r")
+        print(
+            "Producing PGD adversarial examples with Foolbox...",
+            end="\n" if verbose else "\r",
+        )
         reset_seeds()
         _, fb_adv, _ = ProjectedGradientDescentAttack(
             rel_stepsize=None,
@@ -1186,7 +1313,10 @@ def pgd(art_classifier, clip, fb_classifier, frameworks, parameters, x, y):
     if "torchattacks" in frameworks:
         from torchattacks import PGD
 
-        print("Producing PGD adversarial examples with Torchattacks...", end="\r")
+        print(
+            "Producing PGD adversarial examples with Torchattacks...",
+            end="\n" if verbose else "\r",
+        )
         reset_seeds()
         ta_adv = (
             PGD(
@@ -1205,9 +1335,25 @@ def pgd(art_classifier, clip, fb_classifier, frameworks, parameters, x, y):
     )
 
 
+def print(*args, **kwargs):
+    """
+    This function overrides the print builtin by prepending a timestamp all
+    print calls.
+
+    :param *args: position arguments supported by builtin.print
+    :type *args: tuple
+    :param **kwargs: keyword arguments supported by builtin.print
+    :type **kwargs: dictionary
+    :return: None
+    :rtype: NoneType
+    """
+    builtins.print(f"[{time.asctime()}]", *args, **kwargs)
+    return None
+
+
 def reset_seeds():
     """
-    This method resets the seeds for random number generators used in attacks
+    This function resets the seeds for random number generators used in attacks
     with randomized components.
 
     :return: None
@@ -1315,6 +1461,13 @@ if __name__ == "__main__":
         help="Target GPU utilization (useful with GPUs that have low VRAM)",
         type=float,
     )
+    parser.add_argument(
+        "-v",
+        "--verbose",
+        action="store_true",
+        default=False,
+        help="Enable verbose output)",
+    )
     args = parser.parse_args()
     main(
         alpha=args.alpha,
@@ -1327,5 +1480,6 @@ if __name__ == "__main__":
         pretrained=args.pretrained,
         trials=1 if args.pretrained else args.trials,
         utilization=args.utilization,
+        verbose=args.verbose,
     )
     raise SystemExit(0)
