@@ -58,7 +58,7 @@ class Adversary:
         restarts, and the update rule to determine if an adversarial example is
         kept across restarts.
 
-        :param best_update: update rule for the best adversarial examples
+        :param bestupdate: update rule for the best adversarial examples
         :type best_update: Adversary class method or None
         :param hparam: the hyperparameter to be optimized
         :type hparam: str or None
@@ -530,14 +530,13 @@ class Attack:
         o = torch.full_like(p, torch.inf).where(correct, p) if o is None else o.clone()
         mins, maxs = x.min(0).values.clamp(max=0), x.max(0).values.clamp(min=1)
 
-        # set verbosity and configure batch & output results dataframes
-        verbose = self.verbosity and self.verbosity != self.epochs
+        # configure batch & output results dataframes
         metrics = "epoch", "accuracy", "model_loss", "attack_loss", "l0", "l2", "linf"
         self.b_res = pandas.DataFrame(0, index=range(self.epochs + 1), columns=metrics)
         self.res = pandas.DataFrame(0, index=range(self.epochs + 1), columns=metrics)
 
         # attach objects and  apply perturbation initializations
-        verbose and print(f"Crafting {x.size(0)} adversarial examples with {self}...")
+        self.verbosity and print(f"Crafting {len(x)} adversarial examples with {self}")
         cnb, cxb = mins.sub(x), maxs.sub(x)
         self.surface.initialize((cnb, cxb), p)
         self.traveler.initialize(p, o)
@@ -554,9 +553,9 @@ class Attack:
             self.update(x, y, p, o)
             prog = self.progress(e, x, y, p, o) if self.statistics else ""
             print(
-                f"{self.restart}{self.hparam}"
+                f"{self.name}: {self.restart}{self.hparam}"
                 f"Epoch {e:{len(str(self.epochs))}} / {self.epochs} {prog:<15}"
-            ) if verbose and not e % self.verbosity else print(
+            ) if self.verbosity != 0 and e % self.verbosity == 0 else print(
                 f"{self.name}: {self.restart}{self.hparam}"
                 f"Epoch {e}... ({(e + self.epochs * self.step) / self.total:.1%})",
                 end="\x1b[K\r",
@@ -918,7 +917,7 @@ def apgddlr(
         hparam_update=None,
         hparam_steps=None,
         num_restarts=num_restarts,
-        verbose=True if verbosity not in {0, 1} else False,
+        verbose=True if verbosity else False,
         alpha=alpha,
         early_termination=False,
         epochs=epochs,
@@ -1020,7 +1019,7 @@ def cwl2(
         hparam_steps=hparam_steps,
         hparam_update=Adversary.misclassified,
         num_restarts=0,
-        verbose=True if verbosity not in {0, 1} else False,
+        verbose=True if verbosity else False,
         alpha=alpha,
         early_termination=True,
         epochs=epochs,
@@ -1110,7 +1109,7 @@ def fab(alpha, epochs, epsilon, model, num_restarts=2, statistics=False, verbosi
         hparam_update=None,
         hparam_steps=None,
         num_restarts=num_restarts,
-        verbose=True if verbosity not in {0, 1} else False,
+        verbose=True if verbosity else False,
         alpha=alpha,
         early_termination=True,
         epochs=epochs,
