@@ -1540,7 +1540,6 @@ if __name__ == "__main__":
         "-p",
         "--pretrained",
         action="store_true",
-        default=False,
         help="Avoid training a new model, if possible (helpful for debugging)",
     )
     parser.add_argument(
@@ -1561,7 +1560,6 @@ if __name__ == "__main__":
         "-v",
         "--verbose",
         action="store_true",
-        default=False,
         help="Enable verbose output)",
     )
     args = parser.parse_args()
