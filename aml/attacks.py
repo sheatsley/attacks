@@ -474,7 +474,6 @@ class Attack:
             "α": self.alpha,
             "ε": self.epsilon,
             "epochs": self.epochs,
-            "early termination": self.et,
         }
         self.reset()
         return None
@@ -667,8 +666,6 @@ class Attack:
             "α": self.alpha,
             "ε": self.epsilon,
             "epochs": self.epochs,
-            "early termination": self.et,
-            "device": self.device,
         }
         return None
 
