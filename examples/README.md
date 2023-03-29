@@ -24,7 +24,7 @@ following known attacks: [APGD-CE](https://arxiv.org/pdf/2003.01690.pdf),
     [CleverHans](https://github.com/cleverhans-lab/cleverhans),
     [Foolbox](https://github.com/bethgelab/foolbox), &
     [Torchattacks](https://github.com/Harry24k/adversarial-attacks-pytorch),
-    and plots model accuracy over budget consumed.
+    and plots model accuracy over budget consumed with the time taken.
 * `perturbation_visualization.py`: visualizes perturbations of known attacks
     and plots one example of a worst-, average-, and best-case perturbation (as
     measured by lp norm).
