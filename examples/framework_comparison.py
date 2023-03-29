@@ -14,6 +14,8 @@ import warnings
 
 import aml
 import dlm
+import matplotlib.colors
+import matplotlib.pyplot as plt
 import matplotlib.ticker
 import mlds
 import numpy as np
@@ -51,6 +53,7 @@ def apgdce(art_classifier, clip, fb_classifier, frameworks, parameters, verbose,
     :return: APGD-CE adversarial examples
     :rtype: tuple of tuples: torch Tensor object (n, m), float, and str
     """
+    end = "\n" if verbose else "\r"
     apgdce = aml.attacks.apgdce(**parameters)
     model, eps, eps_step, max_iter, nb_random_init, rho = (
         apgdce.model,
@@ -67,10 +70,7 @@ def apgdce(art_classifier, clip, fb_classifier, frameworks, parameters, verbose,
     if "art" in frameworks:
         from art.attacks.evasion import AutoProjectedGradientDescent
 
-        print(
-            "Producing APGD-CE adversarial examples with ART...",
-            end="\n" if verbose else "\r",
-        )
+        print("Producing APGD-CE adversarial examples with ART...", end=end)
         reset_seeds()
         start = time.time()
         art_adv = (
@@ -94,10 +94,7 @@ def apgdce(art_classifier, clip, fb_classifier, frameworks, parameters, verbose,
     if "torchattacks" in frameworks and hasattr(model, "shape"):
         from torchattacks import APGD
 
-        print(
-            "Producing APGD-CE adversarial examples with Torchattacks...",
-            end="\n" if verbose else "\r",
-        )
+        print("Producing APGD-CE adversarial examples with Torchattacks...", end=end)
         reset_seeds()
         ta_x = x.clone().unflatten(1, model.shape)
         start = time.time()
@@ -151,6 +148,7 @@ def apgddlr(art_classifier, clip, fb_classifier, frameworks, parameters, verbose
     :return: APGD-DLR adversarial examples
     :rtype: tuple of tuples: torch Tensor object (n, m), float, and str
     """
+    end = "\n" if verbose else "\r"
     apgddlr = aml.attacks.apgddlr(**parameters)
     model, eps, eps_step, max_iter, nb_random_init, rho = (
         apgddlr.model,
@@ -167,10 +165,7 @@ def apgddlr(art_classifier, clip, fb_classifier, frameworks, parameters, verbose
     if "art" in frameworks and art_classifier.nb_classes > 2:
         from art.attacks.evasion import AutoProjectedGradientDescent
 
-        print(
-            "Producing APGD-DLR adversarial examples with ART...",
-            end="\n" if verbose else "\r",
-        )
+        print("Producing APGD-DLR adversarial examples with ART...", end=end)
         reset_seeds()
         start = time.time()
         art_adv = (
@@ -198,10 +193,7 @@ def apgddlr(art_classifier, clip, fb_classifier, frameworks, parameters, verbose
     ):
         from torchattacks import APGD
 
-        print(
-            "Producing APGD-DLR adversarial examples with Torchattacks...",
-            end="\n" if verbose else "\r",
-        )
+        print("Producing APGD-DLR adversarial examples with Torchattacks...", end=end)
         reset_seeds()
         ta_x = x.clone().unflatten(1, model.shape)
         start = time.time()
@@ -255,6 +247,7 @@ def bim(art_classifier, clip, fb_classifier, frameworks, parameters, verbose, x,
     :return: BIM adversarial examples
     :rtype: tuple of tuples: torch Tensor object (n, m), float, and str
     """
+    end = "\n" if verbose else "\r"
     clip_min, clip_max = clip.unbind()
     bim = aml.attacks.bim(**parameters)
     model, eps, nb_iter, eps_iter = bim.model, bim.epsilon, bim.epochs, bim.alpha
@@ -264,10 +257,7 @@ def bim(art_classifier, clip, fb_classifier, frameworks, parameters, verbose, x,
     if "advertorch" in frameworks:
         from advertorch.attacks import LinfBasicIterativeAttack as BasicIterativeAttack
 
-        print(
-            "Producing BIM adversarial examples with AdverTorch...",
-            end="\n" if verbose else "\r",
-        )
+        print("Producing BIM adversarial examples with AdverTorch...", end=end)
         start = time.time()
         at_adv = (
             BasicIterativeAttack(
@@ -286,10 +276,7 @@ def bim(art_classifier, clip, fb_classifier, frameworks, parameters, verbose, x,
     if "art" in frameworks:
         from art.attacks.evasion import BasicIterativeMethod
 
-        print(
-            "Producing BIM adversarial examples with ART...",
-            end="\n" if verbose else "\r",
-        )
+        print("Producing BIM adversarial examples with ART...", end=end)
         start = time.time()
         art_adv = (
             torch.from_numpy(
@@ -311,10 +298,7 @@ def bim(art_classifier, clip, fb_classifier, frameworks, parameters, verbose, x,
             projected_gradient_descent as basic_iterative_method,
         )
 
-        print(
-            "Producing BIM adversarial examples with CleverHans...",
-            end="\n" if verbose else "\r",
-        )
+        print("Producing BIM adversarial examples with CleverHans...", end=end)
         start = time.time()
         ch_adv = (
             basic_iterative_method(
@@ -338,10 +322,7 @@ def bim(art_classifier, clip, fb_classifier, frameworks, parameters, verbose, x,
     if "foolbox" in frameworks:
         from foolbox.attacks import LinfBasicIterativeAttack as BasicIterativeAttack
 
-        print(
-            "Producing BIM adversarial examples with Foolbox...",
-            end="\n" if verbose else "\r",
-        )
+        print("Producing BIM adversarial examples with Foolbox...", end=end)
         start = time.time()
         _, fb_adv, _ = BasicIterativeAttack(
             rel_stepsize=None,
@@ -353,10 +334,7 @@ def bim(art_classifier, clip, fb_classifier, frameworks, parameters, verbose, x,
     if "torchattacks" in frameworks:
         from torchattacks import BIM
 
-        print(
-            "Producing BIM adversarial examples with Torchattacks...",
-            end="\n" if verbose else "\r",
-        )
+        print("Producing BIM adversarial examples with Torchattacks...", end=end)
         start = time.time()
         ta_adv = (
             BIM(model=model, eps=eps, alpha=eps_iter, steps=nb_iter)(
@@ -401,6 +379,7 @@ def cwl2(art_classifier, clip, fb_classifier, frameworks, parameters, verbose, x
     :return: CW-L2 adversarial examples
     :rtype: tuple of tuples: torch Tensor object (n, m), float, and str
     """
+    end = "\n" if verbose else "\r"
     clip_min, clip_max = clip.unbind()
     cwl2 = aml.attacks.cwl2(**parameters)
     at_adv = art_adv = ch_adv = fb_adv = ta_adv = None
@@ -427,10 +406,7 @@ def cwl2(art_classifier, clip, fb_classifier, frameworks, parameters, verbose, x
     if "advertorch" in frameworks:
         from advertorch.attacks import CarliniWagnerL2Attack
 
-        print(
-            "Producing CW-L2 adversarial examples with AdverTorch...",
-            end="\n" if verbose else "\r",
-        )
+        print("Producing CW-L2 adversarial examples with AdverTorch...", end=end)
         start = time.time()
         at_adv = (
             CarliniWagnerL2Attack(
@@ -452,10 +428,7 @@ def cwl2(art_classifier, clip, fb_classifier, frameworks, parameters, verbose, x
     if "art" in frameworks:
         from art.attacks.evasion import CarliniL2Method as CarliniWagner
 
-        print(
-            "Producing CW-L2 adversarial examples with ART...",
-            end="\n" if verbose else "\r",
-        )
+        print("Producing CW-L2 adversarial examples with ART...", end=end)
         start = time.time()
         art_adv = (
             torch.from_numpy(
@@ -479,10 +452,7 @@ def cwl2(art_classifier, clip, fb_classifier, frameworks, parameters, verbose, x
     if "cleverhans" in frameworks:
         from cleverhans.torch.attacks.carlini_wagner_l2 import carlini_wagner_l2
 
-        print(
-            "Producing CW-L2 adversarial examples with CleverHans...",
-            end="\n" if verbose else "\r",
-        )
+        print("Producing CW-L2 adversarial examples with CleverHans...", end=end)
         start = time.time()
         ch_adv = (
             carlini_wagner_l2(
@@ -504,10 +474,7 @@ def cwl2(art_classifier, clip, fb_classifier, frameworks, parameters, verbose, x
     if "foolbox" in frameworks:
         from foolbox.attacks import L2CarliniWagnerAttack
 
-        print(
-            "Producing CW-L2 adversarial examples with Foolbox...",
-            end="\n" if verbose else "\r",
-        )
+        print("Producing CW-L2 adversarial examples with Foolbox...", end=end)
         start = time.time()
         _, fb_adv, _ = L2CarliniWagnerAttack(
             binary_search_steps=binary_search_steps,
@@ -521,10 +488,7 @@ def cwl2(art_classifier, clip, fb_classifier, frameworks, parameters, verbose, x
     if "torchattacks" in frameworks:
         from torchattacks import CW
 
-        print(
-            "Producing CW-L2 adversarial examples with Torchattacks...",
-            end="\n" if verbose else "\r",
-        )
+        print("Producing CW-L2 adversarial examples with Torchattacks...", end=end)
         start = time.time()
         ta_adv = CW(
             model=model,
@@ -574,6 +538,7 @@ def df(art_classifier, clip, fb_classifier, frameworks, parameters, verbose, x, 
     :return: DeepFool adversarial examples
     :rtype: tuple of tuples: torch Tensor object (n, m), float, and str
     """
+    end = "\n" if verbose else "\r"
     df = aml.attacks.df(**parameters)
     model, max_iter, epsilon, nb_grads = (
         df.model,
@@ -587,10 +552,7 @@ def df(art_classifier, clip, fb_classifier, frameworks, parameters, verbose, x, 
     if "art" in frameworks:
         from art.attacks.evasion import DeepFool
 
-        print(
-            "Producing DF adversarial examples with ART...",
-            end="\n" if verbose else "\r",
-        )
+        print("Producing DF adversarial examples with ART...", end=end)
         start = time.time()
         art_adv = (
             torch.from_numpy(
@@ -609,10 +571,7 @@ def df(art_classifier, clip, fb_classifier, frameworks, parameters, verbose, x, 
     if "foolbox" in frameworks:
         from foolbox.attacks import L2DeepFoolAttack as DeepFoolAttack
 
-        print(
-            "Producing DF adversarial examples with Foolbox...",
-            end="\n" if verbose else "\r",
-        )
+        print("Producing DF adversarial examples with Foolbox...", end=end)
         start = time.time()
         _, fb_adv, _ = DeepFoolAttack(
             steps=max_iter,
@@ -624,10 +583,7 @@ def df(art_classifier, clip, fb_classifier, frameworks, parameters, verbose, x, 
     if "torchattacks" in frameworks:
         from torchattacks import DeepFool
 
-        print(
-            "Producing DF adversarial examples with Torchattacks...",
-            end="\n" if verbose else "\r",
-        )
+        print("Producing DF adversarial examples with Torchattacks...", end=end)
         start = time.time()
         ta_adv = DeepFool(
             model=model,
@@ -669,6 +625,7 @@ def fab(art_classifier, clip, fb_classifier, frameworks, parameters, verbose, x,
     :return: FAB adversarial examples
     :rtype: tuple of tuples: torch Tensor object (n, m), float, and str
     """
+    end = "\n" if verbose else "\r"
     fab = aml.attacks.fab(**parameters)
     (model, n_restarts, n_iter, eps, alpha, eta, beta, n_classes) = (
         fab.model,
@@ -687,10 +644,7 @@ def fab(art_classifier, clip, fb_classifier, frameworks, parameters, verbose, x,
     if "advertorch" in frameworks:
         from advertorch.attacks import FABAttack
 
-        print(
-            "Producing FAB adversarial examples with AdverTorch...",
-            end="\n" if verbose else "\r",
-        )
+        print("Producing FAB adversarial examples with AdverTorch...", end=end)
         reset_seeds()
         start = time.time()
         at_adv = (
@@ -711,10 +665,7 @@ def fab(art_classifier, clip, fb_classifier, frameworks, parameters, verbose, x,
     if "torchattacks" in frameworks:
         from torchattacks import FAB
 
-        print(
-            "Producing FAB adversarial examples with Torchattacks...",
-            end="\n" if verbose else "\r",
-        )
+        print("Producing FAB adversarial examples with Torchattacks...", end=end)
         reset_seeds()
         start = time.time()
         ta_adv = (
@@ -886,7 +837,7 @@ def init_data(dataset, device, pretrained, utilization, verbose):
         model.fit(train_x, train_y)
     with open(f"/tmp/framework_comparison_{dataset}_model.pkl", "wb") as f:
         pickle.dump(model, f)
-    test_acc = model.accuracy(x, y)
+    test_acc = model.accuracy(x, y) * 100
     return (x, y), clip, model, test_acc.item()
 
 
@@ -946,6 +897,7 @@ def jsma(art_classifier, clip, fb_classifier, frameworks, parameters, verbose, x
     :return: JSMA adversarial examples
     :rtype: tuple of tuples: torch Tensor object (n, m), float, and str
     """
+    end = "\n" if verbose else "\r"
     clip_min, clip_max = clip.unbind()
     jsma = aml.attacks.jsma(**parameters | dict(alpha=1))
     (model, num_classes, gamma, theta) = (
@@ -960,10 +912,7 @@ def jsma(art_classifier, clip, fb_classifier, frameworks, parameters, verbose, x
     if "advertorch" in frameworks and x.size(1) < 784:
         from advertorch.attacks import JacobianSaliencyMapAttack
 
-        print(
-            "Producing JSMA adversarial examples with AdverTorch...",
-            end="\n" if verbose else "\r",
-        )
+        print("Producing JSMA adversarial examples with AdverTorch...", end=end)
         start = time.time()
         at_adv = (
             JacobianSaliencyMapAttack(
@@ -980,10 +929,7 @@ def jsma(art_classifier, clip, fb_classifier, frameworks, parameters, verbose, x
     if "art" in frameworks:
         from art.attacks.evasion import SaliencyMapMethod
 
-        print(
-            "Producing JSMA adversarial examples with ART...",
-            end="\n" if verbose else "\r",
-        )
+        print("Producing JSMA adversarial examples with ART...", end=end)
         start = time.time()
         art_adv = (
             torch.from_numpy(
@@ -1055,7 +1001,7 @@ def main(
     alpha,
     attacks,
     budget,
-    datasets,
+    dataset,
     device,
     epochs,
     frameworks,
@@ -1066,9 +1012,9 @@ def main(
 ):
     """
     This function is the main entry point for the framework comparison
-    benchmark. Specifically this: (1) loads and trains a model for each
-    dataset, (2) crafts adversarial examples for each framework, (3) measures
-    statistics and assembles dataframes, and (4) plots the results.
+    benchmark. Specifically this: (1) loads and trains a model, (2) crafts
+    adversarial examples for each framework, (3) measures statistics and
+    assembles dataframes, and (4) plots the results.
 
     :param alpha: perturbation strength, per-iteration
     :type alpha: float
@@ -1076,8 +1022,8 @@ def main(
     :type attacks: list of str
     :param budget: maximum lp budget
     :type budget: float
-    :param datasets: dataset(s) to use
-    :type datasets: tuple of str
+    :param dataset: dataset to use
+    :type dataset: tuple of str
     :param device: hardware device to use
     :param device: str
     :param epochs: number of attack iterations
@@ -1096,10 +1042,12 @@ def main(
     :rtype: NoneType
     """
     print(
-        f"Analyzing {len(attacks)} attacks across {len(datasets)} datasets with "
+        f"Using {len(attacks)} attacks on {dataset} with "
         f"{len(frameworks)} frameworks in {trials} trials..."
     )
-    metrics = "dataset", "attack", "baseline", "framework", "accuracy", "budget", "time"
+
+    # create results dataframe & setup budget measures
+    metrics = "attack", "baseline", "framework", "accuracy", "budget", "time"
     results = pandas.DataFrame(columns=metrics)
     norms = collections.namedtuple("norms", ("budget", "projection", "ord"))
     norms = {
@@ -1112,151 +1060,139 @@ def main(
         jsma: norms(None, l0_proj, 0),
         pgd: norms(None, linf_proj, torch.inf),
     }
+    end = "\n" if verbose else "\r"
     row = 0
-    for d in datasets:
 
-        # load data, clipping bounds, attacks, and train a model
-        for t in range(trials):
-            print(
-                f"Preparing {d} model... Trial {t} of {trials}",
-                end="\n" if verbose else "\r",
+    # load data, clipping bounds, attacks, and train a model
+    for t in range(trials):
+        print(f"Preparing {dataset} model... Trial {t} of {trials}", end=end)
+        (x, y), clip, model, test_acc = init_data(
+            dataset, device, pretrained, utilization, verbose
+        )
+        parameters, art_model, fb_model, l0, l2, linf = init_attacks(
+            alpha,
+            budget,
+            clip,
+            device,
+            epochs,
+            x.size(1),
+            frameworks,
+            model,
+            verbose,
+        )
+        for a, n in norms.items():
+            norms[a] = n._replace(
+                budget=linf if n.ord == torch.inf else l2 if n.ord == 2 else l0
             )
-            (x, y), clip, model, test_acc = init_data(
-                d, device, pretrained, utilization, verbose
-            )
-            parameters, art_model, fb_model, l0, l2, linf = init_attacks(
-                alpha,
-                budget,
+
+        # craft adversarial examples
+        for j, a in enumerate(attacks):
+            print(f"Attacking with {a.__name__}... {j} of {len(attacks)}", end=end)
+            advs = a(
+                art_model,
                 clip,
-                device,
-                epochs,
-                x.size(1),
+                fb_model,
                 frameworks,
-                model,
+                parameters | dict(epsilon=norms[a].budget),
                 verbose,
+                x,
+                y,
             )
-            for a, n in norms.items():
-                norms[a] = n._replace(
-                    budget=linf if n.ord == torch.inf else l2 if n.ord == 2 else l0
-                )
 
-            # craft adversarial examples
-            for j, a in enumerate(attacks):
-                print(
-                    f"Attacking with {a.__name__}... {j} of {len(attacks)}",
-                    end="\n" if verbose else "\r",
+            # ensure adversarial examples comply with clips and epsilon
+            for adv, times, fw in advs:
+                print(f"Computing results for {fw} {a.__name__}...", end=end)
+                adv = adv.to(device).clamp(*clip.unbind())
+                p = norms[a].projection(norms[a].budget, adv.sub(x))
+                acc = model.accuracy(x + p, y).mul(100).item()
+                used = (
+                    p.norm(norms[a].ord, 1).mean().div(norms[a].budget).mul(100).item()
                 )
-                advs = a(
-                    art_model,
-                    clip,
-                    fb_model,
-                    frameworks,
-                    parameters | dict(epsilon=norms[a].budget),
-                    verbose,
-                    x,
-                    y,
-                )
+                results.loc[row] = a.__name__, test_acc, fw, acc, used, times
+                row += 1
 
-                # ensure adversarial examples comply with clips and epsilon
-                for adv, times, fw in advs:
-                    print(
-                        f"Computing results for {fw} {a.__name__}...",
-                        end="\n" if verbose else "\r",
-                    )
-                    adv = adv.to(device).clamp(*clip.unbind())
-                    p = norms[a].projection(norms[a].budget, adv.sub(x))
-                    acc = model.accuracy(x + p, y).item()
-                    used = p.norm(norms[a].ord, 1).mean().div(norms[a].budget).item()
-                    results.loc[row] = d, a.__name__, test_acc, fw, acc, used, times
-                    row += 1
-
-    # take the median of the results, plot, and save
-    med_res = results.groupby(["dataset", "attack", "framework"]).median().reset_index()
-    plot_performance(med_res)
-    plot_time(results)
+    # compute median, plot results, and save
+    plot(
+        dataset,
+        results.groupby(["attack", "framework"]).median().reset_index(),
+    )
     return None
 
 
-def plot_performance(results):
+def plot(dataset, results):
     """
-    This function plots the framework comparison performance results.
-    Specifically, this produces one scatter plot per dataset containing model
-    accuracy on the crafting set over the percentage of the budget consumed
-    (with a dotted line designating the original model accuracy on the clean
-    data). Frameworks labeled above points and are divided by color, while
-    attacks are divided by marker style. Axes are in log scale to show
-    separation. The plot is written to disk in the current directory.
+    This function plots the framework comparsion results. Specifically, this
+    produces a scatter plot containing the model accuracy on the crafting set
+    over the percentage of the budget consumed (with a dotted line designating
+    the original model accuracy on the clean data) with axes in log scale to
+    show separation. A grouped bar chat is also paired with the scatter plot
+    containing attacks over the crafting time (in seconds or minutes).
+    Frameworks are divided by color and attacks by marker style. The plot is
+    written to disk in the current directory.
 
+    :param dataset: dataset used
+    :type dataset: str
     :param results: results of the framework comparison
     :type results: pandas Dataframe object
     :return: None
     :rtype: NoneType
     """
-    plot = seaborn.relplot(
-        alpha=0.7,
+
+    # take the median of the crafting results, scatter, & add a refline
+    attacks = results.framework.unique()
+    palette = dict(zip(attacks, seaborn.color_palette(n_colors=len(attacks))))
+    fig, axes = plt.subplots(1, 2, layout="constrained", subplot_kw=dict(box_aspect=1))
+    seaborn.scatterplot(
+        alpha=0.6,
+        ax=axes[0],
+        clip_on=False,
         data=results,
-        col="dataset",
-        col_wrap=(results.dataset.unique().size + 1) // 2,
-        facet_kws=dict(subplot_kws=dict(xscale="log", yscale="log")),
         hue="framework",
-        kind="scatter",
-        legend="full" if results.dataset.unique().size > 1 else "auto",
+        palette=palette,
         s=100,
         style="attack",
         x="budget",
         y="accuracy",
     )
-    plot.map_dataframe(
-        color="r",
-        func=seaborn.lineplot,
-        linestyle="--",
-        x="budget",
-        y="baseline",
+    axes[0].axhline(color="r", label="baseline", linestyle="--", y=results.baseline[0])
+    axes[0].set(xlabel="budget consumed", xscale="symlog", yscale="symlog")
+    axes[0].spines[["top", "right"]].set_visible(False)
+    axes[0].xaxis.set_major_formatter(matplotlib.ticker.PercentFormatter())
+    axes[0].yaxis.set_major_formatter(matplotlib.ticker.PercentFormatter())
+
+    # add the bar chart to the next subplot and scale time if necessary
+    use_minutes = results.time.max() > 120
+    results.time = results.time / 60 if use_minutes else results.time
+    seaborn.heatmap(
+        annot=True,
+        annot_kws=dict(size=6),
+        cbar_kws=dict(label="minutes" if use_minutes else "seconds", shrink=0.3),
+        data=results.pivot(columns="attack", index="framework", values="time"),
+        linewidth=0.5,
+        norm=matplotlib.colors.LogNorm(),
+        square=True,
     )
-    plot.legend.remove()
-    plot._legend_data["baseline"] = plot._legend_data["framework"]
-    plot._legend_data["clean"] = plot.axes[0].lines[0]
-    plot.add_legend(adjust_subtitles=True)
-    plot.set(ylabel="accuracy")
-    for ax in plot.axes.flat:
-        ax.xaxis.set_major_formatter(matplotlib.ticker.PercentFormatter(1))
-        ax.xaxis.set_minor_formatter(matplotlib.ticker.PercentFormatter(1))
-        ax.xaxis.set_minor_locator(matplotlib.ticker.LogLocator(subs=(1, 3, 5, 8)))
-        ax.yaxis.set_major_formatter(matplotlib.ticker.PercentFormatter(1))
-    plot.savefig(__file__[:-3] + "_performance.pdf")
-    return None
-
-
-def plot_time(results):
-    """
-    This function plots the framework comparison crafting time results.
-    Specifically, this produces one grouped bar plot per dataset containing
-    attacks over the crafting time (in seconds) in log scale. Frameworks are
-    divided by color and error bars represent standard devation. The plot is
-    written to disk in the current directory.
-
-    :param results: results of the framework comparison
-    :type results: pandas Dataframe object
-    :return: None
-    :rtype: NoneType
-    """
-    plot = seaborn.catplot(
-        data=results,
-        col="dataset",
-        col_wrap=(results.dataset.unique().size + 1) // 2,
-        errorbar="sd",
-        facet_kws=dict(subplot_kws=dict(xscale="log")),
-        hue="framework",
-        kind="bar",
-        legend="full" if results.dataset.unique().size > 1 else "auto",
-        sharex=False,
-        x="time",
-        y="attack",
+    axes[1].collections[0].colorbar.ax.minorticks_off()
+    axes[1].collections[0].colorbar.ax.yaxis.set_major_formatter(
+        matplotlib.ticker.ScalarFormatter()
     )
-    for ax in plot.axes.flat:
-        ax.xaxis.set_major_formatter(matplotlib.ticker.ScalarFormatter())
-        ax.xaxis.set_minor_formatter(matplotlib.ticker.ScalarFormatter())
-    plot.savefig(__file__[:-3] + "_time.pdf")
+    axes[1].set(xlabel="", ylabel="")
+    # axes[1].set_xticklabels(axes[1].get_xticklabels(), rotation=45)
+    axes[1].tick_params(axis="y", labelrotation=0)
+
+    # configure legend and save
+    handles, labels = axes[0].get_legend_handles_labels()
+    axes[0].get_legend().remove()
+    fig.legend(
+        bbox_to_anchor=(0.99, 0.73),
+        frameon=False,
+        handles=handles,
+        labels=labels,
+        loc="upper left",
+        ncols=2,
+    )
+    fig.suptitle(f"dataset={dataset}", y=0.75)
+    fig.savefig(__file__[:-3] + f"_{dataset}.pdf", bbox_inches="tight")
     return None
 
 
@@ -1285,6 +1221,7 @@ def pgd(art_classifier, clip, fb_classifier, frameworks, parameters, verbose, x,
     :return: PGD adversarial examples
     :rtype: tuple of tuples: torch Tensor object (n, m), float, and str
     """
+    end = "\n" if verbose else "\r"
     clip_min, clip_max = clip.unbind()
     pgd = aml.attacks.pgd(**parameters)
     (model, eps, nb_iter, eps_iter) = (
@@ -1300,10 +1237,7 @@ def pgd(art_classifier, clip, fb_classifier, frameworks, parameters, verbose, x,
     if "advertorch" in frameworks:
         from advertorch.attacks import PGDAttack
 
-        print(
-            "Producing PGD adversarial examples with AdverTorch...",
-            end="\n" if verbose else "\r",
-        )
+        print("Producing PGD adversarial examples with AdverTorch...", end=end)
         reset_seeds()
         start = time.time()
         at_adv = (
@@ -1325,10 +1259,7 @@ def pgd(art_classifier, clip, fb_classifier, frameworks, parameters, verbose, x,
     if "art" in frameworks:
         from art.attacks.evasion import ProjectedGradientDescent
 
-        print(
-            "Producing PGD adversarial examples with ART...",
-            end="\n" if verbose else "\r",
-        )
+        print("Producing PGD adversarial examples with ART...", end=end)
         reset_seeds()
         start = time.time()
         art_adv = (
@@ -1356,10 +1287,7 @@ def pgd(art_classifier, clip, fb_classifier, frameworks, parameters, verbose, x,
             projected_gradient_descent,
         )
 
-        print(
-            "Producing PGD adversarial examples with CleverHans...",
-            end="\n" if verbose else "\r",
-        )
+        print("Producing PGD adversarial examples with CleverHans...", end=end)
         reset_seeds()
         start = time.time()
         ch_adv = (
@@ -1386,10 +1314,7 @@ def pgd(art_classifier, clip, fb_classifier, frameworks, parameters, verbose, x,
             LinfProjectedGradientDescentAttack as ProjectedGradientDescentAttack,
         )
 
-        print(
-            "Producing PGD adversarial examples with Foolbox...",
-            end="\n" if verbose else "\r",
-        )
+        print("Producing PGD adversarial examples with Foolbox...", end=end)
         reset_seeds()
         start = time.time()
         _, fb_adv, _ = ProjectedGradientDescentAttack(
@@ -1407,10 +1332,7 @@ def pgd(art_classifier, clip, fb_classifier, frameworks, parameters, verbose, x,
     if "torchattacks" in frameworks:
         from torchattacks import PGD
 
-        print(
-            "Producing PGD adversarial examples with Torchattacks...",
-            end="\n" if verbose else "\r",
-        )
+        print("Producing PGD adversarial examples with Torchattacks...", end=end)
         reset_seeds()
         start = time.time()
         ta_adv = (
@@ -1471,8 +1393,8 @@ if __name__ == "__main__":
     CleverHans (https://github.com/cleverhans-lab/cleverhans), Foolbox
     (https://github.com/bethgelab/foolbox), and Torchattacks
     (https://github.com/Harry24k/adversarial-attacks-pytorch). Specifically,
-    this script: (1) parses command-line arguments, (2) loads dataset(s), (3)
-    trains a model, (4) crafts adversarial examples for each framework, (5)
+    this script: (1) parses command-line arguments, (2) loads a dataset, (3)
+    trains a model, (4) crafts adversarial examples with each framework, (5)
     collects statistics on model accuracy, lp-norm, and crafting time of the
     adversarial examples, and (6) plots the results.
     """
@@ -1509,11 +1431,10 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "-d",
-        "--datasets",
+        "--dataset",
         choices=mlds.__available__,
-        default=mlds.__available__,
-        help="Dataset(s) to use",
-        nargs="+",
+        default="phishing",
+        help="Dataset to use",
     )
     parser.add_argument(
         "--device",
@@ -1567,7 +1488,7 @@ if __name__ == "__main__":
         alpha=args.alpha,
         attacks=args.attacks,
         budget=args.budget,
-        datasets=args.datasets,
+        dataset=args.dataset,
         device=args.device,
         epochs=args.epochs,
         frameworks=tuple(args.frameworks),
