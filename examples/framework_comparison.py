@@ -1112,10 +1112,7 @@ def main(
                 row += 1
 
     # compute median, plot results, and save
-    plot(
-        dataset,
-        results.groupby(["attack", "framework"]).median().reset_index(),
-    )
+    plot(dataset, results)
     return None
 
 
@@ -1126,9 +1123,10 @@ def plot(dataset, results):
     over the percentage of the budget consumed (with a dotted line designating
     the original model accuracy on the clean data) with axes in log scale to
     show separation. A grouped bar chat is also paired with the scatter plot
-    containing attacks over the crafting time (in seconds or minutes).
-    Frameworks are divided by color and attacks by marker style. The plot is
-    written to disk in the current directory.
+    containing attacks over the crafting time (in seconds or minutes) with
+    error bars representing the standard deviation. Frameworks are divided by
+    color and attacks by marker style. The plot is written to disk in the
+    current directory.
 
     :param dataset: dataset used
     :type dataset: str
@@ -1139,16 +1137,13 @@ def plot(dataset, results):
     """
 
     # take the median of the crafting results, scatter, & add a refline
-    attacks = results.framework.unique()
-    palette = dict(zip(attacks, seaborn.color_palette(n_colors=len(attacks))))
     fig, axes = plt.subplots(1, 2, layout="constrained", subplot_kw=dict(box_aspect=1))
     seaborn.scatterplot(
         alpha=0.6,
         ax=axes[0],
         clip_on=False,
-        data=results,
+        data=results.groupby(["attack", "framework"]).median().reset_index(),
         hue="framework",
-        palette=palette,
         s=100,
         style="attack",
         x="budget",
@@ -1156,42 +1151,42 @@ def plot(dataset, results):
     )
     axes[0].axhline(color="r", label="baseline", linestyle="--", y=results.baseline[0])
     axes[0].set(xlabel="budget consumed", xscale="symlog", yscale="symlog")
-    axes[0].spines[["top", "right"]].set_visible(False)
     axes[0].xaxis.set_major_formatter(matplotlib.ticker.PercentFormatter())
     axes[0].yaxis.set_major_formatter(matplotlib.ticker.PercentFormatter())
 
     # add the bar chart to the next subplot and scale time if necessary
     use_minutes = results.time.max() > 120
     results.time = results.time / 60 if use_minutes else results.time
-    seaborn.heatmap(
-        annot=True,
-        annot_kws=dict(size=6),
-        cbar_kws=dict(label="minutes" if use_minutes else "seconds", shrink=0.3),
-        data=results.pivot(columns="attack", index="framework", values="time"),
-        linewidth=0.5,
-        norm=matplotlib.colors.LogNorm(),
-        square=True,
+    seaborn.barplot(
+        data=results,
+        errorbar="sd",
+        hue="framework",
+        x="time",
+        y="attack",
     )
-    axes[1].collections[0].colorbar.ax.minorticks_off()
-    axes[1].collections[0].colorbar.ax.yaxis.set_major_formatter(
-        matplotlib.ticker.ScalarFormatter()
+    axes[1].grid(axis="x")
+    axes[1].set(
+        axisbelow=True, xlabel="minutes" if use_minutes else "seconds", xscale="log"
     )
-    axes[1].set(xlabel="", ylabel="")
-    # axes[1].set_xticklabels(axes[1].get_xticklabels(), rotation=45)
-    axes[1].tick_params(axis="y", labelrotation=0)
+    axes[1].xaxis.set_major_formatter(matplotlib.ticker.ScalarFormatter())
 
-    # configure legend and save
+    # configure legend (ensure frameworks and attacks are separate) and save
+    seaborn.despine()
     handles, labels = axes[0].get_legend_handles_labels()
+    idx = atk if (atk := labels.index("attack")) < len(labels) / 2 else len(labels)
+    handles = handles[:idx] + [handles[0]] * abs(atk * 2 - len(handles)) + handles[idx:]
+    labels = labels[:idx] + [""] * abs(atk * 2 - len(labels)) + labels[idx:]
     axes[0].get_legend().remove()
+    axes[1].get_legend().remove()
     fig.legend(
-        bbox_to_anchor=(0.99, 0.73),
+        bbox_to_anchor=(0.98, 0.75),
         frameon=False,
         handles=handles,
         labels=labels,
         loc="upper left",
         ncols=2,
     )
-    fig.suptitle(f"dataset={dataset}", y=0.75)
+    fig.suptitle(f"dataset={dataset}", y=0.80)
     fig.savefig(__file__[:-3] + f"_{dataset}.pdf", bbox_inches="tight")
     return None
 
