@@ -355,10 +355,7 @@ def cwl2(art_classifier, clip, fb_classifier, frameworks, parameters, verbose, x
     norm) (https://arxiv.org/pdf/1608.04644.pdf). The supported frameworks for
     CW-L2 include AdverTorch, ART, CleverHans, Foolbox, and Torchattacks.
     Notably, Torchattacks does not explicitly support binary searching on c (it
-    expects searching manually). Notably, while our implementation shows
-    competitive performance with low iterations, other implementations (sans
-    ART) require a substantial number of additional iterations, so the minimum
-    number of steps is set to be at least 300.
+    expects searching manually).
 
     :param art_classifier: classifier for ART
     :type art_classifier: art.estimator.classification PyTorchClassifier object
@@ -397,7 +394,7 @@ def cwl2(art_classifier, clip, fb_classifier, frameworks, parameters, verbose, x
         cwl2.surface.loss.k,
         cwl2.alpha,
         cwl2.hparam_steps,
-        max(cwl2.epochs, 300),
+        cwl2.epochs,
         cwl2.surface.loss.c.item(),
     )
     at_adv = art_adv = ch_adv = fb_adv = ta_adv = None
@@ -1160,6 +1157,7 @@ def plot(dataset, results):
     seaborn.barplot(
         data=results,
         errorbar="sd",
+        errwidth=0.5,
         hue="framework",
         x="time",
         y="attack",
