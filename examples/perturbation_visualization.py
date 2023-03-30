@@ -10,45 +10,7 @@ import aml
 import dlm
 import matplotlib.pyplot as plt
 import mlds
-import pandas
 import torch
-
-
-def plot(dataset, results):
-    """
-    This function visualizes the perturbation results. Specifially, this
-    produces a 3-by-n (where n is the number of attacks) grid visualizing the
-    worst-, average-, and best-case perturbations (as measured by lp-norm).
-    Attacks are separated by rows with perturbation types by column. The plot
-    is written to disk in the current directory.
-
-    :param dataset: dataset used
-    :type dataset: str
-    :param results: results of the attack comparison
-    :type results: pandas Dataframe object
-    :return: None
-    :rtype: NoneType
-    """
-    plot, axes = plt.subplots(
-        nrows=len(results),
-        ncols=3,
-        subplot_kw=dict(frameon=False, xticks=[], yticks=[]),
-    )
-    plot.suptitle(dataset)
-    for i, axis in enumerate(axes.flat):
-        attack, perturbation = results.loc[i]
-        axis.imshow(perturbation, cmap="gray")
-        if i == 0:
-            axis.set_text("Minimum Perturbation")
-        elif i == 1:
-            axis.set_text("Average Perturbation")
-        elif i == 2:
-            axis.set_text("Maximum Perturbation")
-        if i % 3 == 0:
-            axis.set_ylabel(attack, rotation=0)
-    plot.tight_layout()
-    plot.savefig(__file__[:-2] + "pdf", bbox_inches="tight")
-    return None
 
 
 def main(alpha, attacks, budget, dataset, epochs):
@@ -74,8 +36,8 @@ def main(alpha, attacks, budget, dataset, epochs):
 
     # load data, train a model, and compute budgets
     print(f"Attacking {dataset} with {len(attacks)} attacks..")
-    results = pandas.DataFrame(columns=("attack", "perturbation"))
     data = getattr(mlds, dataset)
+    results = []
     try:
         train_x = torch.from_numpy(data.train.data)
         train_y = torch.from_numpy(data.train.labels).long()
@@ -88,6 +50,10 @@ def main(alpha, attacks, budget, dataset, epochs):
         y = train_y.clone()
     template = getattr(dlm.templates, dataset)
     model = dlm.CNNClassifier(**template.cnn)
+    train_x = train_x[:10]
+    train_y = train_y[:10]
+    x = x[:5]
+    y = y[:5]
     model.fit(train_x, train_y)
     size = int(x.size(1) ** (1 / 2))
     l0 = int(x.size(1) * budget) + 1
@@ -106,20 +72,55 @@ def main(alpha, attacks, budget, dataset, epochs):
 
     # instantiate attacks and craft adversarial examples
     for i, a in enumerate(attacks):
-        print(f"Attacking with {a}... ({i} of {len(attacks)})")
-        attack = a(alpha, epochs, norms[a], model)
+        print(f"Attacking with {a.__name__}... ({i} of {len(attacks)})")
+        attack = a(alpha, epochs, norms[a], model, verbosity=0)
         p = attack.craft(x, y)
 
         # find worst-, average-, and best-case perturbations
-        p = p[(p > 0).any(1)]
-        _, p_idx = p.norm(norms[a], 1).sort().values
+        # p = p[(p > 0).any(1)]
+        p_idx = p.norm(attack.lp, 1).sort().indices
         idxs = [p_idx[0].item(), p_idx[p_idx.numel() // 2].item(), p_idx[-1].item()]
-        min_adv, med_adv, max_adv = (x[idxs] + p[idxs]).reshape(-1, size, size)
-        for j, adv in enumerate(min_adv, med_adv, max_adv):
-            results[j + 3 * i] = attack.name, adv
+        results.append(
+            (a.__name__, *(x[idxs] + p[idxs]).reshape(-1, size, size).unbind(0))
+        )
 
     # plot results and save
     plot(dataset, results)
+    return None
+
+
+def plot(dataset, results):
+    """
+    This function visualizes the perturbation results. Specifially, this
+    produces a 3-by-n (where n is the number of attacks) grid visualizing the
+    worst-, average-, and best-case perturbations (as measured by lp-norm).
+    Attacks are separated by rows with perturbation types by column. The plot
+    is written to disk in the current directory.
+
+    :param dataset: dataset used
+    :type dataset: str
+    :param results: results of the attack comparison
+    :type results: pandas Dataframe object
+    :return: None
+    :rtype: NoneType
+    """
+    plot, axes = plt.subplots(
+        figsize=(5, 1.5 * len(results)),
+        ncols=3,
+        nrows=len(results),
+        squeeze=False,
+        subplot_kw=dict(frameon=False, xticks=[], yticks=[]),
+    )
+    axes[0, 0].set_title("minimum")
+    axes[0, 1].set_title("average")
+    axes[0, 2].set_title("maximum")
+    plot.suptitle(f"dataset={dataset}")
+    for idx, result in enumerate(results):
+        axes[idx, 0].set_ylabel(result[0], labelpad=20, rotation=0)
+        for idy, img in enumerate(result[1:]):
+            axes[idx, idy].imshow(img, cmap="gray")
+    plot.tight_layout()
+    plot.savefig(__file__[:-2] + "pdf", bbox_inches="tight")
     return None
 
 
@@ -178,7 +179,7 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "-d",
-        "--datasets",
+        "--dataset",
         choices=(
             d for d in mlds.__available__ if hasattr(getattr(dlm.templates, d), "cnn")
         ),
@@ -197,7 +198,7 @@ if __name__ == "__main__":
         alpha=args.alpha,
         attacks=args.attacks,
         budget=args.budget,
-        datasets=args.datasets,
+        dataset=args.dataset,
         epochs=args.epochs,
     )
     raise SystemExit(0)
