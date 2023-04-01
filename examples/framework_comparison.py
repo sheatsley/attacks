@@ -849,9 +849,9 @@ def df(clip_max, clip_min, frameworks, parameters, safe, verbose, x, y):
     )
     fw_func = dict(ART=df_art, Foolbox=df_foolbox, Torchattacks=df_torchattacks)
     frameworks = [fw for fw in frameworks if fw in fw_func]
-    safe and "torchattacks" in frameworks and df_params[
+    safe and "Torchattacks" in frameworks and df_params[
         "classes"
-    ] > 4 and frameworks.remove("torchattacks")
+    ] > 4 and frameworks.remove("Torchattacks")
     for fw in frameworks:
         start = time.time()
         print(f"Producing DF adversarial examples with {fw}...", end=end)
@@ -1323,7 +1323,7 @@ def main(
     :param alpha: perturbation strength, per-iteration
     :type alpha: float
     :param attacks: attacks to use
-    :type attacks: list of str
+    :type attacks: list of functions
     :param budget: maximum lp budget
     :type budget: float
     :param dataset: dataset to use
@@ -1376,16 +1376,16 @@ def main(
     l0 = int(x.size(1) * budget) + 1
     l2 = torch.stack((cmin, cmax)).diff(dim=0).norm(2).item() * budget
     linf = budget
-    norms = {
-        apgdce: norms(linf, linf_proj, torch.inf),
-        apgddlr: norms(linf, linf_proj, torch.inf),
-        bim: norms(linf, linf_proj, torch.inf),
-        cwl2: norms(l2, l2_proj, 2),
-        df: norms(l2, l2_proj, 2),
-        fab: norms(l2, l2_proj, 2),
-        jsma: norms(l0, l0_proj, 0),
-        pgd: norms(linf, linf_proj, torch.inf),
-    }
+    norms = dict(
+        apgdce=norms(linf, linf_proj, torch.inf),
+        apgddlr=norms(linf, linf_proj, torch.inf),
+        bim=norms(linf, linf_proj, torch.inf),
+        cwl2=norms(l2, l2_proj, 2),
+        df=norms(l2, l2_proj, 2),
+        fab=norms(l2, l2_proj, 2),
+        jsma=norms(l0, l0_proj, 0),
+        pgd=norms(linf, linf_proj, torch.inf),
+    )
     params = dict(
         clip_max=cmax,
         clip_min=cmin,
@@ -1407,7 +1407,7 @@ def main(
 
     # train model and compute accuracy baseline
     for t in range(1, trials + 1):
-        print(f"Training {dataset} model... Trial {t} of {trials}", end=end)
+        print(f"Training {dataset} model... Trial {t} of {trials}")
         model.fit(xt, yt)
         test_acc = model.accuracy(x, y).item() * 100
 
@@ -1866,6 +1866,7 @@ if __name__ == "__main__":
         default=frameworks_avail,
         help="Frameworks to compare against",
         nargs="*",
+        type=lambda f: {f.lower(): f for f in frameworks_avail}[f.lower()],
     )
     parser.add_argument(
         "-i",
