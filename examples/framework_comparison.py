@@ -8,7 +8,6 @@ import argparse
 import builtins
 import collections
 import importlib
-import pickle
 import time
 import warnings
 
@@ -27,816 +26,1096 @@ import torch
 warnings.filterwarnings("ignore", category=UserWarning)
 
 
-def apgdce(art_classifier, clip, fb_classifier, frameworks, parameters, verbose, x, y):
+def apgd_art(
+    alpha,
+    clip_max,
+    clip_min,
+    epochs,
+    epsilon,
+    loss,
+    model,
+    num_restarts,
+    verbose,
+    x,
+    **_,
+):
     """
-    This method crafts adversarial examples with APGD-CE (Auto-PGD with CE
+    This function crafts adversarial examples with APGD-CE or APGD-DLR in ART.
+
+    :param alpha: perturbation strength
+    :type alpha: float
+    :param clip_max: maximum feature ranges
+    :type clip_max: torch Tensor object (m,)
+    :param clip_min: minimum feature ranges
+    :type clip_min: torch Tensor object (m,)
+    :param epochs: number of attack iterations
+    :type epochs: int
+    :param epsilon: l∞ budget
+    :type epsilon: float
+    :param loss: loss function to use
+    :type loss: str
+    :param model: model to craft adversarial examples with
+    :type model: dlm LinearClassifier-inherited object
+    :param num_restarts: number of random restarts to perform
+    :type num_restarts: int
+    :param verbose: enable verbose output
+    :type verbose: bool
+    :param x: inputs to craft adversarial examples from
+    :type x: torch Tensor object (n, m)
+    :return: APGD-CE/DLR ART adversarial examples
+    :rtype: torch Tensor object (n, m)
+    """
+    from art.attacks.evasion import AutoProjectedGradientDescent
+    from art.estimators.classification import PyTorchClassifier
+
+    art_classifier = PyTorchClassifier(
+        model=model.model,
+        clip_values=(clip_min.max().item(), clip_max.min().item()),
+        loss=model.loss,
+        optimizer=model.optimizer,
+        input_shape=(x.size(1),),
+        nb_classes=model.classes,
+        device_type="gpu" if model.device == "cuda" else model.device,
+    )
+    return torch.from_numpy(
+        AutoProjectedGradientDescent(
+            estimator=art_classifier,
+            norm="inf",
+            eps=epsilon,
+            eps_step=alpha,
+            max_iter=epochs,
+            targeted=False,
+            nb_random_init=num_restarts,
+            batch_size=x.size(0),
+            loss_type="cross_entropy" if loss == "ce" else "difference_logits_ratio",
+            verbose=verbose,
+        ).generate(x=x.clone().cpu().numpy())
+    ).to(model.device)
+
+
+def apgd_torchattacks(
+    epochs, epsilon, loss, model, num_restarts, rho, verbose, x, y, **_
+):
+    """
+    This function crafts adversarial examples with APGD-CE or APGD-DLR in
+    Torchattacks. Notably, the Torchattacks implementation assumes an image
+    (batches, channels, width, height).
+
+    :param epochs: number of attack iterations
+    :type epochs: int
+    :param epsilon: l∞ budget
+    :type epsilon: float
+    :param loss: loss function to use
+    :type loss: str
+    :param model: model to craft adversarial examples with
+    :type model: dlm LinearClassifier-inherited object
+    :param num_restarts: number of random restarts to perform
+    :type num_restarts: int
+    :param rho: rho parameter for APGD
+    :type rho: float
+    :param verbose: enable verbose output
+    :type verbose: bool
+    :param x: inputs to craft adversarial examples from
+    :type x: torch Tensor object (n, m)
+    :param y: labels of inputs to craft adversarail examples from
+    :type y: torch Tensor object (n,)
+    :return: APGD-CE/DLR Torchattacks adversarial examples
+    :rtype: torch Tensor object (n, m)
+    """
+    from torchattacks import APGD
+
+    return (
+        APGD(
+            model=model,
+            norm="Linf",
+            eps=epsilon,
+            steps=epochs,
+            n_restarts=num_restarts,
+            seed=0,
+            loss="ce" if loss == "ce" else "dlr",
+            eot_iter=1,
+            rho=rho,
+            verbose=verbose,
+        )(inputs=x.clone().unflatten(1, model.shape), labels=y)
+        .flatten(1)
+        .detach()
+    )
+
+
+def apgdce(clip_max, clip_min, frameworks, parameters, verbose, x, y, **_):
+    """
+    This function crafts adversarial examples with APGD-CE (Auto-PGD with CE
     loss) (https://arxiv.org/pdf/2003.01690.pdf). The supported frameworks for
     APGD-CE include ART and Torchattacks. Notably, the Torchattacks
     implementation assumes an image (batches, channels, width, height).
 
-    :param art_classifier: classifier for ART
-    :type art_classifier: art.estimator.classification PyTorchClassifier object
-    :param clip: allowable feature range for the domain
-    :type clip: torch Tensor object (2, m)
-    :param fb_classifier: classifier for Foolbox
-    :type fb_classifier: foolbox PyTorchModel object
+    :param clip_max: maximum feature ranges
+    :type clip_max: torch Tensor object (m,)
+    :param clip_min: minimum feature ranges
+    :type clip_min: torch Tensor object (m,)
     :param frameworks: frameworks to craft adversarial examples with
     :type frameworks: tuple of str
     :param parameters: attack parameters
     :type parameters: dict
     :param verbose: enable verbose output
-    :tyhpe verbose: bool
+    :type verbose: bool
     :param x: inputs to craft adversarial examples from
     :type x: torch Tensor object (n, m)
-    :param y: labels of inputs to craft adversarail examples from
-    :type x: torch Tensor object (n,)
+    :param y: labels of inputs to craft adversarial examples from
+    :type y: torch Tensor object (n,)
     :return: APGD-CE adversarial examples
-    :rtype: generator of torch Tensor object (n, m), float, and str
+    :rtype: generator of tuples of torch Tensor object (n, m), float, and str
     """
     end = "\n" if verbose else "\r"
     apgdce = aml.attacks.apgdce(**parameters)
-    model, eps, eps_step, max_iter, nb_random_init, rho = (
-        apgdce.model,
-        apgdce.epsilon,
-        apgdce.alpha,
-        apgdce.epochs,
-        apgdce.num_restarts,
-        apgdce.traveler.optimizer.param_groups[0]["rho"],
+    apgdce_params = dict(
+        alpha=apgdce.alpha,
+        clip_max=clip_max,
+        clip_min=clip_min,
+        epochs=apgdce.epochs,
+        epsilon=apgdce.epsilon,
+        loss="ce",
+        model=apgdce.model,
+        num_restarts=apgdce.num_restarts,
+        rho=apgdce.traveler.optimizer.param_groups[0]["rho"],
+        verbose=verbose,
+        x=x,
+        y=y,
     )
-    if "art" in frameworks:
-        from art.attacks.evasion import AutoProjectedGradientDescent
-
-        print("Producing APGD-CE adversarial examples with ART...", end=end)
+    fw_func = dict(ART=apgd_art, TorchAttacks=apgd_torchattacks)
+    frameworks = [fw for fw in frameworks if fw in fw_func]
+    "Torchattacks" in frameworks and not hasattr(
+        apgdce.model, "shape"
+    ) and frameworks.remove("Torchattacks")
+    for fw in frameworks:
         reset_seeds()
         start = time.time()
-        yield (
-            torch.from_numpy(
-                AutoProjectedGradientDescent(
-                    estimator=art_classifier,
-                    norm="inf",
-                    eps=eps,
-                    eps_step=eps_step,
-                    max_iter=max_iter,
-                    targeted=False,
-                    nb_random_init=nb_random_init,
-                    batch_size=x.size(0),
-                    loss_type="cross_entropy",
-                    verbose=verbose,
-                ).generate(x=x.clone().cpu().numpy())
-            ),
-            time.time() - start,
-            "ART",
-        )
-    if "torchattacks" in frameworks and hasattr(model, "shape"):
-        from torchattacks import APGD
-
-        print("Producing APGD-CE adversarial examples with Torchattacks...", end=end)
-        reset_seeds()
-        ta_x = x.clone().unflatten(1, model.shape)
-        start = time.time()
-        yield (
-            APGD(
-                model=model,
-                norm="Linf",
-                eps=eps,
-                steps=max_iter,
-                n_restarts=nb_random_init,
-                seed=0,
-                loss="ce",
-                eot_iter=1,
-                rho=rho,
-                verbose=verbose,
-            )(inputs=ta_x, labels=y)
-            .flatten(1)
-            .detach(),
-            time.time() - start,
-            "Torchattacks",
-        )
+        print(f"Producing APGD-CE adversarial examples with {fw}...", end=end)
+        yield fw_func[fw](**apgdce_params), time.time() - start, fw
     reset_seeds()
     start = time.time()
-    yield x + apgdce.craft(x, y), time.time() - start, "aml"
+    yield (x + apgdce.craft(x, y), time.time() - start, "aml")
 
 
-def apgddlr(art_classifier, clip, fb_classifier, frameworks, parameters, verbose, x, y):
+def apgddlr(clip_max, clip_min, frameworks, parameters, verbose, x, y, **_):
     """
-    This method crafts adversarial examples with APGD-DLR (Auto-PGD with DLR
+    This function crafts adversarial examples with APGD-DLR (Auto-PGD with DLR
     loss) (https://arxiv.org/pdf/2003.01690.pdf). The supported frameworks for
     APGD-DLR include ART and Torchattacks. Notably, DLR loss is undefined for
     these frameworks when there are only two classes. Moreover, the
     Torchattacks implementation assumes an image (batches, channels, width,
     height).
 
-    :param art_classifier: classifier for ART
-    :type art_classifier: art.estimator.classification PyTorchClassifier object
-    :param clip: allowable feature range for the domain
-    :type clip: torch Tensor object (2, m)
-    :param fb_classifier: classifier for Foolbox
-    :type fb_classifier: foolbox PyTorchModel object
+    :param clip_max: maximum feature ranges
+    :type clip_max: torch Tensor object (m,)
+    :param clip_min: minimum feature ranges
+    :type clip_min: torch Tensor object (m,)
     :param frameworks: frameworks to craft adversarial examples with
     :type frameworks: tuple of str
     :param parameters: attack parameters
     :type parameters: dict
     :param verbose: enable verbose output
-    :tyhpe verbose: bool
+    :type verbose: bool
     :param x: inputs to craft adversarial examples from
     :type x: torch Tensor object (n, m)
-    :param y: labels of inputs to craft adversarail examples from
-    :type x: torch Tensor object (n,)
+    :param y: labels of inputs to craft adversarial examples from
+    :type y: torch Tensor object (n,)
     :return: APGD-DLR adversarial examples
-    :rtype: generator of torch Tensor object (n, m), float, and str
+    :rtype: generator of tuples of torch Tensor object (n, m), float, and str
     """
     end = "\n" if verbose else "\r"
     apgddlr = aml.attacks.apgddlr(**parameters)
-    model, eps, eps_step, max_iter, nb_random_init, rho = (
-        apgddlr.model,
-        apgddlr.epsilon,
-        apgddlr.alpha,
-        apgddlr.epochs,
-        apgddlr.num_restarts,
-        apgddlr.traveler.optimizer.param_groups[0]["rho"],
+    apgddlr_params = dict(
+        alpha=apgddlr.alpha,
+        clip_max=clip_max,
+        clip_min=clip_min,
+        epochs=apgddlr.epochs,
+        epsilon=apgddlr.epsilon,
+        loss="dlr",
+        model=apgddlr.model,
+        num_restarts=apgddlr.num_restarts,
+        rho=apgddlr.traveler.optimizer.param_groups[0]["rho"],
+        verbose=verbose,
+        x=x,
+        y=y,
     )
-    if "art" in frameworks and model.classes > 2:
-        from art.attacks.evasion import AutoProjectedGradientDescent
-
-        print("Producing APGD-DLR adversarial examples with ART...", end=end)
+    fw_func = dict(ART=apgd_art, TorchAttacks=apgd_torchattacks)
+    frameworks = [fw for fw in frameworks if fw in fw_func]
+    "ART" in frameworks and apgddlr.model.classes < 3 and frameworks.remove("ART")
+    "Torchattacks" in frameworks and apgddlr.model.classes < 3 and not hasattr(
+        apgdce.model, "shape"
+    ) and frameworks.remove("Torchattacks")
+    for fw in frameworks:
         reset_seeds()
         start = time.time()
-        yield (
-            torch.from_numpy(
-                AutoProjectedGradientDescent(
-                    estimator=art_classifier,
-                    norm="inf",
-                    eps=eps,
-                    eps_step=eps_step,
-                    max_iter=max_iter,
-                    targeted=False,
-                    nb_random_init=nb_random_init,
-                    batch_size=x.size(0),
-                    loss_type="difference_logits_ratio",
-                    verbose=verbose,
-                ).generate(x=x.clone().cpu().numpy())
-            ),
-            time.time() - start,
-            "ART",
-        )
-    if "torchattacks" in frameworks and model.classes > 2 and hasattr(model, "shape"):
-        from torchattacks import APGD
-
-        print("Producing APGD-DLR adversarial examples with Torchattacks...", end=end)
-        reset_seeds()
-        ta_x = x.clone().unflatten(1, model.shape)
-        start = time.time()
-        yield (
-            APGD(
-                model=model,
-                norm="Linf",
-                eps=eps,
-                steps=max_iter,
-                n_restarts=nb_random_init,
-                seed=0,
-                loss="dlr",
-                eot_iter=1,
-                rho=rho,
-                verbose=verbose,
-            )(inputs=ta_x, labels=y)
-            .flatten(1)
-            .detach(),
-            time.time() - start,
-            "Torchattacks",
-        )
+        print(f"Producing APGD-DLR adversarial examples with {fw}...", end=end)
+        yield fw_func[fw](**apgddlr_params), time.time() - start, fw
     reset_seeds()
     start = time.time()
     yield x + apgddlr.craft(x, y), time.time() - start, "aml"
 
 
-def bim(art_classifier, clip, fb_classifier, frameworks, parameters, verbose, x, y):
+def bim(clip_max, clip_min, frameworks, parameters, verbose, x, y, **_):
     """
-    This method crafts adversarial examples with BIM (Basic Iterative
-    Method) (https://arxiv.org/pdf/1611.01236.pdf). The supported
-    frameworks for BIM include AdverTorch, ART, CleverHans, Foolbox, and
-    Torchattacks. Notably, CleverHans does not have an explicit
-    implementation of BIM, so we call PGD, but with random initialization
-    disabled.
+    This function crafts adversarial examples with BIM (Basic Iterative Method)
+    (https://arxiv.org/pdf/1611.01236.pdf). The supported frameworks for BIM
+    include AdverTorch, ART, CleverHans, Foolbox, and Torchattacks. Notably,
+    CleverHans does not have an explicit implementation of BIM, so we call PGD,
+    but with random initialization disabled.
 
-    :param art_classifier: classifier for ART
-    :type art_classifier: art.estimator.classification PyTorchClassifier object
-    :param clip: allowable feature range for the domain
-    :type clip: torch Tensor object (2, m)
-    :param fb_classifier: classifier for Foolbox
-    :type fb_classifier: foolbox PyTorchModel object
+    :param clip_max: maximum feature ranges
+    :type clip_max: torch Tensor object (m,)
+    :param clip_min: minimum feature ranges
+    :type clip_min: torch Tensor object (m,)
     :param frameworks: frameworks to craft adversarial examples with
     :type frameworks: tuple of str
     :param parameters: attack parameters
     :type parameters: dict
     :param verbose: enable verbose output
-    :tyhpe verbose: bool
+    :type verbose: bool
+    :param x: inputs to craft adversarial examples from
+    :type x: torch Tensor object (n, m)
+    :param y: labels of inputs to craft adversarial examples from
+    :type y: torch Tensor object (n,)
+    :return: BIM adversarial examples
+    :rtype: generator of tuples of torch Tensor object (n, m), float, and str
+    """
+    end = "\n" if verbose else "\r"
+    bim = aml.attacks.bim(**parameters)
+    bim_params = dict(
+        alpha=bim.alpha,
+        clip_max=clip_max,
+        clip_min=clip_min,
+        epochs=bim.epochs,
+        epsilon=bim.epsilon,
+        model=bim.model,
+        verbose=verbose,
+        x=x,
+        y=y,
+    )
+    fw_func = dict(
+        AdverTorch=bim_advertorch,
+        ART=bim_art,
+        CleverHans=bim_cleverhans,
+        Foolbox=bim_foolbox,
+        Torchattacks=bim_torchattacks,
+    )
+    frameworks = [fw for fw in frameworks if fw in fw_func]
+    for fw in frameworks:
+        start = time.time()
+        print(f"Producing BIM adversarial examples with {fw}...", end=end)
+        yield fw_func[fw](**bim_params), time.time() - start, fw
+    start = time.time()
+    yield x + bim.craft(x, y), time.time() - start, "aml"
+
+
+def bim_advertorch(alpha, clip_max, clip_min, epochs, epsilon, model, x, y, **_):
+    """
+    This function crafts adversarial examples with BIM in AdverTorch.
+
+    :param alpha: perturbation strength
+    :type alpha: float
+    :param clip_max: maximum feature ranges
+    :type clip_max: torch Tensor object (m,)
+    :param clip_min: minimum feature ranges
+    :type clip_min: torch Tensor object (m,)
+    :param epochs: number of attack iterations
+    :type epochs: int
+    :param epsilon: l∞ budget
+    :type epsilon: float
+    :param model: model to craft adversarial examples with
+    :type model: dlm LinearClassifier-inherited object
+    :param x: inputs to craft adversarial examples from
+    :type x: torch Tensor object (n, m)
+    :param y: labels of inputs to craft adversarial examples from
+    :type y: torch Tensor object (n,)
+    :return: BIM AdverTorch adversarial examples
+    :rtype: torch Tensor object (n, m)
+    """
+    from advertorch.attacks import LinfBasicIterativeAttack
+
+    return LinfBasicIterativeAttack(
+        predict=model,
+        loss_fn=torch.nn.CrossEntropyLoss(reduction="sum"),
+        eps=epsilon,
+        nb_iter=epochs,
+        eps_iter=alpha,
+        clip_min=clip_min,
+        clip_max=clip_max,
+        targeted=False,
+    ).perturb(x=x.clone(), y=y.clone())
+
+
+def bim_art(alpha, clip_max, clip_min, epochs, epsilon, model, verbose, x, **_):
+    """
+    This function crafts adversarial examples with BIM in ART.
+
+    :param alpha: perturbation strength
+    :type alpha: float
+    :param clip_max: maximum feature ranges
+    :type clip_max: torch Tensor object (m,)
+    :param clip_min: minimum feature ranges
+    :type clip_min: torch Tensor object (m,)
+    :param epochs: number of attack iterations
+    :type epochs: int
+    :param epsilon: l∞ budget
+    :type epsilon: float
+    :param model: model to craft adversarial examples with
+    :type model: dlm LinearClassifier-inherited object
+    :param verbose: enable verbose output
+    :type verbose: bool
+    :param x: inputs to craft adversarial examples from
+    :type x: torch Tensor object (n, m)
+    :return: BIM ART adversarial examples
+    :rtype: torch Tensor object (n, m)
+    """
+
+    from art.attacks.evasion import BasicIterativeMethod
+    from art.estimators.classification import PyTorchClassifier
+
+    art_classifier = PyTorchClassifier(
+        model=model.model,
+        clip_values=(clip_min.max().item(), clip_max.min().item()),
+        loss=model.loss,
+        optimizer=model.optimizer,
+        input_shape=(x.size(1),),
+        nb_classes=model.classes,
+        device_type="gpu" if model.device == "cuda" else model.device,
+    )
+    return torch.from_numpy(
+        BasicIterativeMethod(
+            estimator=art_classifier,
+            eps=epsilon,
+            eps_step=alpha,
+            max_iter=epochs,
+            targeted=False,
+            batch_size=x.size(0),
+            verbose=verbose,
+        ).generate(x=x.clone().cpu().numpy())
+    ).to(model.device)
+
+
+def bim_cleverhans(alpha, clip_max, clip_min, epochs, epsilon, model, x, y, **_):
+    """
+    This function crafts adversarial examples with BIM in CleverHans.
+
+    :param alpha: perturbation strength
+    :type alpha: float
+    :param clip_max: maximum feature ranges
+    :type clip_max: torch Tensor object (m,)
+    :param clip_min: minimum feature ranges
+    :type clip_min: torch Tensor object (m,)
+    :param epochs: number of attack iterations
+    :type epochs: int
+    :param epsilon: l∞ budget
+    :type epsilon: float
+    :param model: model to craft adversarial examples with
+    :type model: dlm LinearClassifier-inherited object
     :param x: inputs to craft adversarial examples from
     :type x: torch Tensor object (n, m)
     :param y: labels of inputs to craft adversarail examples from
-    :type x: torch Tensor object (n,)
-    :return: BIM adversarial examples
-    :rtype: tuple of tuples: torch Tensor object (n, m), float, and str
+    :type y: torch Tensor object (n,)
+    :return: BIM CleverHans adversarial examples
+    :rtype: torch Tensor object (n, m)
     """
-    end = "\n" if verbose else "\r"
-    clip_min, clip_max = clip.unbind()
-    bim = aml.attacks.bim(**parameters)
-    model, eps, nb_iter, eps_iter = bim.model, bim.epsilon, bim.epochs, bim.alpha
-    if "advertorch" in frameworks:
-        from advertorch.attacks import LinfBasicIterativeAttack as BasicIterativeAttack
+    from cleverhans.torch.attacks.projected_gradient_descent import (
+        projected_gradient_descent as basic_iterative_method,
+    )
 
-        print("Producing BIM adversarial examples with AdverTorch...", end=end)
-        start = time.time()
-        yield (
-            BasicIterativeAttack(
-                predict=model,
-                loss_fn=torch.nn.CrossEntropyLoss(reduction="sum"),
-                eps=eps,
-                nb_iter=nb_iter,
-                eps_iter=eps_iter,
-                clip_min=clip_min,
-                clip_max=clip_max,
-                targeted=False,
-            ).perturb(x=x.clone(), y=y.clone()),
-            time.time() - start,
-            "AdverTorch",
-        )
-    if "art" in frameworks:
-        from art.attacks.evasion import BasicIterativeMethod
-
-        print("Producing BIM adversarial examples with ART...", end=end)
-        start = time.time()
-        yield (
-            torch.from_numpy(
-                BasicIterativeMethod(
-                    estimator=art_classifier,
-                    eps=eps,
-                    eps_step=eps_iter,
-                    max_iter=nb_iter,
-                    targeted=False,
-                    batch_size=x.size(0),
-                    verbose=verbose,
-                ).generate(x=x.clone().cpu().numpy())
-            ),
-            time.time() - start,
-            "ART",
-        )
-    if "cleverhans" in frameworks:
-        from cleverhans.torch.attacks.projected_gradient_descent import (
-            projected_gradient_descent as basic_iterative_method,
-        )
-
-        print("Producing BIM adversarial examples with CleverHans...", end=end)
-        start = time.time()
-        yield (
-            basic_iterative_method(
-                model_fn=model,
-                x=x.clone(),
-                eps=eps,
-                eps_iter=eps_iter,
-                nb_iter=nb_iter,
-                norm=float("inf"),
-                clip_min=clip_min.max(),
-                clip_max=clip_max.min(),
-                y=y,
-                targeted=False,
-                rand_init=False,
-                rand_minmax=0,
-                sanity_checks=False,
-            ).detach(),
-            time.time() - start,
-            "CleverHans",
-        )
-    if "foolbox" in frameworks:
-        from foolbox.attacks import LinfBasicIterativeAttack as BasicIterativeAttack
-
-        print("Producing BIM adversarial examples with Foolbox...", end=end)
-        start = time.time()
-        _, fb_adv, _ = BasicIterativeAttack(
-            rel_stepsize=None,
-            abs_stepsize=eps_iter,
-            steps=nb_iter,
-            random_start=False,
-        )(fb_classifier, x.clone(), y.clone(), epsilons=eps)
-        yield fb_adv, time.time() - start, "Foolbox"
-    if "torchattacks" in frameworks:
-        from torchattacks import BIM
-
-        print("Producing BIM adversarial examples with Torchattacks...", end=end)
-        start = time.time()
-        yield (
-            BIM(model=model, eps=eps, alpha=eps_iter, steps=nb_iter)(
-                inputs=x.clone(), labels=y
-            ),
-            time.time() - start,
-            "Torchattacks",
-        )
-    start = time.time()
-    yield (x + bim.craft(x, y), time.time() - start, "aml")
+    return basic_iterative_method(
+        model_fn=model,
+        x=x.clone(),
+        eps=epsilon,
+        eps_iter=alpha,
+        nb_iter=epochs,
+        norm=float("inf"),
+        clip_min=clip_min.max(),
+        clip_max=clip_max.min(),
+        y=y,
+        targeted=False,
+        rand_init=False,
+        rand_minmax=0,
+        sanity_checks=False,
+    ).detach()
 
 
-def cwl2(art_classifier, clip, fb_classifier, frameworks, parameters, verbose, x, y):
+def bim_foolbox(alpha, clip_max, clip_min, epochs, epsilon, model, x, y, **_):
+    """
+    This function crafts adversarial examples with BIM in Foolbox.
+
+    :param alpha: perturbation strength
+    :type alpha: float
+    :param clip_max: maximum feature ranges
+    :type clip_max: torch Tensor object (m,)
+    :param clip_min: minimum feature ranges
+    :type clip_min: torch Tensor object (m,)
+    :param epochs: number of attack iterations
+    :type epochs: int
+    :param epsilon: l∞ budget
+    :type epsilon: float
+    :param model: model to craft adversarial examples with
+    :type model: dlm LinearClassifier-inherited object
+    :param x: inputs to craft adversarial examples from
+    :type x: torch Tensor object (n, m)
+    :param y: labels of inputs to craft adversarail examples from
+    :type y: torch Tensor object (n,)
+    :return: BIM Foolbox adversarial examples
+    :rtype: torch Tensor object (n, m)
+    """
+    from foolbox import PyTorchModel
+    from foolbox.attacks import LinfBasicIterativeAttack
+
+    fb_classifier = PyTorchModel(
+        model=model.model,
+        bounds=(clip_min.min().item(), clip_max.max().item()),
+        device=model.device,
+    )
+    return LinfBasicIterativeAttack(
+        rel_stepsize=None,
+        abs_stepsize=alpha,
+        steps=epochs,
+        random_start=False,
+    )(fb_classifier, x.clone(), y.clone(), epsilons=epsilon)[1]
+
+
+def bim_torchattacks(alpha, epochs, epsilon, model, x, y, **_):
+    """
+    This function crafts adversarial examples with BIM in torchattacks.
+
+    :param alpha: perturbation strength
+    :type alpha: float
+    :param epochs: number of attack iterations
+    :type epochs: int
+    :param epsilon: l∞ budget
+    :type epsilon: float
+    :param model: model to craft adversarial examples with
+    :type model: dlm LinearClassifier-inherited object
+    :param x: inputs to craft adversarial examples from
+    :type x: torch Tensor object (n, m)
+    :param y: labels of inputs to craft adversarail examples from
+    :type y: torch Tensor object (n,)
+    :return: BIM torchattacks adversarial examples
+    :rtype: torch Tensor object (n, m)
+    """
+    from torchattacks import BIM
+
+    return BIM(model=model, eps=epsilon, alpha=alpha, steps=epochs)(
+        inputs=x.clone(), labels=y
+    )
+
+
+def cwl2(clip_max, clip_min, frameworks, parameters, safe, verbose, x, y):
     """
     This method crafts adversariale examples with CW-L2 (Carlini-Wagner with l2
     norm) (https://arxiv.org/pdf/1608.04644.pdf). The supported frameworks for
     CW-L2 include AdverTorch, ART, CleverHans, Foolbox, and Torchattacks.
-    Notably, Torchattacks does not explicitly support binary searching on c (it
-    expects searching manually).
+    Notably, Torchattacks does not support binary search over c, and, unless
+    safeguards are ignored, the CleverHans implementation is skipped as it is
+    slow (on the order of days with default parameters on MNIST).
 
-    :param art_classifier: classifier for ART
-    :type art_classifier: art.estimator.classification PyTorchClassifier object
-    :param clip: allowable feature range for the domain
-    :type clip: torch Tensor object (2, m)
-    :param fb_classifier: classifier for Foolbox
-    :type fb_classifier: foolbox PyTorchModel object
+    :param clip_max: maximum feature ranges
+    :type clip_max: torch Tensor object (m,)
+    :param clip_min: minimum feature ranges
+    :type clip_min: torch Tensor object (m,)
     :param frameworks: frameworks to craft adversarial examples with
     :type frameworks: tuple of str
     :param parameters: attack parameters
     :type parameters: dict
+    :param safe: whether to skip implementations with high compute or time
+    :type safe: bool
     :param verbose: enable verbose output
-    :tyhpe verbose: bool
+    :type verbose: bool
     :param x: inputs to craft adversarial examples from
     :type x: torch Tensor object (n, m)
-    :param y: labels of inputs to craft adversarail examples from
-    :type x: torch Tensor object (n,)
+    :param y: labels of inputs to craft adversarial examples from
+    :type y: torch Tensor object (n,)
     :return: CW-L2 adversarial examples
-    :rtype: tuple of tuples: torch Tensor object (n, m), float, and str
+    :rtype: generator of tuples of torch Tensor object (n, m), float, and str
     """
     end = "\n" if verbose else "\r"
-    clip_min, clip_max = clip.unbind()
     cwl2 = aml.attacks.cwl2(**parameters)
-    (
-        model,
-        classes,
-        confidence,
-        learning_rate,
-        binary_search_steps,
-        max_iterations,
-        initial_const,
-    ) = (
-        cwl2.model,
-        cwl2.model.classes,
-        cwl2.surface.loss.k,
-        cwl2.alpha,
-        cwl2.hparam_steps,
-        cwl2.epochs,
-        cwl2.surface.loss.c.item(),
+    cwl2_params = dict(
+        alpha=cwl2.alpha,
+        c=cwl2.surface.loss.c.item(),
+        classes=cwl2.model.classes,
+        clip_max=clip_max,
+        clip_min=clip_min,
+        epochs=cwl2.epochs,
+        epsilon=cwl2.epsilon,
+        hparam_steps=cwl2.hparam_steps,
+        k=cwl2.surface.loss.k,
+        model=cwl2.model,
+        verbose=verbose,
+        x=x,
+        y=y,
     )
-    if "advertorch" in frameworks:
-        from advertorch.attacks import CarliniWagnerL2Attack
-
-        print("Producing CW-L2 adversarial examples with AdverTorch...", end=end)
+    fw_func = dict(
+        AdverTorch=cwl2_advertorch,
+        ART=cwl2_art,
+        CleverHans=cwl2_cleverhans,
+        Foolbox=cwl2_foolbox,
+        Torchattacks=cwl2_torchattacks,
+    )
+    frameworks = [fw for fw in frameworks if fw in fw_func]
+    safe and "CleverHans" in frameworks and frameworks.remove("CleverHans")
+    for fw in frameworks:
         start = time.time()
-        yield (
-            CarliniWagnerL2Attack(
-                predict=model,
-                num_classes=classes,
-                confidence=confidence,
-                targeted=False,
-                learning_rate=learning_rate,
-                binary_search_steps=binary_search_steps,
-                max_iterations=max_iterations,
-                abort_early=True,
-                initial_const=initial_const,
-                clip_min=clip_min,
-                clip_max=clip_max,
-            ).perturb(x=x.clone(), y=y.clone()),
-            time.time() - start,
-            "AdverTorch",
-        )
-    if "art" in frameworks:
-        from art.attacks.evasion import CarliniL2Method as CarliniWagner
-
-        print("Producing CW-L2 adversarial examples with ART...", end=end)
-        start = time.time()
-        yield (
-            torch.from_numpy(
-                CarliniWagner(
-                    classifier=art_classifier,
-                    confidence=confidence,
-                    targeted=False,
-                    learning_rate=learning_rate,
-                    binary_search_steps=binary_search_steps,
-                    max_iter=max_iterations,
-                    initial_const=initial_const,
-                    max_halving=binary_search_steps // 2,
-                    max_doubling=binary_search_steps // 2,
-                    batch_size=x.size(0),
-                    verbose=verbose,
-                ).generate(x=x.clone().cpu().numpy())
-            ),
-            time.time() - start,
-            "ART",
-        )
-    if "cleverhans" in frameworks:
-        from cleverhans.torch.attacks.carlini_wagner_l2 import carlini_wagner_l2
-
-        print("Producing CW-L2 adversarial examples with CleverHans...", end=end)
-        start = time.time()
-        yield (
-            carlini_wagner_l2(
-                model_fn=model,
-                x=x.clone(),
-                n_classes=classes,
-                y=y,
-                lr=learning_rate,
-                confidence=confidence,
-                clip_min=clip_min.max(),
-                clip_max=clip_max.min(),
-                initial_const=initial_const,
-                binary_search_steps=binary_search_steps,
-                max_iterations=max_iterations,
-            ).detach(),
-            time.time() - start,
-            "CleverHans",
-        )
-    if "foolbox" in frameworks:
-        from foolbox.attacks import L2CarliniWagnerAttack
-
-        print("Producing CW-L2 adversarial examples with Foolbox...", end=end)
-        start = time.time()
-        _, fb_adv, _ = L2CarliniWagnerAttack(
-            binary_search_steps=binary_search_steps,
-            steps=max_iterations,
-            stepsize=learning_rate,
-            confidence=confidence,
-            initial_const=initial_const,
-            abort_early=True,
-        )(fb_classifier, x.clone(), y.clone(), epsilons=cwl2.epsilon)
-        yield fb_adv, time.time() - start, "Foolbox"
-    if "torchattacks" in frameworks:
-        from torchattacks import CW
-
-        print("Producing CW-L2 adversarial examples with Torchattacks...", end=end)
-        start = time.time()
-        ta_adv = CW(
-            model=model,
-            c=initial_const,
-            kappa=confidence,
-            steps=max_iterations,
-            lr=learning_rate,
-        )(inputs=x.clone(), labels=y)
-
-        # torchattack's implementation can return nans
-        yield (
-            torch.where(ta_adv.isnan(), x, ta_adv),
-            time.time() - start,
-            "Torchattacks",
-        )
+        print(f"Producing CW-L2 adversarial examples with {fw}...", end=end)
+        yield fw_func[fw](**cwl2_params), time.time() - start, fw
     start = time.time()
     yield x + cwl2.craft(x, y), time.time() - start, "aml"
 
 
-def df(art_classifier, clip, fb_classifier, frameworks, parameters, verbose, x, y):
+def cwl2_advertorch(
+    alpha, c, classes, clip_max, clip_min, epochs, hparam_steps, k, model, x, y, **_
+):
+    """
+    This function crafts adversarial examples with CW-L2 in AdverTorch.
+
+    :param alpha: perturbation strength
+    :type alpha: float
+    :param c: importance of misclassification over imperceptability
+    :type c: float
+    :param classes: number of classes
+    :type classes: int
+    :param clip_max: maximum feature ranges
+    :type clip_max: torch Tensor object (m,)
+    :param clip_min: minimum feature ranges
+    :type clip_min: torch Tensor object (m,)
+    :param epochs: number of attack iterations
+    :type epochs: int
+    :param hparam_steps: number of binary search steps
+    :type hpapram_steps: int
+    :param k: minimum logit difference between true and current classes
+    :type k: float
+    :param model: model to craft adversarial examples with
+    :type model: dlm LinearClassifier-inherited object
+    :param x: inputs to craft adversarial examples from
+    :type x: torch Tensor object (n, m)
+    :param y: labels of inputs to craft adversarial examples from
+    :type y: torch Tensor object (n,)
+    :return: CW-L2 AdverTorch adversarial examples
+    :rtype: torch Tensor object (n, m)
+    """
+    from advertorch.attacks import CarliniWagnerL2Attack
+
+    return CarliniWagnerL2Attack(
+        predict=model,
+        num_classes=classes,
+        confidence=k,
+        targeted=False,
+        learning_rate=alpha,
+        binary_search_steps=hparam_steps,
+        max_iterations=epochs,
+        abort_early=True,
+        initial_const=c,
+        clip_min=clip_min,
+        clip_max=clip_max,
+    ).perturb(x=x.clone(), y=y.clone())
+
+
+def cwl2_art(
+    alpha, c, clip_max, clip_min, epochs, hparam_steps, k, model, verbose, x, **_
+):
+    """
+    This function crafts adversarial examples with CW-L2 in ART.
+
+    :param alpha: perturbation strength
+    :type alpha: float
+    :param c: importance of misclassification over imperceptability
+    :type c: float
+    :param classes: number of classes
+    :type classes: int
+    :param clip_max: maximum feature ranges
+    :type clip_max: torch Tensor object (m,)
+    :param clip_min: minimum feature ranges
+    :type clip_min: torch Tensor object (m,)
+    :param epochs: number of attack iterations
+    :type epochs: int
+    :param hpapram_steps: number of binary search steps
+    :type hpapram_steps: int
+    :param k: minimum logit difference between true and current classes
+    :type k: float
+    :param model: model to craft adversarial examples with
+    :type model: dlm LinearClassifier-inherited object
+    :param verbose: enable verbose output
+    :type verbose: bool
+    :param x: inputs to craft adversarial examples from
+    :type x: torch Tensor object (n, m)
+    :return: CW-L2 ART adversarial examples
+    :rtype: torch Tensor object (n, m)
+    """
+    from art.attacks.evasion import CarliniL2Method as CarliniWagner
+    from art.estimators.classification import PyTorchClassifier
+
+    art_classifier = PyTorchClassifier(
+        model=model.model,
+        clip_values=(clip_min.max().item(), clip_max.min().item()),
+        loss=model.loss,
+        optimizer=model.optimizer,
+        input_shape=(x.size(1),),
+        nb_classes=model.classes,
+        device_type="gpu" if model.device == "cuda" else model.device,
+    )
+    return torch.from_numpy(
+        CarliniWagner(
+            classifier=art_classifier,
+            confidence=k,
+            targeted=False,
+            learning_rate=alpha,
+            binary_search_steps=hparam_steps,
+            max_iter=epochs,
+            initial_const=c,
+            max_halving=hparam_steps // 2,
+            max_doubling=hparam_steps // 2,
+            batch_size=x.size(0),
+            verbose=verbose,
+        ).generate(x=x.clone().cpu().numpy())
+    ).to(model.device)
+
+
+def cwl2_cleverhans(
+    alpha, c, classes, clip_max, clip_min, epochs, hparam_steps, k, model, x, y, **_
+):
+    """
+    This function crafts adversarial examples with CW-L2 in CleverHans.
+
+    :param alpha: perturbation strength
+    :type alpha: float
+    :param c: importance of misclassification over imperceptability
+    :type c: float
+    :param classes: number of classes
+    :type classes: int
+    :param clip_max: maximum feature ranges
+    :type clip_max: torch Tensor object (m,)
+    :param clip_min: minimum feature ranges
+    :type clip_min: torch Tensor object (m,)
+    :param epochs: number of attack iterations
+    :type epochs: int
+    :param hpapram_steps: number of binary search steps
+    :type hpapram_steps: int
+    :param k: minimum logit difference between true and current classes
+    :type k: float
+    :param model: model to craft adversarial examples with
+    :type model: dlm LinearClassifier-inherited object
+    :param x: inputs to craft adversarial examples from
+    :type x: torch Tensor object (n, m)
+    :param y: labels of inputs to craft adversarial examples from
+    :type y: torch Tensor object (n,)
+    :return: CW-L2 CleverHans adversarial examples
+    :rtype: torch Tensor object (n, m)
+    """
+    from cleverhans.torch.attacks.carlini_wagner_l2 import carlini_wagner_l2
+
+    return (
+        carlini_wagner_l2(
+            model_fn=model,
+            x=x.clone(),
+            n_classes=classes,
+            y=y,
+            lr=alpha,
+            confidence=k,
+            clip_min=clip_min.max(),
+            clip_max=clip_max.min(),
+            initial_const=c,
+            binary_search_steps=hparam_steps,
+            max_iterations=epochs,
+        ).detach(),
+    )
+
+
+def cwl2_foolbox(
+    alpha, c, clip_max, clip_min, epochs, epsilon, hparam_steps, k, model, x, y, **_
+):
+    """
+    This function crafts adversarial examples with CW-L2 in Foolbox.
+
+    :param alpha: perturbation strength
+    :type alpha: float
+    :param c: importance of misclassification over imperceptability
+    :type c: float
+    :param clip_max: maximum feature ranges
+    :type clip_max: torch Tensor object (m,)
+    :param clip_min: minimum feature ranges
+    :type clip_min: torch Tensor object (m,)
+    :param epochs: number of attack iterations
+    :type epochs: int
+    :param epsilon: l2 budget
+    :type epsilon: float
+    :param hpapram_steps: number of binary search steps
+    :type hpapram_steps: int
+    :param k: minimum logit difference between true and current classes
+    :type k: float
+    :param model: model to craft adversarial examples with
+    :type model: dlm LinearClassifier-inherited object
+    :param x: inputs to craft adversarial examples from
+    :type x: torch Tensor object (n, m)
+    :param y: labels of inputs to craft adversarial examples from
+    :type y: torch Tensor object (n,)
+    :return: CW-L2 Foolbox adversarial examples
+    :rtype: torch Tensor object (n, m)
+    """
+    from foolbox import PyTorchModel
+    from foolbox.attacks import L2CarliniWagnerAttack
+
+    fb_classifier = PyTorchModel(
+        model=model.model,
+        bounds=(clip_min.min().item(), clip_max.max().item()),
+        device=model.device,
+    )
+    return L2CarliniWagnerAttack(
+        binary_search_steps=hparam_steps,
+        steps=epochs,
+        stepsize=alpha,
+        confidence=k,
+        initial_const=c,
+        abort_early=True,
+    )(fb_classifier, x.clone(), y.clone(), epsilons=epsilon)[1]
+
+
+def cwl2_torchattacks(alpha, c, epochs, k, model, x, y, **_):
+    """
+    This function crafts adversarial examples with CW-L2 in torchattacks.
+    Notably, this implementation can return nans.
+
+    :param alpha: perturbation strength
+    :type alpha: float
+    :param c: importance of misclassification over imperceptability
+    :type c: float
+    :param epochs: number of attack iterations
+    :type epochs: int
+    :param k: minimum logit difference between true and current classes
+    :type k: float
+    :param model: model to craft adversarial examples with
+    :type model: dlm LinearClassifier-inherited object
+    :param x: inputs to craft adversarial examples from
+    :type x: torch Tensor object (n, m)
+    :param y: labels of inputs to craft adversarial examples from
+    :type y: torch Tensor object (n,)
+    :return: CW-L2 torchattacks adversarial examples
+    :rtype: torch Tensor object (n, m)
+    """
+    from torchattacks import CW
+
+    adv = CW(model=model, c=c, kappa=k, steps=epochs, lr=alpha)(
+        inputs=x.clone(), labels=y
+    )
+    return torch.where(adv.isnan(), x, adv)
+
+
+def df(clip_max, clip_min, frameworks, parameters, safe, verbose, x, y):
     """
     This method crafts adversarial examples with DF (DeepFool)
     (https://arxiv.org/pdf/1611.01236.pdf). The supported frameworks for DF
     include ART, Foolbox, and Torchattacks. Notably, the DF implementation in
     ART, Foolbox, and Torchattacks have an overshoot parameter which we set to
     aml DF's learning rate alpha minus one (not to be confused with the epsilon
-    parameter used in aml, which governs the norm-ball size).
+    parameter used in aml, which governs the norm-ball size). Finally, the
+    Torchattacks implementation is skipped if the number of classes is greater
+    than 4, as it has a slow runtime for computing model Jacobians.
 
-    :param art_classifier: classifier for ART
-    :type art_classifier: art.estimator.classification PyTorchClassifier object
-    :param clip: allowable feature range for the domain
-    :type clip: torch Tensor object (2, m)
-    :param fb_classifier: classifier for Foolbox
-    :type fb_classifier: foolbox PyTorchModel object
+    :param clip_max: maximum feature ranges
+    :type clip_max: torch Tensor object (m,)
+    :param clip_min: minimum feature ranges
+    :type clip_min: torch Tensor object (m,)
     :param frameworks: frameworks to craft adversarial examples with
     :type frameworks: tuple of str
     :param parameters: attack parameters
     :type parameters: dict
+    :param safe: whether to skip implementations with high compute or time
+    :type safe: bool
     :param verbose: enable verbose output
-    :tyhpe verbose: bool
+    :type verbose: bool
     :param x: inputs to craft adversarial examples from
     :type x: torch Tensor object (n, m)
-    :param y: labels of inputs to craft adversarail examples from
-    :type x: torch Tensor object (n,)
-    :return: DeepFool adversarial examples
-    :rtype: tuple of tuples: torch Tensor object (n, m), float, and str
+    :param y: labels of inputs to craft adversarial examples from
+    :type y: torch Tensor object (n,)
+    :return: DF adversarial examples
+    :rtype: generator of tuples of torch Tensor object (n, m), float, and str
     """
     end = "\n" if verbose else "\r"
     df = aml.attacks.df(**parameters)
-    model, max_iter, epsilon, nb_grads = (
-        df.model,
-        df.epochs,
-        df.alpha - 1,
-        df.model.classes,
+    df_params = dict(
+        classes=df.model.classes,
+        clip_max=clip_max,
+        clip_min=clip_min,
+        epochs=df.epochs,
+        epsilon=df.epsilon,
+        overshoot=df.alpha - 1,
+        model=df.model,
+        verbose=verbose,
+        x=x,
+        y=y,
     )
-    if "art" in frameworks:
-        from art.attacks.evasion import DeepFool
-
-        print("Producing DF adversarial examples with ART...", end=end)
+    fw_func = dict(ART=df_art, Foolbox=df_foolbox, Torchattacks=df_torchattacks)
+    frameworks = [fw for fw in frameworks if fw in fw_func]
+    safe and "torchattacks" in frameworks and df_params[
+        "classes"
+    ] > 4 and frameworks.remove("torchattacks")
+    for fw in frameworks:
         start = time.time()
-        yield (
-            torch.from_numpy(
-                DeepFool(
-                    classifier=art_classifier,
-                    max_iter=max_iter,
-                    epsilon=epsilon,
-                    nb_grads=nb_grads,
-                    batch_size=x.size(0),
-                    verbose=verbose,
-                ).generate(x=x.clone().cpu().numpy())
-            ),
-            time.time() - start,
-            "ART",
-        )
-    if "foolbox" in frameworks:
-        from foolbox.attacks import L2DeepFoolAttack as DeepFoolAttack
-
-        print("Producing DF adversarial examples with Foolbox...", end=end)
-        start = time.time()
-        _, fb_adv, _ = DeepFoolAttack(
-            steps=max_iter,
-            candidates=nb_grads,
-            overshoot=epsilon,
-            loss="logits",
-        )(fb_classifier, x.clone(), y.clone(), epsilons=df.epsilon)
-        yield fb_adv, time.time() - start, "Foolbox"
-    if "torchattacks" in frameworks:
-        from torchattacks import DeepFool
-
-        print("Producing DF adversarial examples with Torchattacks...", end=end)
-        start = time.time()
-        ta_adv = DeepFool(
-            model=model,
-            steps=max_iter,
-            overshoot=epsilon,
-        )(inputs=x.clone(), labels=y)
-
-        # torchattack's implementation can return nans
-        yield (
-            torch.where(ta_adv.isnan(), x, ta_adv),
-            time.time() - start,
-            "Torchattacks",
-        )
+        print(f"Producing DF adversarial examples with {fw}...", end=end)
+        yield fw_func[fw](**df_params), time.time() - start, fw
     start = time.time()
     yield x + df.craft(x, y), time.time() - start, "aml"
 
 
-def fab(art_classifier, clip, fb_classifier, frameworks, parameters, verbose, x, y):
+def df_art(classes, clip_max, clip_min, epochs, overshoot, model, verbose, x, **_):
+    """
+    This function crafts adversarial examples with DF in ART.
+
+    :param classes: number of classes
+    :type classes: int
+    :param clip_max: maximum feature ranges
+    :type clip_max: torch Tensor object (m,)
+    :param clip_min: minimum feature ranges
+    :type clip_min: torch Tensor object (m,)
+    :param epochs: number of attack iterations
+    :type epochs: int
+    :param overshoot: additional perturbation amount per iteration
+    :type overshoot: float
+    :param model: model to craft adversarial examples with
+    :type model: dlm LinearClassifier-inherited object
+    :param verbose: enable verbose output
+    :type verbose: bool
+    :param x: inputs to craft adversarial examples from
+    :type x: torch Tensor object (n, m)
+    :return: DF ART adversarial examples
+    :rtype: torch Tensor object (n, m)
+    """
+    from art.attacks.evasion import DeepFool
+    from art.estimators.classification import PyTorchClassifier
+
+    art_classifier = PyTorchClassifier(
+        model=model.model,
+        clip_values=(clip_min.max().item(), clip_max.min().item()),
+        loss=model.loss,
+        optimizer=model.optimizer,
+        input_shape=(x.size(1),),
+        nb_classes=model.classes,
+        device_type="gpu" if model.device == "cuda" else model.device,
+    )
+    return torch.from_numpy(
+        DeepFool(
+            classifier=art_classifier,
+            max_iter=epochs,
+            epsilon=overshoot,
+            nb_grads=classes,
+            batch_size=x.size(0),
+            verbose=verbose,
+        ).generate(x=x.clone().cpu().numpy())
+    ).to(model.device)
+
+
+def df_foolbox(
+    classes, clip_max, clip_min, epochs, epsilon, model, overshoot, x, y, **_
+):
+    """
+    This function crafts adversarial examples with DF in Foolbox.
+
+    :param classes: number of classes
+    :type classes: int
+    :param clip_max: maximum feature ranges
+    :type clip_max: torch Tensor object (m,)
+    :param clip_min: minimum feature ranges
+    :type clip_min: torch Tensor object (m,)
+    :param epochs: number of attack iterations
+    :type epochs: int
+    :param epsilon: l2 budget
+    :type epsilon: float
+    :param model: model to craft adversarial examples with
+    :type model: dlm LinearClassifier-inherited object
+    :param overshoot: additional perturbation amount per iteration
+    :type overshoot: float
+    :param x: inputs to craft adversarial examples from
+    :type x: torch Tensor object (n, m)
+    :param y: labels of inputs to craft adversarail examples from
+    :type y: torch Tensor object (n,)
+    :return: DF Foolbox adversarial examples
+    :rtype: torch Tensor object (n, m)
+    """
+    from foolbox import PyTorchModel
+    from foolbox.attacks import L2DeepFoolAttack as DeepFoolAttack
+
+    fb_classifier = PyTorchModel(
+        model=model.model,
+        bounds=(clip_min.min().item(), clip_max.max().item()),
+        device=model.device,
+    )
+    return DeepFoolAttack(
+        steps=epochs,
+        candidates=classes,
+        overshoot=overshoot,
+        loss="logits",
+    )(fb_classifier, x.clone(), y.clone(), epsilons=epsilon)[1]
+
+
+def df_torchattacks(epochs, model, overshoot, x, y, **_):
+    """
+    This function crafts adversarial examples with DF in torchattacks.
+    Notably, this implementation can return nans.
+
+    :param alpha: perturbation strength
+    :type alpha: float
+    :param epochs: number of attack iterations
+    :type epochs: int
+    :param model: model to craft adversarial examples with
+    :type model: dlm LinearClassifier-inherited object
+    :param overshoot: additional perturbation amount per iteration
+    :type overshoot: float
+    :param x: inputs to craft adversarial examples from
+    :type x: torch Tensor object (n, m)
+    :param y: labels of inputs to craft adversarial examples from
+    :type y: torch Tensor object (n,)
+    :return: DF torchattacks adversarial examples
+    :rtype: torch Tensor object (n, m)
+    """
+    from torchattacks import DeepFool
+
+    adv = DeepFool(model=model, steps=epochs, overshoot=overshoot)(
+        inputs=x.clone(), labels=y
+    )
+    return torch.where(adv.isnan(), x, adv)
+
+
+def fab(frameworks, parameters, verbose, x, y, **_):
     """
     This method crafts adversarial examples with FAB (Fast Adaptive Boundary)
     (https://arxiv.org/pdf/1907.02044.pdf). The supported frameworks for FAB
     include AdverTorch and Torchattacks.
 
-    :param art_classifier: classifier for ART
-    :type art_classifier: art.estimator.classification PyTorchClassifier object
-    :param clip: allowable feature range for the domain
-    :type clip: torch Tensor object (2, m)
-    :param fb_classifier: classifier for Foolbox
-    :type fb_classifier: foolbox PyTorchModel object
     :param frameworks: frameworks to craft adversarial examples with
     :type frameworks: tuple of str
     :param parameters: attack parameters
     :type parameters: dict
     :param verbose: enable verbose output
-    :tyhpe verbose: bool
+    :type verbose: bool
     :param x: inputs to craft adversarial examples from
     :type x: torch Tensor object (n, m)
-    :param y: labels of inputs to craft adversarail examples from
-    :type x: torch Tensor object (n,)
-    :return: FAB adversarial examples
-    :rtype: tuple of tuples: torch Tensor object (n, m), float, and str
+    :param y: labels of inputs to craft adversarial examples from
+    :type y: torch Tensor object (n,)
+    :return: DF adversarial examples
+    :rtype: generator of tuples of torch Tensor object (n, m), float, and str
     """
     end = "\n" if verbose else "\r"
     fab = aml.attacks.fab(**parameters)
-    (model, n_restarts, n_iter, eps, alpha, eta, beta, n_classes) = (
-        fab.model,
-        fab.num_restarts,
-        fab.epochs,
-        fab.epsilon,
-        fab.traveler.optimizer.param_groups[0]["alpha_max"],
-        fab.alpha,
-        fab.traveler.optimizer.param_groups[0]["beta"],
-        fab.model.classes,
+    fab_params = dict(
+        alpha=fab.alpha,
+        alpha_max=fab.traveler.optimizer.param_groups[0]["alpha_max"],
+        beta=fab.traveler.optimizer.param_groups[0]["beta"],
+        classes=fab.model.classes,
+        epochs=fab.epochs,
+        epsilon=fab.epsilon,
+        num_restarts=fab.num_restarts,
+        model=fab.model,
+        verbose=verbose,
+        x=x,
+        y=y,
     )
-    if "advertorch" in frameworks:
-        from advertorch.attacks import FABAttack
-
-        print("Producing FAB adversarial examples with AdverTorch...", end=end)
+    fw_func = dict(Advertorch=fab_advertorch, Torchattacks=fab_torchattacks)
+    frameworks = [fw for fw in frameworks if fw in fw_func]
+    for fw in frameworks:
         reset_seeds()
         start = time.time()
-        yield (
-            FABAttack(
-                predict=model,
-                norm="L2",
-                n_restarts=n_restarts,
-                n_iter=n_iter,
-                eps=eps,
-                alpha_max=alpha,
-                eta=eta,
-                beta=beta,
-                verbose=verbose,
-            ).perturb(x=x.clone(), y=y.clone()),
-            time.time() - start,
-            "AdverTorch",
-        )
-    if "torchattacks" in frameworks:
-        from torchattacks import FAB
-
-        print("Producing FAB adversarial examples with Torchattacks...", end=end)
-        reset_seeds()
-        start = time.time()
-        yield (
-            FAB(
-                model=model,
-                norm="L2",
-                eps=eps,
-                steps=n_iter,
-                n_restarts=n_restarts,
-                alpha_max=alpha,
-                eta=eta,
-                beta=beta,
-                verbose=verbose,
-                seed=0,
-                multi_targeted=False,
-                n_classes=n_classes,
-            )(inputs=x.clone(), labels=y),
-            time.time() - start,
-            "Torchattacks",
-        )
+        print(f"Producing FAB adversarial examples with {fw}...", end=end)
+        yield fw_func[fw](**fab_params), time.time() - start, fw
     reset_seeds()
     start = time.time()
     yield x + fab.craft(x, y), time.time() - start, "aml"
 
 
-def init_art_classifier(clip, device, model, features):
-    """
-    This method instantiates an art (pytorch) classifier (as required by art
-    evasion attacks).
-
-    :param clip: minimum and maximum feature ranges
-    :type clip: torch Tensor object (2, m)
-    :param device: hardware device to use
-    :param device: str
-    :param features: number of features (used for determing budgets)
-    :type features: int
-    :param model: neural network
-    :type model: dlm LinearClassifier-inherited object
-    :return: an art (PyTorch) classifier
-    :rtype: art.estimator.classification PyTorchClassifier object
-    """
-    from art.estimators.classification import PyTorchClassifier
-
-    mins, maxs = clip.unbind()
-    return PyTorchClassifier(
-        model=model.model,
-        clip_values=(mins.max().item(), maxs.min().item()),
-        loss=model.loss,
-        optimizer=model.optimizer,
-        input_shape=(features,),
-        nb_classes=model.classes,
-        device_type="gpu" if device == "cuda" else device,
-    )
-
-
-def init_attacks(
-    alpha, budget, clip, device, epochs, features, frameworks, model, verbose
+def fab_advertorch(
+    alpha, alpha_max, beta, epochs, epsilon, model, num_restarts, verbose, x, y
 ):
     """
-    This function instantiates attacks from aml and other supported libraries.
-    Specifically, it: (1) computes lp budgets and (2) prepares framework
-    prerequisites.
+    This function crafts adversarial examples with FAB in AdverTorch.
 
-    :param alpha: perturbation strength per-iteration
+    :param alpha: perturbation strength
     :type alpha: float
-    :param budget: maximum lp budget
-    :type budget: float
-    :param clip: minimum and maximum feature ranges
-    :type clip: torch Tensor object (2, m)
-    :param device: hardware device to use
-    :param device: str
+    :param alpha_max: maximum value of alpha
+    :type alpha_max: float
+    :param beta: backward step strength
+    :type beta: float
     :param epochs: number of attack iterations
     :type epochs: int
-    :param dataset: dataset to use
-    :type dataset: str
-    :param features: number of features (used for determing budgets)
-    :type features: int
-    :param frameworks: frameworks to compare against
-    :type frameworks: list of str
-    :param model: neural network
+    :param epsilon: l2 budget
+    :type epsilon: float
+    :param model: model to craft adversarial examples with
     :type model: dlm LinearClassifier-inherited object
-    :param verbose: enable verbose output
-    :tyhpe verbose: bool
-    :return: instantiated attacks
-    :rtype: tuple of:
-        - dict
-        - art.estimators.classification PyTorchClassifier object
-        - foolbox PyTorchModel object
-        - int
-        - float
-        - float
+    :param num_restarts: number of random restarts to perform
+    :type num_restarts: int
+    :param x: inputs to craft adversarial examples from
+    :type x: torch Tensor object (n, m)
+    :param y: labels of inputs to craft adversarial examples from
+    :type y: torch Tensor object (n,)
+    :return: FAB AdverTorch adversarial examples
+    :rtype: torch Tensor object (n, m)
     """
-    l0 = int(features * budget) + 1
-    l2 = clip.diff(dim=0).norm(2).item() * budget
-    linf = budget
-    params = {
-        "alpha": alpha,
-        "epochs": epochs,
-        "model": model,
-        "verbosity": float(verbose),
-    }
-    art_model = (
-        init_art_classifier(clip, device, model, features)
-        if "art" in frameworks
-        else None
-    )
-    fb_model = (
-        init_fb_classifier(clip, device, model) if "foolbox" in frameworks else None
-    )
-    return params, art_model, fb_model, l0, l2, linf
+    from advertorch.attacks import FABAttack
+
+    return FABAttack(
+        predict=model,
+        norm="L2",
+        n_restarts=num_restarts,
+        n_iter=epochs,
+        eps=epsilon,
+        alpha_max=alpha_max,
+        eta=alpha,
+        beta=beta,
+        verbose=verbose,
+    ).perturb(x=x.clone(), y=y.clone())
 
 
-def init_data(dataset, device, pretrained, utilization, verbose):
+def fab_torchattacks(
+    alpha, alpha_max, beta, classes, epochs, epsilon, model, num_restarts, verbose, x, y
+):
     """
-    This function obtains all necessary prerequisites for crafting adversarial
-    examples. Specifically, this: (1) loads data, (2) determines clipping
-    bounds, and (3) trains a model (if a model hasn't already been trained or
-    pretrained is false).
+    This function crafts adversarial examples with fab in torchattacks.
 
-    :param dataset: dataset to load, analyze, and train with
-    :type dataset: str
-    :param device: hardware device to use
-    :param device: str
-    :param pretrained: use a pretrained model, if possible
-    :type pretrained: bool
-    :param utilization: target gpu memory utilization (useful with low vram)
-    :type utilization: float
+    :param alpha: perturbation strength
+    :type alpha: float
+    :param alpha_max: maximum value of alpha
+    :type alpha_max: float
+    :param beta: backward step strength
+    :type beta: float
+    :param classes: number of classes
+    :type classes: int
+    :param epochs: number of attack iterations
+    :type epochs: int
+    :param epsilon: l∞ budget
+    :type epsilon: float
+    :param model: model to craft adversarial examples with
+    :type model: dlm LinearClassifier-inherited object
+    :param num_restarts: number of random restarts to perform
+    :type num_restarts: int
     :param verbose: enable verbose output
     :type verbose: bool
-    :return: test data, clips, model, and test accuracy
-    :rtype: tuple of:
-        - tuple of torch Tensor objects (n, m) and (n,)
-        - torch Tensor object (2, m)
-        - dlm LinearClassifier-inherited object
-        - float
+    :param x: inputs to craft adversarial examples from
+    :type x: torch Tensor object (n, m)
+    :param y: labels of inputs to craft adversarial examples from
+    :type y: torch Tensor object (n,)
+    :return: DF torchattacks adversarial examples
+    :rtype: torch Tensor object (n, m)
     """
+    from torchattacks import FAB
 
-    # load dataset and determine clips (non-image datasets may not be 0-1)
-    data = getattr(mlds, dataset)
-    try:
-        train_x = torch.from_numpy(data.train.data).to(device)
-        train_y = torch.from_numpy(data.train.labels).long().to(device)
-        x = torch.from_numpy(data.test.data).to(device)
-        y = torch.from_numpy(data.test.labels).long().to(device)
-    except AttributeError:
-        train_x = torch.from_numpy(data.dataset.data).to(device)
-        train_y = torch.from_numpy(data.dataset.labels).long().to(device)
-        x = train_x.clone().to(device)
-        y = train_y.clone().to(device)
-    clip = torch.stack((x.min(0).values.clamp(max=0), x.max(0).values.clamp(min=1)))
-
-    # load model hyperparameters and train a model (or load a saved one)
-    params = dict(
-        auto_batch=utilization, device=device, verbosity=0.25 if verbose else 0
-    )
-    template = getattr(dlm.templates, dataset)
-    model = (
-        dlm.CNNClassifier(**template.cnn | params)
-        if hasattr(template, "cnn")
-        else dlm.MLPClassifier(**template.mlp | params)
-    )
-    try:
-        if pretrained:
-            with open(f"/tmp/framework_comparison_{dataset}_model.pkl", "rb") as f:
-                model = pickle.load(f)
-                model.summary()
-        else:
-            raise FileNotFoundError("Pretrained flag was false")
-    except FileNotFoundError:
-        model.fit(train_x, train_y)
-    with open(f"/tmp/framework_comparison_{dataset}_model.pkl", "wb") as f:
-        pickle.dump(model, f)
-    test_acc = model.accuracy(x, y) * 100
-    return (x, y), clip, model, test_acc.item()
+    return FAB(
+        model=model,
+        norm="L2",
+        eps=epsilon,
+        steps=epochs,
+        n_restarts=num_restarts,
+        alpha_max=alpha_max,
+        eta=alpha,
+        beta=beta,
+        verbose=verbose,
+        seed=0,
+        multi_targeted=False,
+        n_classes=classes,
+    )(inputs=x.clone(), labels=y)
 
 
-def init_fb_classifier(clip, device, model):
-    """
-    This method instantiates an art (pytorch) classifier (as required by foolbox
-    evasion attacks).
-
-    :param clip: minimum and maximum feature ranges
-    :type clip: torch Tensor object (2, m)
-    :param device: hardware device to use
-    :param device: str
-    :param model: neural network
-    :type model: dlm LinearClassifier-inherited object
-    :return: a foolbox (PyTorch) classifier
-    :rtype: foolbox PyTorchModel object
-    """
-    from foolbox import PyTorchModel
-
-    mins, maxs = clip
-    return PyTorchModel(
-        model=model.model,
-        bounds=(mins.min().item(), maxs.max().item()),
-        device=device,
-    )
-
-
-def jsma(art_classifier, clip, fb_classifier, frameworks, parameters, verbose, x, y):
+def jsma(clip_max, clip_min, frameworks, parameters, safe, verbose, x, y):
     """
     This method crafts adversarial examples with JSMA (Jacobian Saliency Map
     Approach) (https://arxiv.org/pdf/1511.07528.pdf). The supported frameworks
@@ -846,74 +1125,131 @@ def jsma(art_classifier, clip, fb_classifier, frameworks, parameters, verbose, x
     moreover, the advertorch implementation: (1) does not suport an untargetted
     scheme (so we supply random targets), and (2) computes every pixel pair at
     once, often leading to memory crashes (e.g., it'll terminate on a 16GB
-    system with MNIST).
+    system with MNIST), so this attack is skipped when the feature space is
+    greater than 784.
 
-
-    :param art_classifier: classifier for ART
-    :type art_classifier: art.estimator.classification PyTorchClassifier object
-    :param clip: allowable feature range for the domain
-    :type clip: torch Tensor object (2, m)
-    :param fb_classifier: classifier for Foolbox
-    :type fb_classifier: foolbox PyTorchModel object
+    :param clip_max: maximum feature ranges
+    :type clip_max: torch Tensor object (m,)
+    :param clip_min: minimum feature ranges
+    :type clip_min: torch Tensor object (m,)
     :param frameworks: frameworks to craft adversarial examples with
     :type frameworks: tuple of str
     :param parameters: attack parameters
     :type parameters: dict
+    :param safe: whether to skip implementations with high compute or time
+    :type safe: bool
     :param verbose: enable verbose output
-    :tyhpe verbose: bool
+    :type verbose: bool
     :param x: inputs to craft adversarial examples from
     :type x: torch Tensor object (n, m)
-    :param y: labels of inputs to craft adversarail examples from
-    :type x: torch Tensor object (n,)
-    :return: JSMA adversarial examples
-    :rtype: tuple of tuples: torch Tensor object (n, m), float, and str
+    :param y: labels of inputs to craft adversarial examples from
+    :type y: torch Tensor object (n,)
+    :return: DF adversarial examples
+    :rtype: generator of tuples of torch Tensor object (n, m), float, and str
     """
     end = "\n" if verbose else "\r"
-    clip_min, clip_max = clip.unbind()
     jsma = aml.attacks.jsma(**parameters | dict(alpha=1))
-    (model, num_classes, gamma, theta) = (
-        jsma.model,
-        jsma.model.classes,
-        jsma.epsilon / x.size(1),
-        jsma.alpha,
+    jsma_params = dict(
+        alpha=jsma.alpha,
+        classes=jsma.model.classes,
+        clip_max=clip_max,
+        clip_min=clip_min,
+        epsilon=jsma.epsilon / x.size(1),
+        model=jsma.model,
+        verbose=verbose,
+        x=x,
+        y=y,
     )
-    if "advertorch" in frameworks and x.size(1) < 784:
-        from advertorch.attacks import JacobianSaliencyMapAttack
-
-        print("Producing JSMA adversarial examples with AdverTorch...", end=end)
+    fw_func = dict(Advertorch=jsma_advertorch, Art=jsma_art)
+    frameworks = [fw for fw in frameworks if fw in fw_func]
+    safe and "AdverTorch" in frameworks and x.size(1) >= 784 and frameworks.remove(
+        "AdverTorch"
+    )
+    for fw in frameworks:
         start = time.time()
-        yield (
-            JacobianSaliencyMapAttack(
-                predict=model,
-                num_classes=num_classes,
-                clip_min=clip_min,
-                clip_max=clip_max,
-                gamma=gamma,
-                theta=theta,
-            ).perturb(x=x.clone(), y=torch.randint(num_classes, y.size())),
-            time.time() - start,
-            "AdverTorch",
-        )
-    if "art" in frameworks:
-        from art.attacks.evasion import SaliencyMapMethod
-
-        print("Producing JSMA adversarial examples with ART...", end=end)
-        start = time.time()
-        yield (
-            torch.from_numpy(
-                SaliencyMapMethod(
-                    classifier=art_classifier,
-                    theta=theta,
-                    gamma=gamma,
-                    batch_size=x.size(0),
-                    verbose=verbose,
-                ).generate(x=x.clone().cpu().numpy())
-            ),
-            time.time() - start,
-            "ART",
-        )
+        print(f"Producing JSMA adversarial examples with {fw}...", end=end)
+        yield fw_func[fw](**jsma_params), time.time() - start, fw
     start = time.time()
-    yield (x + jsma.craft(x, y), time.time() - start, "aml")
+    yield x + jsma.craft(x, y), time.time() - start, "aml"
+
+
+def jsma_advertorch(alpha, classes, clip_max, clip_min, epsilon, model, x, y, **_):
+    """
+    This function crafts adversarial examples with JSMA in AdverTorch.
+
+    :param alpha: perturbation strength
+    :type alpha: float
+    :param classes: number of classes
+    :type classes: int
+    :param clip_max: maximum feature ranges
+    :type clip_max: torch Tensor object (m,)
+    :param clip_min: minimum feature ranges
+    :type clip_min: torch Tensor object (m,)
+    :param epsilon: l0 budget (as a percentage of the feature space)
+    :type epsilon: float
+    :param model: model to craft adversarial examples with
+    :type model: dlm LinearClassifier-inherited object
+    :param x: inputs to craft adversarial examples from
+    :type x: torch Tensor object (n, m)
+    :param y: labels of inputs to craft adversarial examples from
+    :type y: torch Tensor object (n,)
+    :return: JSMA AdverTorch adversarial examples
+    :rtype: torch Tensor object (n, m)
+    """
+    from advertorch.attacks import JacobianSaliencyMapAttack
+
+    return JacobianSaliencyMapAttack(
+        predict=model,
+        num_classes=classes,
+        clip_min=clip_min,
+        clip_max=clip_max,
+        gamma=epsilon,
+        theta=alpha,
+    ).perturb(x=x.clone(), y=torch.randint(classes, y.size(), device=model.device))
+
+
+def jsma_art(alpha, clip_max, clip_min, epsilon, model, verbose, x, **_):
+    """
+    This function crafts adversarial examples with JSMA in ART.
+
+    :param alpha: perturbation strength
+    :type alpha: float
+    :param clip_max: maximum feature ranges
+    :type clip_max: torch Tensor object (m,)
+    :param clip_min: minimum feature ranges
+    :type clip_min: torch Tensor object (m,)
+    :param epsilon: l0 budget (as a percentage of the feature space)
+    :type epsilon: float
+    :param model: model to craft adversarial examples with
+    :type model: dlm LinearClassifier-inherited object
+    :param verbose: enable verbose output
+    :type verbose: bool
+    :param x: inputs to craft adversarial examples from
+    :type x: torch Tensor object (n, m)
+    :return: JSMA ART adversarial examples
+    :rtype: torch Tensor object (n, m)
+    """
+    from art.attacks.evasion import SaliencyMapMethod
+    from art.estimators.classification import PyTorchClassifier
+
+    art_classifier = PyTorchClassifier(
+        model=model.model,
+        clip_values=(clip_min.max().item(), clip_max.min().item()),
+        loss=model.loss,
+        optimizer=model.optimizer,
+        input_shape=(x.size(1),),
+        nb_classes=model.classes,
+        device_type="gpu" if model.device == "cuda" else model.device,
+    )
+    return torch.from_numpy(
+        SaliencyMapMethod(
+            classifier=art_classifier,
+            theta=alpha,
+            gamma=epsilon,
+            batch_size=x.size(0),
+            verbose=verbose,
+        ).generate(x=x.clone().cpu().numpy())
+    ).to(model.device)
 
 
 def l0_proj(l0, p):
@@ -974,16 +1310,15 @@ def main(
     device,
     epochs,
     frameworks,
-    pretrained,
+    safe,
     trials,
-    utilization,
     verbose,
 ):
     """
     This function is the main entry point for the framework comparison
-    benchmark. Specifically this: (1) loads and trains a model, (2) crafts
-    adversarial examples for each framework, (3) measures statistics and
-    assembles dataframes, and (4) plots the results.
+    benchmark. Specifically this: (1) loads data, (2) trains a model, (3)
+    computes attack parameters, (4) crafts adversarial examples for each
+    framework, (5) measures attack statistics, and (6) plots the results.
 
     :param alpha: perturbation strength, per-iteration
     :type alpha: float
@@ -999,14 +1334,12 @@ def main(
     :type epochs: int
     :param frameworks: frameworks to compare against
     :type frameworks: tuple of str
-    :param pretrained: use a pretrained model, if possible
-    :type pretrained: bool
+    :param safe: ignore attacks that have high compute or time costs
+    :type safe: bool
     :param trials: number of experiment trials
     :type trials: int
-    :param utilization: target gpu memory utilization (useful with low vram)
-    :type utilization: float
     :param verbose: enable verbose output
-    :tyhpe verbose: bool
+    :type verbose: bool
     :return: None
     :rtype: NoneType
     """
@@ -1015,69 +1348,82 @@ def main(
         f"{len(frameworks)} frameworks in {trials} trials..."
     )
 
-    # create results dataframe & setup budget measures
+    # load dataset and determine clips (non-image datasets may not be 0-1)
+    data = getattr(mlds, dataset)
+    try:
+        xt = torch.from_numpy(data.train.data).to(device)
+        yt = torch.from_numpy(data.train.labels).long().to(device)
+        x = torch.from_numpy(data.test.data).to(device)
+        y = torch.from_numpy(data.test.labels).long().to(device)
+    except AttributeError:
+        xt = torch.from_numpy(data.dataset.data).to(device)
+        yt = torch.from_numpy(data.dataset.labels).long().to(device)
+        x = xt
+        y = yt
+    cmin, cmax = x.min(0).values.clamp(max=0), x.max(0).values.clamp(min=1)
+
+    # load model hyperparameters and architecture
+    params = dict(auto_batch=0, device=device, verbosity=0.25 if verbose else 0)
+    template = getattr(dlm.templates, dataset)
+    model = (
+        dlm.CNNClassifier(**template.cnn | params)
+        if hasattr(template, "cnn")
+        else dlm.MLPClassifier(**template.mlp | params)
+    )
+
+    # compute attack budgets and set base attack parameters
+    norms = collections.namedtuple("norms", ("budget", "projection", "ord"))
+    l0 = int(x.size(1) * budget) + 1
+    l2 = torch.stack((cmin, cmax)).diff(dim=0).norm(2).item() * budget
+    linf = budget
+    norms = {
+        apgdce: norms(linf, linf_proj, torch.inf),
+        apgddlr: norms(linf, linf_proj, torch.inf),
+        bim: norms(linf, linf_proj, torch.inf),
+        cwl2: norms(l2, l2_proj, 2),
+        df: norms(l2, l2_proj, 2),
+        fab: norms(l2, l2_proj, 2),
+        jsma: norms(l0, l0_proj, 0),
+        pgd: norms(linf, linf_proj, torch.inf),
+    }
+    params = dict(
+        clip_max=cmax,
+        clip_min=cmin,
+        frameworks=frameworks,
+        safe=safe,
+        verbose=verbose,
+        x=x,
+        y=y,
+    )
+    attack_params = dict(
+        alpha=alpha, epochs=epochs, model=model, verbosity=float(verbose)
+    )
+
+    # initialize results dataframe, configure general parameters, and set verbosity
     metrics = "attack", "baseline", "framework", "accuracy", "budget", "time"
     results = pandas.DataFrame(columns=metrics)
-    norms = collections.namedtuple("norms", ("budget", "projection", "ord"))
-    norms = {
-        apgdce: norms(None, linf_proj, torch.inf),
-        apgddlr: norms(None, linf_proj, torch.inf),
-        bim: norms(None, linf_proj, torch.inf),
-        cwl2: norms(None, l2_proj, 2),
-        df: norms(None, l2_proj, 2),
-        fab: norms(None, l2_proj, 2),
-        jsma: norms(None, l0_proj, 0),
-        pgd: norms(None, linf_proj, torch.inf),
-    }
     end = "\n" if verbose else "\r"
     row = 0
 
-    # load data, clipping bounds, attacks, and train a model
+    # train model and compute accuracy baseline
     for t in range(1, trials + 1):
-        print(f"Preparing {dataset} model... Trial {t} of {trials}", end=end)
-        (x, y), clip, model, test_acc = init_data(
-            dataset, device, pretrained, utilization, verbose
-        )
-        parameters, art_model, fb_model, l0, l2, linf = init_attacks(
-            alpha,
-            budget,
-            clip,
-            device,
-            epochs,
-            x.size(1),
-            frameworks,
-            model,
-            verbose,
-        )
-        for a, n in norms.items():
-            norms[a] = n._replace(
-                budget=linf if n.ord == torch.inf else l2 if n.ord == 2 else l0
-            )
+        print(f"Training {dataset} model... Trial {t} of {trials}", end=end)
+        model.fit(xt, yt)
+        test_acc = model.accuracy(x, y).item() * 100
 
-        # craft adversarial examples
-        for j, a in enumerate(attacks):
-            print(f"Attacking with {a.__name__}... {j} of {len(attacks)}", end=end)
-            advs = a(
-                art_model,
-                clip,
-                fb_model,
-                frameworks,
-                parameters | dict(epsilon=norms[a].budget),
-                verbose,
-                x,
-                y,
-            )
-
-            # ensure adversarial examples comply with clips and epsilon
-            for adv, times, fw in advs:
-                print(f"Computing results for {fw} {a.__name__}...", end=end)
-                adv = adv.to(device).clamp(*clip.unbind())
-                p = norms[a].projection(norms[a].budget, adv.sub(x))
+        # craft adversarial examples & ensure they comply with clips and budget
+        for j, attack in enumerate(attacks):
+            print(f"Attacking with {attack.__name__}... {j} of {len(attacks)}", end=end)
+            attack_params.update(dict(epsilon=norms[attack].budget))
+            for adv, times, fw in attack(**params | dict(parameters=attack_params)):
+                print(f"Computing results for {fw} {attack.__name__}...", end=end)
+                budget = norms[attack].budget
+                norm = norms[attack].ord
+                adv = adv.clamp(cmin, cmax)
+                p = norms[attack].projection(norms[attack].budget, adv.sub(x))
                 acc = model.accuracy(x + p, y).mul(100).item()
-                used = (
-                    p.norm(norms[a].ord, 1).mean().div(norms[a].budget).mul(100).item()
-                )
-                results.loc[row] = a.__name__, test_acc, fw, acc, used, times
+                used = p.norm(norm, 1).mean().div(budget).mul(100).item()
+                results.loc[row] = attack.__name__, test_acc, fw, acc, used, times
                 row += 1
 
     # compute median, plot results, and save
@@ -1161,155 +1507,260 @@ def plot(dataset, results):
     return None
 
 
-def pgd(art_classifier, clip, fb_classifier, frameworks, parameters, verbose, x, y):
+def pgd(clip_max, clip_min, frameworks, parameters, verbose, x, y, **_):
     """
     This method crafts adversarial examples with PGD (Projected Gradient
     Descent)) (https://arxiv.org/pdf/1706.06083.pdf). The supported frameworks
     for PGD include AdverTorch, ART, CleverHans, and Torchattacks.
 
-    :param art_classifier: classifier for ART
-    :type art_classifier: art.estimator.classification PyTorchClassifier object
-    :param clip: allowable feature range for the domain
-    :type clip: torch Tensor object (2, m)
-    :param fb_classifier: classifier for Foolbox
-    :type fb_classifier: foolbox PyTorchModel object
+    :param clip_max: maximum feature ranges
+    :type clip_max: torch Tensor object (m,)
+    :param clip_min: minimum feature ranges
+    :type clip_min: torch Tensor object (m,)
     :param frameworks: frameworks to craft adversarial examples with
     :type frameworks: tuple of str
     :param parameters: attack parameters
     :type parameters: dict
     :param verbose: enable verbose output
-    :tyhpe verbose: bool
+    :type verbose: bool
+    :param x: inputs to craft adversarial examples from
+    :type x: torch Tensor object (n, m)
+    :param y: labels of inputs to craft adversarial examples from
+    :type y: torch Tensor object (n,)
+    :return: PGD adversarial examples
+    :rtype: generator of tuples of torch Tensor object (n, m), float, and str
+    """
+    end = "\n" if verbose else "\r"
+    pgd = aml.attacks.pgd(**parameters)
+    pgd_params = dict(
+        alpha=pgd.alpha,
+        clip_max=clip_max,
+        clip_min=clip_min,
+        epochs=pgd.epochs,
+        epsilon=pgd.epsilon,
+        model=pgd.model,
+        verbose=verbose,
+        x=x,
+        y=y,
+    )
+    fw_func = dict(
+        AdverTorch=pgd_advertorch,
+        ART=pgd_art,
+        CleverHans=pgd_cleverhans,
+        Foolbox=pgd_foolbox,
+        Torchattacks=pgd_torchattacks,
+    )
+    frameworks = [fw for fw in frameworks if fw in fw_func]
+    for fw in frameworks:
+        reset_seeds()
+        start = time.time()
+        print(f"Producing PGD adversarial examples with {fw}...", end=end)
+        yield fw_func[fw](**pgd_params), time.time() - start, fw
+    reset_seeds()
+    start = time.time()
+    yield x + pgd.craft(x, y), time.time() - start, "aml"
+
+
+def pgd_advertorch(alpha, clip_max, clip_min, epochs, epsilon, model, x, y, **_):
+    """
+    This function crafts adversarial examples with PGD in AdverTorch.
+
+    :param alpha: perturbation strength
+    :type alpha: float
+    :param clip_max: maximum feature ranges
+    :type clip_max: torch Tensor object (m,)
+    :param clip_min: minimum feature ranges
+    :type clip_min: torch Tensor object (m,)
+    :param epochs: number of attack iterations
+    :type epochs: int
+    :param epsilon: l∞ budget
+    :type epsilon: float
+    :param model: model to craft adversarial examples with
+    :type model: dlm LinearClassifier-inherited object
+    :param x: inputs to craft adversarial examples from
+    :type x: torch Tensor object (n, m)
+    :param y: labels of inputs to craft adversarial examples from
+    :type y: torch Tensor object (n,)
+    :return: PGD AdverTorch adversarial examples
+    :rtype: torch Tensor object (n, m)
+    """
+    from advertorch.attacks import PGDAttack
+
+    return PGDAttack(
+        predict=model,
+        loss_fn=torch.nn.CrossEntropyLoss(reduction="sum"),
+        eps=epsilon,
+        nb_iter=epochs,
+        eps_iter=alpha,
+        rand_init=True,
+        clip_min=clip_min,
+        clip_max=clip_max,
+        ord=float("inf"),
+        targeted=False,
+    ).perturb(x=x.clone(), y=y.clone())
+
+
+def pgd_art(alpha, clip_max, clip_min, epochs, epsilon, model, verbose, x, **_):
+    """
+    This function crafts adversarial examples with PGD in ART.
+
+    :param alpha: perturbation strength
+    :type alpha: float
+    :param clip_max: maximum feature ranges
+    :type clip_max: torch Tensor object (m,)
+    :param clip_min: minimum feature ranges
+    :type clip_min: torch Tensor object (m,)
+    :param epochs: number of attack iterations
+    :type epochs: int
+    :param epsilon: l∞ budget
+    :type epsilon: float
+    :param model: model to craft adversarial examples with
+    :type model: dlm LinearClassifier-inherited object
+    :param verbose: enable verbose output
+    :type verbose: bool
+    :param x: inputs to craft adversarial examples from
+    :type x: torch Tensor object (n, m)
+    :return: PGD ART adversarial examples
+    :rtype: torch Tensor object (n, m)
+    """
+    from art.attacks.evasion import ProjectedGradientDescent
+    from art.estimators.classification import PyTorchClassifier
+
+    art_classifier = PyTorchClassifier(
+        model=model.model,
+        clip_values=(clip_min.max().item(), clip_max.min().item()),
+        loss=model.loss,
+        optimizer=model.optimizer,
+        input_shape=(x.size(1),),
+        nb_classes=model.classes,
+        device_type="gpu" if model.device == "cuda" else model.device,
+    )
+    return torch.from_numpy(
+        ProjectedGradientDescent(
+            estimator=art_classifier,
+            norm="inf",
+            eps=epsilon,
+            eps_step=alpha,
+            decay=None,
+            max_iter=epochs,
+            targeted=False,
+            num_random_init=1,
+            batch_size=x.size(0),
+            random_eps=True,
+            summary_writer=False,
+            verbose=verbose,
+        ).generate(x=x.clone().cpu().numpy())
+    ).to(model.device)
+
+
+def pgd_cleverhans(alpha, clip_max, clip_min, epochs, epsilon, model, x, y, **_):
+    """
+    This function crafts adversarial examples with PGD in CleverHans.
+
+    :param alpha: perturbation strength
+    :type alpha: float
+    :param clip_max: maximum feature ranges
+    :type clip_max: torch Tensor object (m,)
+    :param clip_min: minimum feature ranges
+    :type clip_min: torch Tensor object (m,)
+    :param epochs: number of attack iterations
+    :type epochs: int
+    :param epsilon: l∞ budget
+    :type epsilon: float
+    :param model: model to craft adversarial examples with
+    :type model: dlm LinearClassifier-inherited object
     :param x: inputs to craft adversarial examples from
     :type x: torch Tensor object (n, m)
     :param y: labels of inputs to craft adversarail examples from
-    :type x: torch Tensor object (n,)
-    :return: PGD adversarial examples
-    :rtype: tuple of tuples: torch Tensor object (n, m), float, and str
+    :type y: torch Tensor object (n,)
+    :return: PGD CleverHans adversarial examples
+    :rtype: torch Tensor object (n, m)
     """
-    end = "\n" if verbose else "\r"
-    clip_min, clip_max = clip.unbind()
-    pgd = aml.attacks.pgd(**parameters)
-    (model, eps, nb_iter, eps_iter) = (
-        pgd.model,
-        pgd.epsilon,
-        pgd.epochs,
-        pgd.alpha,
+    from cleverhans.torch.attacks.projected_gradient_descent import (
+        projected_gradient_descent,
     )
-    if "advertorch" in frameworks:
-        from advertorch.attacks import PGDAttack
 
-        print("Producing PGD adversarial examples with AdverTorch...", end=end)
-        reset_seeds()
-        start = time.time()
-        yield (
-            PGDAttack(
-                predict=model,
-                loss_fn=torch.nn.CrossEntropyLoss(reduction="sum"),
-                eps=eps,
-                nb_iter=nb_iter,
-                eps_iter=eps_iter,
-                rand_init=True,
-                clip_min=clip_min,
-                clip_max=clip_max,
-                ord=float("inf"),
-                targeted=False,
-            ).perturb(x=x.clone(), y=y.clone()),
-            time.time() - start,
-            "AdverTorch",
-        )
-    if "art" in frameworks:
-        from art.attacks.evasion import ProjectedGradientDescent
+    return projected_gradient_descent(
+        model_fn=model,
+        x=x.clone(),
+        eps=epsilon,
+        eps_iter=alpha,
+        nb_iter=epochs,
+        norm=float("inf"),
+        clip_min=clip_min.max(),
+        clip_max=clip_max.min(),
+        y=y,
+        targeted=False,
+        rand_init=True,
+        rand_minmax=0,
+        sanity_checks=False,
+    ).detach()
 
-        print("Producing PGD adversarial examples with ART...", end=end)
-        reset_seeds()
-        start = time.time()
-        yield (
-            torch.from_numpy(
-                ProjectedGradientDescent(
-                    estimator=art_classifier,
-                    norm="inf",
-                    eps=eps,
-                    eps_step=eps_iter,
-                    decay=None,
-                    max_iter=nb_iter,
-                    targeted=False,
-                    num_random_init=1,
-                    batch_size=x.size(0),
-                    random_eps=True,
-                    summary_writer=False,
-                    verbose=verbose,
-                ).generate(x=x.clone().cpu().numpy())
-            ),
-            time.time() - start,
-            "ART",
-        )
-    if "cleverhans" in frameworks:
-        from cleverhans.torch.attacks.projected_gradient_descent import (
-            projected_gradient_descent,
-        )
 
-        print("Producing PGD adversarial examples with CleverHans...", end=end)
-        reset_seeds()
-        start = time.time()
-        yield (
-            projected_gradient_descent(
-                model_fn=model,
-                x=x.clone(),
-                eps=eps,
-                eps_iter=eps_iter,
-                nb_iter=nb_iter,
-                norm=float("inf"),
-                clip_min=clip_min.max(),
-                clip_max=clip_max.min(),
-                y=y,
-                targeted=False,
-                rand_init=True,
-                rand_minmax=eps,
-                sanity_checks=False,
-            ).detach(),
-            time.time() - start,
-            "CleverHans",
-        )
-    if "foolbox" in frameworks:
-        from foolbox.attacks import (
-            LinfProjectedGradientDescentAttack as ProjectedGradientDescentAttack,
-        )
+def pgd_foolbox(alpha, clip_max, clip_min, epochs, epsilon, model, x, y, **_):
+    """
+    This function crafts adversarial examples with PGD in Foolbox.
 
-        print("Producing PGD adversarial examples with Foolbox...", end=end)
-        reset_seeds()
-        start = time.time()
-        _, fb_adv, _ = ProjectedGradientDescentAttack(
-            rel_stepsize=None,
-            abs_stepsize=eps_iter,
-            steps=nb_iter,
-            random_start=True,
-        )(
-            fb_classifier,
-            x.clone(),
-            y.clone(),
-            epsilons=eps,
-        )
-        yield (fb_adv, time.time() - start, "Foolbox")
-    if "torchattacks" in frameworks:
-        from torchattacks import PGD
+    :param alpha: perturbation strength
+    :type alpha: float
+    :param clip_max: maximum feature ranges
+    :type clip_max: torch Tensor object (m,)
+    :param clip_min: minimum feature ranges
+    :type clip_min: torch Tensor object (m,)
+    :param epochs: number of attack iterations
+    :type epochs: int
+    :param epsilon: l∞ budget
+    :type epsilon: float
+    :param model: model to craft adversarial examples with
+    :type model: dlm LinearClassifier-inherited object
+    :param x: inputs to craft adversarial examples from
+    :type x: torch Tensor object (n, m)
+    :param y: labels of inputs to craft adversarail examples from
+    :type y: torch Tensor object (n,)
+    :return: PGD Foolbox adversarial examples
+    :rtype: torch Tensor object (n, m)
+    """
 
-        print("Producing PGD adversarial examples with Torchattacks...", end=end)
-        reset_seeds()
-        start = time.time()
-        yield (
-            PGD(
-                model=model,
-                eps=eps,
-                alpha=eps_iter,
-                steps=nb_iter,
-                random_start=True,
-            )(inputs=x.clone(), labels=y),
-            time.time() - start,
-            "Torchattacks",
-        )
-    reset_seeds()
-    start = time.time()
-    yield (x + pgd.craft(x, y), time.time() - start, "aml")
+    from foolbox import PyTorchModel
+    from foolbox.attacks import LinfProjectedGradientDescentAttack
+
+    fb_classifier = PyTorchModel(
+        model=model.model,
+        bounds=(clip_min.min().item(), clip_max.max().item()),
+        device=model.device,
+    )
+    return LinfProjectedGradientDescentAttack(
+        rel_stepsize=None,
+        abs_stepsize=alpha,
+        steps=epochs,
+        random_start=True,
+    )(fb_classifier, x.clone(), y.clone(), epsilons=epsilon)[1]
+
+
+def pgd_torchattacks(alpha, epochs, epsilon, model, x, y, **_):
+    """
+    This function crafts adversarial examples with PGD in torchattacks.
+
+    :param alpha: perturbation strength
+    :type alpha: float
+    :param epochs: number of attack iterations
+    :type epochs: int
+    :param epsilon: l∞ budget
+    :type epsilon: float
+    :param model: model to craft adversarial examples with
+    :type model: dlm LinearClassifier-inherited object
+    :param x: inputs to craft adversarial examples from
+    :type x: torch Tensor object (n, m)
+    :param y: labels of inputs to craft adversarail examples from
+    :type y: torch Tensor object (n,)
+    :return: PGD torchattacks adversarial examples
+    :rtype: torch Tensor object (n, m)
+    """
+    from torchattacks import PGD
+
+    return PGD(model=model, eps=epsilon, alpha=alpha, steps=epochs, random_start=True)(
+        inputs=x.clone(), labels=y
+    )
 
 
 def print(*args, **kwargs):
@@ -1359,8 +1810,8 @@ if __name__ == "__main__":
     """
 
     # determine available frameworks
-    frameworks = ("advertorch", "art", "cleverhans", "foolbox", "torchattacks")
-    available_frameworks = [f for f in frameworks if importlib.util.find_spec(f)]
+    frameworks = ("AdverTorch", "ART", "CleverHans", "Foolbox", "Torchattacks")
+    frameworks_avail = [f for f in frameworks if importlib.util.find_spec(f.lower())]
 
     # parse command line arguments
     parser = argparse.ArgumentParser(
@@ -1411,30 +1862,23 @@ if __name__ == "__main__":
     parser.add_argument(
         "-f",
         "--frameworks",
-        choices=available_frameworks,
-        default=available_frameworks,
+        choices=frameworks_avail,
+        default=frameworks_avail,
         help="Frameworks to compare against",
         nargs="*",
     )
     parser.add_argument(
-        "-p",
-        "--pretrained",
+        "-i",
+        "--ignore-safegaurds",
         action="store_true",
-        help="Avoid training a new model, if possible (helpful for debugging)",
-    )
+        help="Forcibly run specified attacks/frameworks (*very* time & compute heavy!)",
+    ),
     parser.add_argument(
         "-t",
         "--trials",
         default=1,
-        help="Number of experiment trials (set to 1 if pretrained is true)",
+        help="Number of experiment trials",
         type=int,
-    )
-    parser.add_argument(
-        "-u",
-        "--utilization",
-        default=1.0,
-        help="Target GPU utilization (useful with GPUs that have low VRAM)",
-        type=float,
     )
     parser.add_argument(
         "-v",
@@ -1451,9 +1895,8 @@ if __name__ == "__main__":
         device=args.device,
         epochs=args.epochs,
         frameworks=tuple(args.frameworks),
-        pretrained=args.pretrained,
-        trials=1 if args.pretrained else args.trials,
-        utilization=args.utilization,
+        safe=not args.ignore_safegaurds,
+        trials=args.trials,
         verbose=args.verbose,
     )
     raise SystemExit(0)
