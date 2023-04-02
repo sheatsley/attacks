@@ -1468,6 +1468,8 @@ def plot(dataset, results):
     axes[0].set(xlabel="budget consumed", xscale="symlog", yscale="symlog")
     axes[0].xaxis.set_major_formatter(matplotlib.ticker.PercentFormatter())
     axes[0].yaxis.set_major_formatter(matplotlib.ticker.PercentFormatter())
+    axes[0].xaxis.set_major_locator(matplotlib.ticker.FixedLocator((0, 10, 100)))
+    axes[0].yaxis.set_major_locator(matplotlib.ticker.FixedLocator((0, 10, 100)))
 
     # add the bar chart to the next subplot and scale time if necessary
     use_minutes = results.time.max() > 120
@@ -1475,7 +1477,7 @@ def plot(dataset, results):
     seaborn.barplot(
         data=results,
         errorbar="sd",
-        errwidth=0.5,
+        errwidth=0.7,
         hue="framework",
         x="time",
         y="attack",
@@ -1692,7 +1694,7 @@ def pgd_cleverhans(alpha, clip_max, clip_min, epochs, epsilon, model, x, y, **_)
         y=y,
         targeted=False,
         rand_init=True,
-        rand_minmax=0,
+        rand_minmax=epsilon,
         sanity_checks=False,
     ).detach()
 
