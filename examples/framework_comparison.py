@@ -1376,16 +1376,16 @@ def main(
     l0 = int(x.size(1) * budget) + 1
     l2 = torch.stack((cmin, cmax)).diff(dim=0).norm(2).item() * budget
     linf = budget
-    norms = dict(
-        apgdce=norms(linf, linf_proj, torch.inf),
-        apgddlr=norms(linf, linf_proj, torch.inf),
-        bim=norms(linf, linf_proj, torch.inf),
-        cwl2=norms(l2, l2_proj, 2),
-        df=norms(l2, l2_proj, 2),
-        fab=norms(l2, l2_proj, 2),
-        jsma=norms(l0, l0_proj, 0),
-        pgd=norms(linf, linf_proj, torch.inf),
-    )
+    norms = {
+        apgdce: norms(linf, linf_proj, torch.inf),
+        apgddlr: norms(linf, linf_proj, torch.inf),
+        bim: norms(linf, linf_proj, torch.inf),
+        cwl2: norms(l2, l2_proj, 2),
+        df: norms(l2, l2_proj, 2),
+        fab: norms(l2, l2_proj, 2),
+        jsma: norms(l0, l0_proj, 0),
+        pgd: norms(linf, linf_proj, torch.inf),
+    }
     params = dict(
         clip_max=cmax,
         clip_min=cmin,
