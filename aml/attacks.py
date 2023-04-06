@@ -217,6 +217,8 @@ class Adversary:
         x = x.clone()
         b = torch.zeros_like(x)
         b[self.model.accuracy(x, y, as_tensor=True)] = torch.inf
+        self.atk.step = 0
+        self.last_res = None
         for r in range(self.num_restarts):
             self.atk.reset()
             self.atk.restart = f"Restart {r} " if r > 0 else ""
