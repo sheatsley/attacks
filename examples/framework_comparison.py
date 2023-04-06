@@ -1468,7 +1468,7 @@ def plot(dataset, results):
     axes[0].set(xlabel="budget consumed", xscale="symlog", yscale="symlog")
     axes[0].xaxis.set_major_formatter(matplotlib.ticker.PercentFormatter())
     axes[0].yaxis.set_major_formatter(matplotlib.ticker.PercentFormatter())
-    axes[0].xaxis.set_major_locator(matplotlib.ticker.FixedLocator((0, 10, 100)))
+    axes[0].xaxis.set_major_locator(matplotlib.ticker.FixedLocator((1, 10, 100)))
     axes[0].yaxis.set_major_locator(matplotlib.ticker.FixedLocator((0, 10, 100)))
 
     # add the bar chart to the next subplot and scale time if necessary
