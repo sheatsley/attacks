@@ -603,7 +603,7 @@ class Attack:
         # compute output perturbation stats and update results
         ologits = self.surface.model(x + o.nan_to_num(posinf=0))
         omloss = self.surface.model.loss(ologits, y).item()
-        oaloss = self.surface.loss(logits, y).sum().item()
+        oaloss = self.surface.loss(ologits, y).sum().item()
         oacc = ologits.argmax(1).eq_(y).mean(dtype=torch.float).item()
         on = [o.nan_to_num(posinf=0).norm(n, 1).mean().item() for n in norms]
         self.res.iloc[e] = e, oacc, omloss, oaloss, *on
