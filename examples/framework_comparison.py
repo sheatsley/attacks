@@ -707,21 +707,19 @@ def cwl2_cleverhans(
     """
     from cleverhans.torch.attacks.carlini_wagner_l2 import carlini_wagner_l2
 
-    return (
-        carlini_wagner_l2(
-            model_fn=model,
-            x=x.clone(),
-            n_classes=classes,
-            y=y,
-            lr=alpha,
-            confidence=k,
-            clip_min=clip_min.max(),
-            clip_max=clip_max.min(),
-            initial_const=c,
-            binary_search_steps=hparam_steps,
-            max_iterations=epochs,
-        ).detach(),
-    )
+    return carlini_wagner_l2(
+        model_fn=model,
+        x=x.clone(),
+        n_classes=classes,
+        y=y,
+        lr=alpha,
+        confidence=k,
+        clip_min=clip_min.max(),
+        clip_max=clip_max.min(),
+        initial_const=c,
+        binary_search_steps=hparam_steps,
+        max_iterations=epochs,
+    ).detach()
 
 
 def cwl2_foolbox(
