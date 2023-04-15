@@ -319,7 +319,7 @@ class IdentitySaliency:
         :return: squeezed gradients of the perturbation vector
         :rtype: torch Tensor object (n, m)
         """
-        return g.squeeze_()
+        return g.squeeze_(dim=1)
 
 
 class JacobianSaliency:
