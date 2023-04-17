@@ -611,14 +611,14 @@ class Attack:
         # build str representation and return
         return (
             f"Output Acc: {oacc:.1%} Batch Acc: {pacc:.1%} "
-            f"({(pacc - self.b_res.accuracy.iloc[-2]):+.1%}) "
+            f"({(pacc - self.b_res.accuracy.iloc[e - 1]):+.1%}) "
             f"Model Loss: {mloss:.2f} "
-            f"({mloss - self.b_res.model_loss.iloc[-2]:+6.2f}) "
+            f"({mloss - self.b_res.model_loss.iloc[e - 1]:+6.2f}) "
             f"{self.name} Loss: {aloss:.2f} "
-            f"({aloss - self.b_res.attack_loss.iloc[-2]:+6.2f}) "
-            f"l0: {pn[0]:.2f} ({pn[0] - self.b_res.l0.iloc[-2]:+.2f}) "
-            f"l2: {pn[1]:.2f} ({pn[1] - self.b_res.l2.iloc[-2]:+.2f}) "
-            f"l∞: {pn[2]:.2f} ({pn[2] - self.b_res.linf.iloc[-2]:+.2f})"
+            f"({aloss - self.b_res.attack_loss.iloc[e - 1]:+6.2f}) "
+            f"l0: {pn[0]:.2f} ({pn[0] - self.b_res.l0.iloc[e - 1]:+.2f}) "
+            f"l2: {pn[1]:.2f} ({pn[1] - self.b_res.l2.iloc[e - 1]:+.2f}) "
+            f"l∞: {pn[2]:.2f} ({pn[2] - self.b_res.linf.iloc[e - 1]:+.2f})"
         )
 
     def reset(self):
