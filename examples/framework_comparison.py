@@ -1158,7 +1158,7 @@ def jsma(clip_max, clip_min, frameworks, parameters, safe, verbose, x, y):
         x=x,
         y=y,
     )
-    fw_func = dict(Advertorch=jsma_advertorch, Art=jsma_art)
+    fw_func = dict(Advertorch=jsma_advertorch, ART=jsma_art)
     frameworks = [fw for fw in frameworks if fw in fw_func]
     safe and "AdverTorch" in frameworks and x.size(1) >= 784 and frameworks.remove(
         "AdverTorch"
