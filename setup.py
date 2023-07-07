@@ -1,7 +1,5 @@
 """
-Build script for Adversarial Machine Learning
-Author: Ryan Sheatsley & Blaine Hoak
-Feb 2 2023
+Build script for Adversarial Machine Learning (aml) library.
 """
 import setuptools  # Easily download, build, install, upgrade, and uninstall Python packages
 
