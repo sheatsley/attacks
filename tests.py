@@ -6,8 +6,6 @@ the respecetive classes: FunctionalTests, PerformanceTests, and IdentityTests.
 Aside from these standard tests, special tests can be found in the SpecialTests
 class, which evaluate particulars of the implementation in the Space of
 Adversarial Strategies (https://arxiv.org/pdf/2209.04521.pdf).
-Authors: Ryan Sheatsley and Blaine Hoak
-Mon Nov 28 2022
 """
 
 import importlib

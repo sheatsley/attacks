@@ -1,8 +1,6 @@
 """
 This script performs a perturbation saliency analysis of known attacks within
 the aml framework and plots the distribution of perturbations, per-class.
-Author: Ryan Sheatsley
-Fri Mar 10 2023
 """
 import argparse
 

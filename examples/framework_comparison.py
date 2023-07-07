@@ -1,8 +1,6 @@
 """
 This script compares the performance of the aml framework against other popular
 frameworks and plots the model accuracy over the norm.
-Author: Ryan Sheatsley
-Sat Feb 4 2023
 """
 import argparse
 import builtins

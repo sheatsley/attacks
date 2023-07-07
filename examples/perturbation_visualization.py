@@ -1,8 +1,6 @@
 """
 This script visualizes the worst-, average-, and best-case perturbations for
 known attacks within the aml framework.
-Author: Ryan Sheatsley
-Thu Mar 9 2023
 """
 import argparse
 

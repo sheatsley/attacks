@@ -1,8 +1,6 @@
 """
 This script compares the performance of known attacks within the aml framework
 and plots the model accuracy and loss over the crafting epochs.
-Author: Ryan Sheatsley
-Wed Mar 8 2023
 """
 import argparse
 import warnings

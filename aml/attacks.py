@@ -1,8 +1,6 @@
 """
 This module defines the attacks proposed in
-https://arxiv.org/pdf/2209.04521.pdf.
-Authors: Ryan Sheatsley & Blaine Hoak
-Thu Feb 2 2023
+https://arxiv.org/pdf/2209.04521.pdf
 """
 import itertools
 

@@ -1,8 +1,6 @@
 """
 This module defines custom PyTorch-based optimizers referenced in
-https://arxiv.org/pdf/2209.04521.pdf.
-Authors: Blaine Hoak & Ryan Sheatsley
-Thu Feb 2 2023
+https://arxiv.org/pdf/2209.04521.pdf
 """
 import torch
 
@@ -314,7 +312,6 @@ class MomentumBestStart(torch.optim.Optimizer):
                 state["best_l_updated"][best_l] = True
                 state["prev_l"] = loss
                 if state["epoch"] in group["checkpoints"]:
-
                     # loss improved <rho% or lr and best loss stayed the same?
                     c1 = state["num_l_updates"].lt(group["rho"] * state["step"])
                     c2 = ~(state["lr_updated"].logical_or(state["best_l_updated"]))
