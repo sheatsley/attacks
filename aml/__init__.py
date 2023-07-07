@@ -1,9 +1,7 @@
 """
 This module initializes the adversarial machine learning repo.
-Author: Ryan Sheatsley and Blaine Hoak
-Tue Nov 29 2022
 """
-import subprocess  # Subprocess management
+import subprocess
 
 from aml.attacks import (
     Adversary,
