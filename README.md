@@ -65,35 +65,33 @@ looking to start using this repo as easily as possible. I recommend installing
 an editable version of this repo via `pip install -e`. Afterwards, you can
 craft adversarial examples using any of the eight attacks above as follows:
 
-```
-import aml 
-import dlm  
-import mlds  
-import torch  
+    import aml
+    import dlm
+    import mlds
+    import torch
 
-# load data
-mnist = mlds.mnist
-x_train = torch.from_numpy(mnist.train.data)
-y_train = torch.from_numpy(mnist.train.labels).long()
-x_test = torch.from_numpy(mnist.test.data)
-y_test = torch.from_numpy(mnist.test.labels).long()
+    # load data
+    mnist = mlds.mnist
+    x_train = torch.from_numpy(mnist.train.data)
+    y_train = torch.from_numpy(mnist.train.labels).long()
+    x_test = torch.from_numpy(mnist.test.data)
+    y_test = torch.from_numpy(mnist.test.labels).long()
 
-# instantiate and train a model
-hyperparameters = dlm.hyperparameters.mnist
-model = dlm.CNNClassifier(**hyperparameters)
-model.fit(x_train, y_train)
+    # instantiate and train a model
+    hyperparameters = dlm.hyperparameters.mnist
+    model = dlm.CNNClassifier(**hyperparameters)
+    model.fit(x_train, y_train)
 
-# set attack parameters and produce adversarial perturbations
-step_size = 0.01
-number_of_steps = 30
-budget = 0.15
-pgd = aml.pgd(step_size, number_of_steps, budget, model)
-perturbations = pgd.craft(x_test, y_test)
+    # set attack parameters and produce adversarial perturbations
+    step_size = 0.01
+    number_of_steps = 30
+    budget = 0.15
+    pgd = aml.pgd(step_size, number_of_steps, budget, model)
+    perturbations = pgd.craft(x_test, y_test)
 
-# compute some interesting statistics and publish a paper
-accuracy = model.accuracy(x_test + perturbations, y_test)
-mean_budget = perturbations.norm(torch.inf, 1).mean()
-```
+    # compute some interesting statistics and publish a paper
+    accuracy = model.accuracy(x_test + perturbations, y_test)
+    mean_budget = perturbations.norm(torch.inf, 1).mean()
 
 Other uses can be found in the
 [examples](https://github.com/sheatsley/attacks/tree/main/examples) directory.
@@ -104,49 +102,50 @@ Below are descriptions of some of the more subtle controls within this repo and
 complex use cases.
 
 * Early termination: when an instantiating an `Attack`, the `early_termination`
-flag determines whether attacks attempt to _minimize model accuracy_ or
-_maximize (model) loss_ (Also described as [maximum-confidence vs.
-minimum-distance](https://arxiv.org/pdf/1809.02861.pdf)). Specifically, attacks
-that "terminate early" return the set of misclassified inputs with the smallest
-norm (For example, perturbations for inputs that are initially misclassified
-are 0). Attacks in this regime include
-[CW-L2](https://arxiv.org/pdf/1608.04644.pdf),
-[DF](https://arxiv.org/pdf/1511.04599.pdf),
-[FAB](https://arxiv.org/pdf/1907.02044.pdf), and
-[JSMA](https://arxiv.org/pdf/1511.07528.pdf). Alternatively, attacks that do
-not "terminate early," return the set of inputs that maximize model loss. To be
-precise, such attacks actually return the set of inputs that _improve attack
-loss_, as this empirically appears to perform (marginally) better than
-measuring model loss. Attacks in this regime include
-[APGD-\*](https://arxiv.org/pdf/2003.01690.pdf),
-[BIM](https://arxiv.org/pdf/1611.01236.pdf), and
-[PGD](https://arxiv.org/pdf/1706.06083.pdf). In the `attacks` module, the
-`update` method of the `Attack` class details the impact of
-`early_termination`. As one use case, it is generally accepted that
-[investigating transferability should be done with attacks configured to
-maximize model loss](https://arxiv.org/pdf/1809.02861.pdf) (i.e.,
-`early_termination` set to `False`).
+    flag determines whether attacks attempt to _minimize model accuracy_ or
+    _maximize (model) loss_ (Also described as [maximum-confidence vs.
+    minimum-distance](https://arxiv.org/pdf/1809.02861.pdf)). Specifically,
+    attacks that "terminate early" return the set of misclassified inputs with
+    the smallest norm (For example, perturbations for inputs that are initially
+    misclassified are 0). Attacks in this regime include
+    [CW-L2](https://arxiv.org/pdf/1608.04644.pdf),
+    [DF](https://arxiv.org/pdf/1511.04599.pdf),
+    [FAB](https://arxiv.org/pdf/1907.02044.pdf), and
+    [JSMA](https://arxiv.org/pdf/1511.07528.pdf). Alternatively, attacks that
+    do not "terminate early," return the set of inputs that maximize model
+    loss. To be precise, such attacks actually return the set of inputs that
+    _improve attack loss_, as this empirically appears to perform (marginally)
+    better than measuring model loss. Attacks in this regime include
+    [APGD-\*](https://arxiv.org/pdf/2003.01690.pdf),
+    [BIM](https://arxiv.org/pdf/1611.01236.pdf), and
+    [PGD](https://arxiv.org/pdf/1706.06083.pdf). In the `attacks` module, the
+    `update` method of the `Attack` class details the impact of
+    `early_termination`. As one use case, it is generally accepted that
+    [investigating transferability should be done with attacks configured to
+    maximize model loss](https://arxiv.org/pdf/1809.02861.pdf) (i.e.,
+    `early_termination` set to `False`).
 
 * Projection: `early_termination` also influences when perturbations are
-projected as to comply with lp-based budgets. With `early_termination`, attacks
-are free to exceed the threat model and the resultant adversarial examples at
-any particular iteration are then projected and compared to the best
-adversarial examples seen thus far (which is _necessary_ for attacks that use
-losses such as [CW Loss](https://arxiv.org/pdf/1608.04644.pdf), as attacks that
-use this loss ostensibly always exceed the threat model and, once
-misclassified, naturally become budget-compliant). However, attacks that do not
-use `early_termination` are always budget-complaint; empirically, without
-enforcing budget-compliance, unbounded adversarial examples that maximize model
-loss are often _worse_ (than bounded adversarial examples) with naïve
-projection on the last iteration.
+    projected as to comply with lp-based budgets. With `early_termination`,
+    attacks are free to exceed the threat model and the resultant adversarial
+    examples at any particular iteration are then projected and compared to the
+    best adversarial examples seen thus far (which is _necessary_ for attacks
+    that use losses such as [CW Loss](https://arxiv.org/pdf/1608.04644.pdf), as
+    attacks that use this loss ostensibly always exceed the threat model and,
+    once misclassified, naturally become budget-compliant). However, attacks
+    that do not use `early_termination` are always budget-complaint;
+    empirically, without enforcing budget-compliance, unbounded adversarial
+    examples that maximize model loss are often _worse_ (than continuously
+    bounded adversarial examples) with a naïve projection on the last
+    iteration.
 
 * Random start: there are may different ways that random starts are
-implemented. For most implementations found online, l∞ attacks that use random
-start initialize perturbations by sampling uniformly between ±ε, while
-perturbations from l2 attacks are sampled from a standard normal distribution
-and subsequently normalized to ε. This repo also supports random start for l0
-attacks in that an l0-number of features are randomly selected per sample,
-whose values are then sampled uniformly between ±1.
+    implemented. For most implementations found online, l∞ attacks that use
+    random start initialize perturbations by sampling uniformly between ±ε,
+    while perturbations from l2 attacks are sampled from a standard normal
+    distribution and subsequently normalized to ε. This repo also supports
+    random start for l0 attacks in that an l0-number of features are randomly
+    selected per sample, whose values are then sampled uniformly between ±1.
 
 ## Repo Overview
 
@@ -158,34 +157,34 @@ are described below (and in more detail with the following sections) described
 from most abstract to least abstract:
 
 * Adversaries (`attack.py`): control hyperparameter optimization and record
-optimal adversarial examples across multiple runs (useful only if attacks have
-non-deterministic components). Contains an _attack_.
+    optimal adversarial examples across multiple runs (useful only if attacks
+    have non-deterministic components). Contains an _attack_.
 * Attacks (`attack.py`): core attack loop that enforces threat models, domain
-constraints, and keeps track of the best adversarial examples seen throughout
-the crafting process. Contains _travelers_ and _surfaces_.
+    constraints, and keeps track of the best adversarial examples seen
+    throughout the crafting process. Contains _travelers_ and _surfaces_.
 * Travelers (`traveler.py`): defines techniques that control how data is
-manipulated. Contains _optimizers_ and _random start strategies_.
+    manipulated. Contains _optimizers_ and _random start strategies_.
 * Surfaces (`surface.py`): defines techniques that produce and manipulate
-gradients. Contains _losses_, _saliency maps_, and _norms_.
+    gradients. Contains _losses_, _saliency maps_, and _norms_.
 * Optimizers (`optimizer.py`): defines techniques that consume gradient-like
-information and update perturbations. Contains _SGD_, _Adam_, _Backward SGD_
-(from [FAB](https://arxiv.org/pdf/1907.02044.pdf)), and _Momentum Best Start_
-(from [APGD-\*](https://arxiv.org/pdf/2003.01690.pdf)).
+    information and update perturbations. Contains _SGD_, _Adam_, _Backward
+    SGD_ (from [FAB](https://arxiv.org/pdf/1907.02044.pdf)), and _Momentum Best
+    Start_ (from [APGD-\*](https://arxiv.org/pdf/2003.01690.pdf)).
 * Random Starts (`traveler.py`): defines techniques to randomly initialize
-perturbations. Contains _Identity_ (no random start), _Max_
-(from[PGD](https://arxiv.org/pdf/1706.06083.pdf)), and _Shrinking_ (from
-[FAB](https://arxiv.org/pdf/1907.02044.pdf)).
+    perturbations. Contains _Identity_ (no random start), _Max_
+    (from[PGD](https://arxiv.org/pdf/1706.06083.pdf)), and _Shrinking_ (from
+    [FAB](https://arxiv.org/pdf/1907.02044.pdf)).
 * Losses (`loss.py`): defines measures of error. Contains _Cross-entropy_,
-_Carlini-Wagner_ (from [CW-L2](https://arxiv.org/pdf/1608.04644.pdf)),
-_Difference of Logits Ratio_ (from
-[APGD-DLR](https://arxiv.org/pdf/2003.01690.pdf)), and _Identity_ (minimizes
-the model logit associated with the label).
+    _Carlini-Wagner_ (from [CW-L2](https://arxiv.org/pdf/1608.04644.pdf)),
+    _Difference of Logits Ratio_ (from
+    [APGD-DLR](https://arxiv.org/pdf/2003.01690.pdf)), and _Identity_
+    (minimizes the model logit associated with the label).
 * Saliency Maps (`surface.py`): defines heuristics applied to gradients.
-Contains _DeepFool_ (from [DF](https://arxiv.org/pdf/1511.04599.pdf)),
-_Jacobian_ (from [JSMA](https://arxiv.org/pdf/1511.07528.pdf)), and _Identity_
-(no saliency map).
+    Contains _DeepFool_ (from [DF](https://arxiv.org/pdf/1511.04599.pdf)),
+    _Jacobian_ (from [JSMA](https://arxiv.org/pdf/1511.07528.pdf)), and
+    _Identity_ (no saliency map).
 * Norms (`surface.py`): manipulates gradients as to operate under the lp-threat
-model. Contains _l0_, _l2_, and _l∞_.
+    model. Contains _l0_, _l2_, and _l∞_.
 
 ### Adversary
 
@@ -255,8 +254,8 @@ checkpoints. If progress has stalled (measured by a stagnating increase (or
 decrease) in attack loss), then the perturbation is reset to the best seen
 perturbation and the learning rate is halved. Conceptually, `MomentumBestStart`
 starts with aggressive perturbations (the learning rate is initialized to ε for
-l2 and l∞ attacks and 1.0 for l0 attacks) and iteratively refines it search
-when a finer search is warranted.
+l2 and l∞ attacks and 1.0 for l0 attacks) and iteratively refines it when a
+finer search is warranted.
 
 ### Random Start Strategies
 
@@ -505,15 +504,14 @@ parameters of interest in this regime).
 ## Citation
 
 You can cite this repo as follows:
-```
-@misc{https://doi.org/10.48550/arxiv.2209.04521,
-  doi = {10.48550/ARXIV.2209.04521},
-  url = {https://arxiv.org/abs/2209.04521},
-  author = {Sheatsley, Ryan and Hoak, Blaine and Pauley, Eric and McDaniel, Patrick},
-  keywords = {Cryptography and Security (cs.CR), Machine Learning (cs.LG), FOS: Computer and information sciences, FOS: Computer and information sciences},
-  title = {The Space of Adversarial Strategies},
-  publisher = {arXiv},
-  year = {2022},
-  copyright = {arXiv.org perpetual, non-exclusive license}
-}
-```
+
+    @misc{https://doi.org/10.48550/arxiv.2209.04521,
+      doi = {10.48550/ARXIV.2209.04521},
+      url = {https://arxiv.org/abs/2209.04521},
+      author = {Sheatsley, Ryan and Hoak, Blaine and Pauley, Eric and McDaniel, Patrick},
+      keywords = {Cryptography and Security (cs.CR), Machine Learning (cs.LG), FOS: Computer and information sciences, FOS: Computer and information sciences},
+      title = {The Space of Adversarial Strategies},
+      publisher = {arXiv},
+      year = {2022},
+      copyright = {arXiv.org perpetual, non-exclusive license}
+    }
