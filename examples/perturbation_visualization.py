@@ -118,7 +118,7 @@ def plot(dataset, results):
         for idy, img in enumerate(result[1:]):
             axes[idx, idy].imshow(img, cmap="gray")
     plot.tight_layout()
-    plot.savefig(__file__[:-2] + "pdf", bbox_inches="tight")
+    plot.savefig(__file__[:-3] + ".pdf", bbox_inches="tight")
     return None
 
 

@@ -13,46 +13,6 @@ import seaborn
 import torch
 
 
-def plot(dataset, results):
-    """
-    This function plots the perturbation saliency results. Specifically, this
-    produces n scatter plots (where n is the number of attacks) of the mean of
-    the perturbations with classes on the y-axis and the feature number on the
-    x-axis. Perturbation values are encoded by hue and error bars represent the
-    standard deviation. The plot is written to disk in the current directory.
-
-    :param dataset: dataset used
-    :type dataset: str
-    :param results: results of the saliency analysis
-    :type results: pandas Dataframe object
-    :return: None
-    :rtype: NoneType
-    """
-
-    # https://github.com/mwaskom/seaborn/blob/a69eb55f2d89b00e1d31b9c9ec29982fe0a187cb/seaborn/regression.py#L397
-    seaborn.set_style("whitegrid")
-    matplotlib.rcParams["lines.linewidth"] = 0.01
-    plot = seaborn.lmplot(
-        data=results,
-        col="attack",
-        col_wrap=(results.attack.unique().size + 1) // 2,
-        facet_kws=dict(sharey=False),
-        fit_reg=False,
-        hue="class",
-        legend="full" if results.attack.unique().size > 1 else "auto",
-        scatter_kws=dict(alpha=0.8, facecolors="none", linewidths=0.5, s=10),
-        x="feature",
-        y="value",
-        x_ci="sd",
-        x_bins=int(results["feature"].max() + 1),
-        x_jitter=1 / results["class"].max(),
-        y_jitter=1 / results["class"].max(),
-    )
-    plot.fig.suptitle(f"dataset = {dataset}")
-    plot.savefig(__file__[:-3] + f"_{dataset}.pdf")
-    return None
-
-
 def main(alpha, attacks, budget, dataset, epochs):
     """
     This function is the main entry point for the saliency analysis.
@@ -126,6 +86,46 @@ def main(alpha, attacks, budget, dataset, epochs):
 
     # plot results and save
     plot(dataset, results.reset_index())
+    return None
+
+
+def plot(dataset, results):
+    """
+    This function plots the perturbation saliency results. Specifically, this
+    produces n scatter plots (where n is the number of attacks) of the mean of
+    the perturbations with classes on the y-axis and the feature number on the
+    x-axis. Perturbation values are encoded by hue and error bars represent the
+    standard deviation. The plot is written to disk in the current directory.
+
+    :param dataset: dataset used
+    :type dataset: str
+    :param results: results of the saliency analysis
+    :type results: pandas Dataframe object
+    :return: None
+    :rtype: NoneType
+    """
+
+    # https://github.com/mwaskom/seaborn/blob/a69eb55f2d89b00e1d31b9c9ec29982fe0a187cb/seaborn/regression.py#L397
+    seaborn.set_style("whitegrid")
+    matplotlib.rcParams["lines.linewidth"] = 0.01
+    plot = seaborn.lmplot(
+        data=results,
+        col="attack",
+        col_wrap=(results.attack.unique().size + 1) // 2,
+        facet_kws=dict(sharey=False),
+        fit_reg=False,
+        hue="class",
+        legend="full" if results.attack.unique().size > 1 else "auto",
+        scatter_kws=dict(alpha=0.8, facecolors="none", linewidths=0.5, s=10),
+        x="feature",
+        y="value",
+        x_ci="sd",
+        x_bins=int(results["feature"].max() + 1),
+        x_jitter=1 / results["class"].max(),
+        y_jitter=1 / results["class"].max(),
+    )
+    plot.fig.suptitle(f"dataset = {dataset}")
+    plot.savefig(__file__[:-3] + f"_{dataset}.pdf")
     return None
 
 

@@ -16,33 +16,6 @@ import torch
 warnings.filterwarnings("ignore", category=UserWarning)
 
 
-def plot(results):
-    """
-    This function plots the attack comparison results. Specifically, this
-    produces two line plots per dataset containing model accuracy and loss over
-    the attack epoch, with shading represtenting 95% CI. Attacks are divided by
-    color. The plot is written to disk in the current directory.
-
-    :param results: results of the attack comparison
-    :type results: pandas Dataframe object
-    :return: None
-    :rtype: NoneType
-    """
-    plot = seaborn.relplot(
-        data=results,
-        col="dataset",
-        facet_kws=dict(sharex=False, sharey=False),
-        hue="attack",
-        kind="line",
-        legend="full" if results.dataset.unique().size > 1 else "auto",
-        row="data",
-        x="epoch",
-        y="performance",
-    )
-    plot.savefig(__file__[:-2] + "pdf", bbox_inches="tight")
-    return None
-
-
 def main(alpha, attacks, budget, datasets, epochs, trials):
     """
     This function is the main entry point for the performance comparison
@@ -140,6 +113,33 @@ def main(alpha, attacks, budget, datasets, epochs, trials):
     # plot results and save
     results.replace("model_loss", "loss")
     plot(results)
+    return None
+
+
+def plot(results):
+    """
+    This function plots the attack comparison results. Specifically, this
+    produces two line plots per dataset containing model accuracy and loss over
+    the attack epoch, with shading represtenting 95% CI. Attacks are divided by
+    color. The plot is written to disk in the current directory.
+
+    :param results: results of the attack comparison
+    :type results: pandas Dataframe object
+    :return: None
+    :rtype: NoneType
+    """
+    plot = seaborn.relplot(
+        data=results,
+        col="dataset",
+        facet_kws=dict(sharex=False, sharey=False),
+        hue="attack",
+        kind="line",
+        legend="full" if results.dataset.unique().size > 1 else "auto",
+        row="data",
+        x="epoch",
+        y="performance",
+    )
+    plot.savefig(__file__[:-3] + ".pdf", bbox_inches="tight")
     return None
 
 
