@@ -1325,7 +1325,7 @@ def main(
     :param dataset: dataset to use
     :type dataset: tuple of str
     :param device: hardware device to use
-    :param device: str
+    :type device: str
     :param epochs: number of attack iterations
     :type epochs: int
     :param frameworks: frameworks to compare against
