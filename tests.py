@@ -152,6 +152,7 @@ class BaseTest(unittest.TestCase):
         except (FileNotFoundError, AssertionError) as e:
             print(f"Training new model... ({e})")
             cls.model.fit(*(x, y) if has_test else (cls.x, cls.y))
+            cls.reset_seeds()
             state = {
                 "model": cls.model,
                 "template": hyperparameters,
