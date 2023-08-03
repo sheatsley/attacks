@@ -1,4 +1,4 @@
 # Dockerfile for Adversarial Machine Learning: https://github.com/sheatsley/attacks
 FROM sheatsley/models
-COPY . /attacks
-RUN cd /attacks && pip install --no-cache-dir -e .
+COPY . attacks
+RUN pip install --no-cache-dir attacks/ && rm -rf attacks
