@@ -11,12 +11,12 @@ import mlds
 import torch
 
 
-def main(alpha, attacks, budget, dataset, epochs):
+def main(alpha, attacks, budget, dataset, device, epochs):
     """
     This function is the main entry point for the perturbation visualization.
-    Specifically, this: (1) loads and trains a model for each dataset, (2)
-    crafts adversarial examples with each attack, (3) measures perturbation
-    statistics, and (5) plots the results.
+    Specifically, this: (1) loads and trains a model, (2) crafts adversarial
+    examples with each attack, (3) measures perturbation statistics, and (5)
+    plots the results.
 
     :param alpha: perturbation strength, per-iteration
     :type alpha: float
@@ -26,6 +26,8 @@ def main(alpha, attacks, budget, dataset, epochs):
     :type budget: float
     :param dataset: dataset to use
     :type dataset: str
+    :param device: hardware device to use
+    :type device: str
     :param epochs: number of attack iterations
     :type epochs: int
     :return: None
@@ -37,22 +39,18 @@ def main(alpha, attacks, budget, dataset, epochs):
     data = getattr(mlds, dataset)
     results = []
     try:
-        train_x = torch.from_numpy(data.train.data)
-        train_y = torch.from_numpy(data.train.labels).long()
-        x = torch.from_numpy(data.test.data)
-        y = torch.from_numpy(data.test.labels).long()
+        xt = torch.from_numpy(data.train.data).to(device)
+        yt = torch.from_numpy(data.train.labels).long().to(device)
+        x = torch.from_numpy(data.test.data).to(device)
+        y = torch.from_numpy(data.test.labels).long().to(device)
     except AttributeError:
-        train_x = torch.from_numpy(data.dataset.data)
-        train_y = torch.from_numpy(data.dataset.labels).long()
-        x = train_x.clone()
-        y = train_y.clone()
+        xt = torch.from_numpy(data.dataset.data).to(device)
+        yt = torch.from_numpy(data.dataset.labels).long().to(device)
+        x = xt
+        y = yt
     template = getattr(dlm.templates, dataset)
-    model = dlm.CNNClassifier(**template.cnn)
-    train_x = train_x[:10]
-    train_y = train_y[:10]
-    x = x[:5]
-    y = y[:5]
-    model.fit(train_x, train_y)
+    model = dlm.CNNClassifier(**template.cnn | dict(device=device))
+    model.fit(xt, yt)
     size = int(x.size(1) ** (1 / 2))
     l0 = int(x.size(1) * budget) + 1
     l2 = size * budget
@@ -75,11 +73,13 @@ def main(alpha, attacks, budget, dataset, epochs):
         p = attack.craft(x, y)
 
         # find worst-, average-, and best-case perturbations
-        # p = p[(p > 0).any(1)]
+        successful = (p > 0).any(1)
+        p = p[successful]
+        xs = x[successful]
         p_idx = p.norm(attack.lp, 1).sort().indices
         idxs = [p_idx[0].item(), p_idx[p_idx.numel() // 2].item(), p_idx[-1].item()]
         results.append(
-            (a.__name__, *(x[idxs] + p[idxs]).reshape(-1, size, size).unbind(0))
+            (a.__name__, *(xs[idxs] + p[idxs]).reshape(-1, size, size).cpu().unbind(0))
         )
 
     # plot results and save
@@ -118,7 +118,7 @@ def plot(dataset, results):
         for idy, img in enumerate(result[1:]):
             axes[idx, idy].imshow(img, cmap="gray")
     plot.tight_layout()
-    plot.savefig(__file__[:-3] + ".pdf", bbox_inches="tight")
+    plot.savefig(__file__[:-3] + f"_{dataset}.pdf", bbox_inches="tight")
     return None
 
 
@@ -185,6 +185,12 @@ if __name__ == "__main__":
         help="Dataset to use",
     )
     parser.add_argument(
+        "--device",
+        choices=("cpu", "cuda", "mps"),
+        default="cpu",
+        help="Hardware device to use",
+    )
+    parser.add_argument(
         "-e",
         "--epochs",
         default=100,
@@ -197,6 +203,7 @@ if __name__ == "__main__":
         attacks=args.attacks,
         budget=args.budget,
         dataset=args.dataset,
+        device=args.device,
         epochs=args.epochs,
     )
     raise SystemExit(0)
