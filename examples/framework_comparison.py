@@ -165,6 +165,7 @@ def apgdce(clip_max, clip_min, frameworks, parameters, verbose, x, y, **_):
     :rtype: generator of tuples of torch Tensor object (n, m), float, and str
     """
     end = "\n" if verbose else "\r"
+    reset_seeds()
     apgdce = aml.attacks.apgdce(**parameters)
     apgdce_params = dict(
         alpha=apgdce.alpha,
@@ -190,7 +191,6 @@ def apgdce(clip_max, clip_min, frameworks, parameters, verbose, x, y, **_):
         start = time.time()
         print(f"Producing APGD-CE adversarial examples with {fw}...", end=end)
         yield fw_func[fw](**apgdce_params), time.time() - start, fw
-    reset_seeds()
     start = time.time()
     yield (x + apgdce.craft(x, y), time.time() - start, "aml")
 
@@ -222,6 +222,7 @@ def apgddlr(clip_max, clip_min, frameworks, parameters, verbose, x, y, **_):
     :rtype: generator of tuples of torch Tensor object (n, m), float, and str
     """
     end = "\n" if verbose else "\r"
+    reset_seeds()
     apgddlr = aml.attacks.apgddlr(**parameters)
     apgddlr_params = dict(
         alpha=apgddlr.alpha,
@@ -248,7 +249,6 @@ def apgddlr(clip_max, clip_min, frameworks, parameters, verbose, x, y, **_):
         start = time.time()
         print(f"Producing APGD-DLR adversarial examples with {fw}...", end=end)
         yield fw_func[fw](**apgddlr_params), time.time() - start, fw
-    reset_seeds()
     start = time.time()
     yield x + apgddlr.craft(x, y), time.time() - start, "aml"
 
@@ -994,6 +994,7 @@ def fab(frameworks, parameters, verbose, x, y, **_):
     :rtype: generator of tuples of torch Tensor object (n, m), float, and str
     """
     end = "\n" if verbose else "\r"
+    reset_seeds()
     fab = aml.attacks.fab(**parameters)
     fab_params = dict(
         alpha=fab.alpha,
@@ -1015,7 +1016,6 @@ def fab(frameworks, parameters, verbose, x, y, **_):
         start = time.time()
         print(f"Producing FAB adversarial examples with {fw}...", end=end)
         yield fw_func[fw](**fab_params), time.time() - start, fw
-    reset_seeds()
     start = time.time()
     yield x + fab.craft(x, y), time.time() - start, "aml"
 
