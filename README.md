@@ -16,10 +16,9 @@ series of techniques used in eight popular attacks:
 7. [JSMA](https://arxiv.org/pdf/1511.07528.pdf) (Jacobian Saliency Map Approach)
 8. [PGD](https://arxiv.org/pdf/1706.06083.pdf) (Projected Gradient Descent)
 
-I emphasize that that components defined here are based on these attacks
-because I have taken certain liberties in modifying the implementation of these
-techniques to either improve their performance or their clarity (without any
-cost in performance). Not only are these modifications designed to help
+Notably, we have taken certain liberties in modifying the implementation of
+these techniques to either improve their performance or their clarity (without
+any cost in performance). Not only are these modifications designed to help
 academics understand _why_ attacks perform the way that they do, but also to
 [serve as abstractions for effortlessly building a vast space of new
 attacks](https://arxiv.org/abs/2209.04521). At this time, the techniques based
@@ -59,11 +58,11 @@ hyperparameters optimization (e.g.,
 This repo is, by design, to be interoperable with the following
 [datasets](https://github.com/sheatsley/datasets) and
 [models](https://github.com/sheatsley/models) repos (which are all based on
-[PyTorch](https://github.com/pytorch/pytorch)). With some effort, you
-probably bring your own data and models, but I wouldn't recommend it if you're
-looking to start using this repo as easily as possible. I recommend installing
-an editable version of this repo via `pip install -e`. Afterwards, you can
-craft adversarial examples using any of the eight attacks above as follows:
+[PyTorch](https://github.com/pytorch/pytorch)). With some effort, you probably
+bring your own data and models, but it is not recommended it if you're looking
+to start using this repo as easily as possible. Preferably, install an editable
+version of this repo via `pip install -e`. Afterwards, you can craft
+adversarial examples using any of the eight attacks above as follows:
 
     import aml
     import dlm
