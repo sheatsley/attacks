@@ -58,11 +58,11 @@ hyperparameters optimization (e.g.,
 This repo is, by design, to be interoperable with the following
 [datasets](https://github.com/sheatsley/datasets) and
 [models](https://github.com/sheatsley/models) repos (which are all based on
-[PyTorch](https://github.com/pytorch/pytorch)). With some effort, you probably
-bring your own data and models, but it is not recommended it if you're looking
-to start using this repo as easily as possible. Preferably, install an editable
-version of this repo via `pip install -e`. Afterwards, you can craft
-adversarial examples using any of the eight attacks above as follows:
+[PyTorch](https://github.com/pytorch/pytorch)). With some effort, you can
+probably bring your own data and models, but it is not recommended if you're
+just looking to start using this repo as easily as possible. Preferably,
+install an editable version of this repo via `pip install -e`. Afterwards, you
+can craft adversarial examples using any of the eight attacks above as follows:
 
     import aml
     import dlm
