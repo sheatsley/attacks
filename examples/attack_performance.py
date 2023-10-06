@@ -40,7 +40,7 @@ def main(alpha, attacks, budget, datasets, epochs, trials):
     """
     print(
         f"Analyzing {len(attacks)} attacks across {len(datasets)} datasets "
-        "with {trials} trials..."
+        f"with {trials} trials..."
     )
     results = pandas.DataFrame(
         columns=("dataset", "attack", "budget", "epoch", "data", "performance")
