@@ -530,9 +530,9 @@ class Attack:
         mins, maxs = x.min(0).values.clamp(max=0), x.max(0).values.clamp(min=1)
 
         # configure batch & output results dataframes
-        metrics = "epoch", "accuracy", "model_loss", "attack_loss", "l0", "l2", "linf"
-        self.b_res = pandas.DataFrame(0, index=range(self.epochs + 1), columns=metrics)
-        self.res = pandas.DataFrame(0, index=range(self.epochs + 1), columns=metrics)
+        cols = "epoch", "accuracy", "model_loss", "attack_loss", "l0", "l2", "linf"
+        self.b_res = pandas.DataFrame(0.0, index=range(self.epochs + 1), columns=cols)
+        self.res = pandas.DataFrame(0.0, index=range(self.epochs + 1), columns=cols)
 
         # attach objects and  apply perturbation initializations
         self.verbosity and print(f"Crafting {len(x)} adversarial examples with {self}")
