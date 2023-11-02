@@ -1,6 +1,6 @@
 """
-This module defines the attacks proposed in
-https://arxiv.org/pdf/2209.04521.pdf
+This module is the core of the adversarial machine learning repo. It defines
+the attacks proposed in https://arxiv.org/pdf/2209.04521.pdf.
 """
 import itertools
 
