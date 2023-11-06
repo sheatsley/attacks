@@ -1325,7 +1325,6 @@ class IdentityTests(BaseTest):
         :return: None
         :rtype: NoneType
         """
-        attack, fws = self.df()
         return self.identity_test(*self.df())
 
     def test_pgd(self):
