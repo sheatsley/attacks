@@ -2,6 +2,7 @@
 This module is the core of the adversarial machine learning repo. It defines
 the attacks proposed in https://arxiv.org/pdf/2209.04521.pdf.
 """
+
 import itertools
 
 import pandas
@@ -551,13 +552,17 @@ class Attack:
             not self.et and self.project(p)
             self.update(x, y, p, o)
             prog = self.progress(e, x, y, p, o) if self.statistics else ""
-            print(
-                f"{self.name}: {self.restart}{self.hparam}"
-                f"Epoch {e:{len(str(self.epochs))}} / {self.epochs} {prog:<15}"
-            ) if self.verbosity != 0 and e % self.verbosity == 0 else print(
-                f"{self.name}: {self.restart}{self.hparam}"
-                f"Epoch {e}... ({(e + self.epochs * self.step) / self.total:.1%})",
-                end="\x1b[K\r",
+            (
+                print(
+                    f"{self.name}: {self.restart}{self.hparam}"
+                    f"Epoch {e:{len(str(self.epochs))}} / {self.epochs} {prog:<15}"
+                )
+                if self.verbosity != 0 and e % self.verbosity == 0
+                else print(
+                    f"{self.name}: {self.restart}{self.hparam}"
+                    f"Epoch {e}... ({(e + self.epochs * self.step) / self.total:.1%})",
+                    end="\x1b[K\r",
+                )
             )
 
         # set failed perturbations to zero and return
@@ -827,6 +832,120 @@ def attack_builder(
         )
 
 
+def get_attacks(
+    alpha,
+    attacks,
+    early_termination,
+    epochs,
+    epsilon,
+    model,
+    alpha_override=True,
+    statistics=False,
+    verbosity=1,
+):
+    """
+    This function serves as a wrapper to the attack_builder function via a
+    string-based interface. Specifically, this function takes a string of
+    attack names and returns a generator of Attack objects. The naming
+    convention for attacks is as follows: {first letter of optimizer}-{first
+    letter of random start strategy}-{first two letters of loss function}-
+    {first letter of saliency map}-{second letter of norm}. Notably, wildcard
+    characters (i.e., *) are supported for each component. For example, the
+    string "M-*-CE-*-*" would return all attacks that use the Momentum
+    optimizer and the Cross-Entropy loss function.
+
+    :param alpha_override: override manual alpha for certain components
+    :type alpha_override: bool
+    :param alpha: learning rate of the optimizer
+    :type alpha: float
+    :param attacks: attack names
+    :type attacks: str
+    :param alpha: learning rate of the optimizer
+    :type alpha: float
+    :param early_termination: whether misclassified inputs are perturbed
+    :type early_termination: bool
+    :param epochs: number of optimization steps to perform
+    :type epochs: int
+    :param epsilon: lp-norm ball threat model(s)
+    :type epsilon: float or tuple of floats
+    :param model: neural network
+    :type model: dlm LinearClassifier-inherited object
+    :param statistics: save attack progress (heavily increases compute)
+    :type statistics: bool
+    :param verbosity: print attack statistics every verbosity%
+    :type verbosity: float
+    :return: a generator yielding attack combinations
+    :rtype: generator of Attack objects
+    """
+    opt, random_start, loss_func, saliency_map, norm = attacks.split("-")
+    optimizers = {
+        o.__name__[0]: o
+        for o in (
+            optimizer.Adam,
+            optimizer.BackwardSGD,
+            optimizer.MomentumBestStart,
+            optimizer.SGD,
+        )
+    }
+    random_starts = {
+        r.__name__[0]: r
+        for r in (
+            traveler.IdentityStart,
+            traveler.MaxStart,
+            traveler.ShrinkingStart,
+        )
+    }
+    losses = {
+        lo.__name__[:2]: lo
+        for lo in (
+            loss.CWLoss,
+            loss.CELoss,
+            loss.DLRLoss,
+            loss.IdentityLoss,
+        )
+    }
+    saliency_maps = {
+        s.__name__[0]: s
+        for s in (
+            surface.DeepFoolSaliency,
+            surface.IdentitySaliency,
+            surface.JacobianSaliency,
+        )
+    }
+    norms = {
+        n.__name__[1]: n
+        for n in (
+            surface.L0,
+            surface.L2,
+            surface.Linf,
+        )
+    }
+    params = dict(
+        optimizers=optimizers.values() if opt == "*" else [optimizers[opt]],
+        random_starts=(
+            random_starts.values()
+            if random_start == "*"
+            else [random_starts[random_start]]
+        ),
+        losses=losses.values() if loss_func == "*" else [losses[loss_func]],
+        saliency_maps=(
+            saliency_maps.values()
+            if saliency_map == "*"
+            else [saliency_maps[saliency_map]]
+        ),
+        norms=norms.values() if norm == "*" else [norms[norm]],
+    )
+    return attack_builder(
+        alpha_override=alpha_override,
+        alpha=alpha,
+        early_termination=early_termination,
+        epochs=epochs,
+        epsilon=epsilon,
+        model=model,
+        **params,
+    )
+
+
 def apgdce(
     alpha, epochs, epsilon, model, num_restarts=3, statistics=False, verbosity=1
 ):
@@ -854,7 +973,7 @@ def apgdce(
     :param verbosity: print attack statistics every verbosity%
     :type verbosity: float
     :return: APGD-CE attack
-    :rtype: Attack objects
+    :rtype: Adversary object
     """
     return Adversary(
         best_update=Adversary.max_loss,
@@ -905,7 +1024,7 @@ def apgddlr(
     :param verbosity: print attack statistics every verbosity%
     :type verbosity: float
     :return: APGD-DLR attack
-    :rtype: Attack objects
+    :rtype: Adversary object
     """
     return Adversary(
         best_update=Adversary.max_loss,
@@ -952,7 +1071,7 @@ def bim(alpha, epochs, epsilon, model, statistics=False, verbosity=1):
     :param verbosity: print attack statistics every verbosity%
     :type verbosity: float
     :return: BIM attack
-    :rtype: Attack objects
+    :rtype: Attack object
     """
     return Attack(
         alpha=alpha,
@@ -1007,7 +1126,7 @@ def cwl2(
     :param verbosity: print attack statistics every verbosity%
     :type verbosity: float
     :return: Carlini-Wagner l₂ attack
-    :rtype: Attack objects
+    :rtype: Attack object
     """
     return Adversary(
         best_update=Adversary.min_norm,
@@ -1054,7 +1173,7 @@ def df(alpha, epochs, epsilon, model, statistics=False, verbosity=1):
     :param verbosity: print attack statistics every verbosity%
     :type verbosity: float
     :return: DeepFool attack
-    :rtype: Attack objects
+    :rtype: Attack object
     """
     return Attack(
         alpha=alpha,
@@ -1096,8 +1215,8 @@ def fab(alpha, epochs, epsilon, model, num_restarts=2, statistics=False, verbosi
     :type statistics: bool
     :param verbosity: print attack statistics every verbosity%
     :type verbosity: float
-    :return: DeepFool attack
-    :rtype: Attack objects
+    :return: FAB attack
+    :rtype: Adversary object
     """
     return Adversary(
         best_update=Adversary.min_norm,
@@ -1142,8 +1261,8 @@ def jsma(alpha, epochs, epsilon, model, statistics=False, verbosity=1):
     :type statistics: bool
     :param verbosity: print attack statistics every verbosity%
     :type verbosity: float
-    :return: DeepFool attack
-    :rtype: Attack objects
+    :return: JSMA attack
+    :rtype: Attack object
     """
     return Attack(
         alpha=alpha,
@@ -1180,8 +1299,8 @@ def pgd(alpha, epochs, epsilon, model, statistics=False, verbosity=1):
     :type statistics: bool
     :param verbosity: print attack statistics every verbosity%
     :type verbosity: float
-    :return: DeepFool attack
-    :rtype: Attack objects
+    :return: PGD attack
+    :rtype: Attack object
     """
     return Attack(
         alpha=alpha,
