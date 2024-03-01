@@ -801,7 +801,7 @@ def attack_builder(
         * len(norms)
         * len(losses)
     )
-    print(f"Yielding {num_attacks} attacks...")
+    verbosity and print(f"Yielding {num_attacks} attacks...")
     for (
         norm,
         saliency_map,
