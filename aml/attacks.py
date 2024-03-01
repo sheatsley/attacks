@@ -940,6 +940,8 @@ def get_attacks(
         epochs=epochs,
         epsilon=epsilon,
         model=model,
+        statistics=statistics,
+        verbosity=verbosity,
         **params,
     )
 
