@@ -860,8 +860,6 @@ def get_attacks(
     :type alpha: float
     :param attacks: attack names
     :type attacks: str
-    :param alpha: learning rate of the optimizer
-    :type alpha: float
     :param early_termination: whether misclassified inputs are perturbed
     :type early_termination: bool
     :param epochs: number of optimization steps to perform
