@@ -443,7 +443,7 @@ class Attack:
             "optimizer": optimizer_alg.__name__,
             "random start": random_start.__name__,
             "saliency map": saliency_map.__name__,
-            "target norm": "l∞" if norm == surface.Linf else norm.__name__,
+            "target norm": "L∞" if norm == surface.Linf else norm.__name__,
         }
         name = (
             self.components["optimizer"][0],
