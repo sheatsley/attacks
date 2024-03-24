@@ -77,7 +77,7 @@ can craft adversarial examples using any of the eight attacks above as follows:
     y_test = torch.from_numpy(mnist.test.labels).long()
 
     # instantiate and train a model
-    hyperparameters = dlm.hyperparameters.mnist
+    hyperparameters = dlm.templates.mnist.cnn
     model = dlm.CNNClassifier(**hyperparameters)
     model.fit(x_train, y_train)
 
